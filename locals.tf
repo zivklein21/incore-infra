@@ -22,12 +22,24 @@ locals {
     adminDeleteMemberCredit            = { method = "POST" }
     adminDeleteNotificationTemplate    = { method = "POST" }
     adminDeleteProduct                 = { method = "POST" }
+    adminDeleteS3Object                = { method = "POST" } # Admin Portal: Assets Manager
     adminEvictFutureRegistrations      = { method = "POST" }
+    adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
+    adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
     adminGetMemberships                = { method = "ANY" }
+    adminGetS3ObjectMetadata           = { method = "ANY" }  # Admin Portal: Assets Manager
+    adminGetS3UploadUrl                = { method = "POST" } # Admin Portal: Assets Manager
+    adminGetSystemAlerts               = { method = "ANY" }  # Admin Portal: Dashboard
+    adminGetSystemConfig               = { method = "ANY" }  # Admin Portal: Config screen
+    adminGetTableItem                  = { method = "ANY" }  # Admin Portal: Data Viewer
+    adminGetTableShape                 = { method = "ANY" }  # Admin Portal: Data Viewer filter discovery
     adminGrantCustomMigration          = { method = "POST" }
     adminGrantMembership               = { method = "POST" }
     adminListHypBillingAgreements      = { method = "ANY" }
     adminListHypOrders                 = { method = "ANY" }
+    adminListLogGroups                 = { method = "ANY" } # Admin Portal: Logs Viewer
+    adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
+    adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
     adminRefundMemberLastPayment       = { method = "POST" }
     adminRefundOrder                   = { method = "POST" }
     adminRejectWaitlist                = { method = "POST" }
@@ -40,6 +52,7 @@ locals {
     adminSaveNotificationTemplate      = { method = "POST" }
     adminSaveProduct                   = { method = "POST" }
     adminSaveRegistrationFormConfig    = { method = "POST" }
+    adminSaveSystemConfig              = { method = "POST" } # Admin Portal: Config screen
     adminSaveTermsOfServiceContent     = { method = "POST" }
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
@@ -49,6 +62,9 @@ locals {
     adminUpdateMembership              = { method = "POST" }
     adminUpdateMemberMembershipBadge   = { method = "POST" }
     adminUpdateMemberPersonal          = { method = "POST" }
+    adminUpdateMemberWallet            = { method = "POST" }
+    adminUpdateTableItem               = { method = "POST" } # Admin Portal: Data Viewer
+    adminWhoAmI                        = { method = "ANY" }  # Admin Portal: auth-gate check
     bookClass                          = { method = "POST" }
     cancelBooking                      = { method = "POST" }
     cancelPolicyPreview                = { method = "POST" }
@@ -169,9 +185,25 @@ locals {
     "onClassBookingChanged",
   ]
 
+  # SQS-triggered — currently just the Admin Portal's DLQ consumer (see
+  # dlq.tf), which turns a failed async Lambda invocation into a
+  # SystemAlertItem the Dashboard's alert feed can show.
+  sqs_functions = [
+    "processDlqMessage",
+  ]
+
+  # Shared no-op OPTIONS handler — see api_gateway.tf's aws_apigatewayv2_route.cors_preflight
+  # and corsPreflight.ts for why every path needs its own unauthenticated
+  # OPTIONS route. Not part of all_http_functions: it's deployed once here
+  # purely so its Lambda exists, and wired to N routes explicitly in
+  # api_gateway.tf instead of the usual one-function-one-route mapping.
+  cors_preflight_function = "corsPreflight"
+
   all_function_names = distinct(concat(
     keys(local.all_http_functions),
     keys(local.scheduled_functions),
     local.stream_functions,
+    local.sqs_functions,
+    [local.cors_preflight_function],
   ))
 }

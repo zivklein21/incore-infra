@@ -5,6 +5,7 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { HypOrderItem } from '../lib/entities';
 import { refundHypTransaction } from '../lib/hypClient';
+import { revokePunchCardCredit } from '../lib/punchCards';
 
 // POST /adminRefundMemberLastPayment
 // Auth: Cognito JWT, caller must be admin
@@ -66,6 +67,12 @@ export async function handler(
     ExpressionAttributeNames: { '#status': 'status' },
     ExpressionAttributeValues: { ':refunded': 'refunded', ':amt': refundAmount, ':now': new Date().toISOString(), ':by': callerUid },
   }));
+
+  try {
+    await revokePunchCardCredit(order);
+  } catch (err) {
+    console.error(`[adminRefundMemberLastPayment] member=${memberId} order=${order.orderId} refunded but failed to revoke punch-card credit:`, err);
+  }
 
   console.log(`[adminRefundMemberLastPayment] member=${memberId} order=${order.orderId} amount=${refundAmount} by ${callerUid}`);
   return json(200, { success: true, orderId: order.orderId, amount: refundAmount });

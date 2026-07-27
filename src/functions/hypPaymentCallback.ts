@@ -70,10 +70,11 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     // A card-update order is a pure token capture — nothing to grant, and it
     // must never create/touch a membership or billing agreement beyond
     // refreshing the token.
+    let punchCardId: string | undefined;
     if (order.isCardUpdateOnly) {
       // no-op
     } else if (order.productType === 'punch_card' || order.productType === 'single_ticket') {
-      await grantPunchCardSessions(order.userId, order.productId, order.productName, order.sessions ?? 0);
+      punchCardId = await grantPunchCardSessions(order.userId, order.productId, order.productName, order.sessions ?? 0);
     } else {
       const payload: PaymentSuccessPayload = {
         event: 'payment_success',
@@ -290,11 +291,14 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     await ddb.send(new UpdateCommand({
       TableName: TABLE_NAME,
       Key: orderKey,
-      UpdateExpression: 'SET #status = :completed, hypTransactionId = :tid, hypCCode = :ccode, verifiedAt = :now, updatedAt = :now' + (billingAgreementId ? ', billingAgreementId = :bid' : ''),
+      UpdateExpression: 'SET #status = :completed, hypTransactionId = :tid, hypCCode = :ccode, verifiedAt = :now, updatedAt = :now'
+        + (billingAgreementId ? ', billingAgreementId = :bid' : '')
+        + (punchCardId ? ', punchCardId = :pcid' : ''),
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: {
         ':completed': 'completed', ':tid': hypTransactionId, ':ccode': ccode, ':now': nowIso,
         ...(billingAgreementId ? { ':bid': billingAgreementId } : {}),
+        ...(punchCardId ? { ':pcid': punchCardId } : {}),
       },
     }));
 

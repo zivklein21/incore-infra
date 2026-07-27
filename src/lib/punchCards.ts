@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
-import { GetCommand, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { MemberProfileItem } from './entities';
+import type { HypOrderItem, MemberProfileItem } from './entities';
 
 // Creates the standalone PunchCardItem only — the shape bookClass/
 // cancelBooking/confirmWaitlistSpot/etc. all read for available-credit
@@ -47,6 +47,25 @@ export async function appendLegacyPunchCard(memberId: string, legacyCard: Record
     Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' },
     UpdateExpression: 'SET extra = :extra',
     ExpressionAttributeValues: { ':extra': { punch_cards: [...existingCards, legacyCard] } },
+  }));
+}
+
+// Reverses the credit a refunded order granted — called by adminRefundOrder.ts
+// / adminRefundMemberLastPayment.ts after the HYP refund itself succeeds.
+// Deletes the PunchCardItem outright (matching adminDeleteMemberCredit.ts)
+// rather than zeroing remainingPunches — a refund voids the purchase
+// entirely, so it should disappear from the member's credits list, not
+// linger there reading as an ordinary "used up" credit. Only orders
+// completed after punchCardId started being recorded (see
+// hypPaymentCallback.ts) can be found and reversed here; older orders have no
+// link back to their card and need the credit removed manually via the
+// Credits tab's Delete action instead.
+export async function revokePunchCardCredit(order: Pick<HypOrderItem, 'userId' | 'punchCardId'>): Promise<void> {
+  if (!order.punchCardId) return;
+
+  await ddb.send(new DeleteCommand({
+    TableName: TABLE_NAME,
+    Key: { PK: `MEMBER#${order.userId}`, SK: `PUNCHCARD#${order.punchCardId}` },
   }));
 }
 

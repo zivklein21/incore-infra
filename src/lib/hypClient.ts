@@ -9,8 +9,48 @@
 // Manager at deploy time — same pattern as GMAIL_APP_PASSWORD in sendOtp.ts.
 // The original used Firebase's defineSecret(); there is no code-level
 // equivalent needed here since env vars are already lazily read per-call.
+//
+// The full credential set (Masof + KEY + PassP — each HYP terminal is its
+// own complete registration, not a shared KEY/PassP with a swappable
+// Masof) can also be switched live from the Admin Portal's System Config
+// screen — PK='APPCONFIG' SK='PAYMENT_TERMINAL' holds a list of known
+// terminals plus which one is active. Falls back to the HYP_MASOF/HYP_KEY/
+// HYP_PASSP env vars whenever that config item is missing, has no active
+// terminal selected, the active terminal is missing a field, or the
+// lookup itself fails — a DynamoDB hiccup must never be able to block real
+// payment processing. Storing KEY/PassP in DynamoDB (readable by any admin
+// with portal access) is a deliberate tradeoff for live-switchability;
+// see the System Config screen's own warning about this.
+
+import { GetCommand } from '@aws-sdk/lib-dynamodb';
+import iconv from 'iconv-lite';
+import { ddb, TABLE_NAME } from './dynamo';
 
 const HYP_BASE_URL = 'https://pay.hyp.co.il/p/';
+
+// HYP's hosted-page backend is a legacy Windows system that renders free-text
+// fields (client name, product Info) in the Windows-1255 Hebrew codepage,
+// not UTF-8, despite their docs only saying "URL-encode normally" — sending
+// standard UTF-8 percent-encoding for Hebrew text here (what URLSearchParams
+// does by default) came through on HYP's own hosted page as unrenderable
+// boxes/question marks, since HYP decoded our UTF-8 bytes as windows-1255
+// and found no valid character mapping. Only applied when the value actually
+// contains non-ASCII text, so plain English names are unaffected.
+const FREE_TEXT_FIELDS = new Set(['ClientName', 'ClientLName', 'Info']);
+
+function hasNonAscii(value: string): boolean {
+  return /[^\x00-\x7F]/.test(value);
+}
+
+function encodeWindows1255(value: string): string {
+  const bytes = iconv.encode(value, 'windows-1255');
+  let out = '';
+  for (const byte of bytes) {
+    const ch = String.fromCharCode(byte);
+    out += /[A-Za-z0-9\-_.~]/.test(ch) ? ch : `%${byte.toString(16).toUpperCase().padStart(2, '0')}`;
+  }
+  return out;
+}
 
 interface HypCredentials {
   masof: string;
@@ -18,11 +58,33 @@ interface HypCredentials {
   passP: string;
 }
 
-function getHypCredentials(): HypCredentials {
+interface PaymentTerminalConfig {
+  activeTerminalId?: string;
+  terminals?: { id: string; label: string; masof: string; key: string; passP: string }[];
+}
+
+async function getActiveTerminalOverride(): Promise<Partial<HypCredentials> | null> {
+  try {
+    const res = await ddb.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: 'APPCONFIG', SK: 'PAYMENT_TERMINAL' },
+    }));
+    const config = res.Item as PaymentTerminalConfig | undefined;
+    const active = config?.terminals?.find((t) => t.id === config.activeTerminalId);
+    if (!active) return null;
+    return { masof: active.masof || undefined, key: active.key || undefined, passP: active.passP || undefined };
+  } catch (err) {
+    console.error('[hypClient] PAYMENT_TERMINAL lookup failed, falling back to HYP_MASOF/HYP_KEY/HYP_PASSP:', err);
+    return null;
+  }
+}
+
+async function getHypCredentials(): Promise<HypCredentials> {
+  const override = await getActiveTerminalOverride();
   return {
-    masof: process.env.HYP_MASOF as string,
-    key: process.env.HYP_KEY as string,
-    passP: process.env.HYP_PASSP as string,
+    masof: override?.masof ?? (process.env.HYP_MASOF as string),
+    key: override?.key ?? (process.env.HYP_KEY as string),
+    passP: override?.passP ?? (process.env.HYP_PASSP as string),
   };
 }
 
@@ -39,10 +101,16 @@ function parseHypResponse(body: string): Record<string, string> {
 
 async function callHyp(params: Record<string, string | number | boolean>): Promise<{ raw: string; fields: Record<string, string> }> {
   const url = new URL(HYP_BASE_URL);
+  const rawPairs: string[] = [];
   for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, String(v));
+    if (FREE_TEXT_FIELDS.has(k) && typeof v === 'string' && hasNonAscii(v)) {
+      rawPairs.push(`${k}=${encodeWindows1255(v)}`);
+    } else {
+      url.searchParams.set(k, String(v));
+    }
   }
-  const response = await fetch(url.toString(), { method: 'GET' });
+  const finalUrl = rawPairs.length ? `${url.toString()}${url.search ? '&' : '?'}${rawPairs.join('&')}` : url.toString();
+  const response = await fetch(finalUrl, { method: 'GET' });
   const raw = await response.text();
   return { raw, fields: parseHypResponse(raw) };
 }
@@ -78,7 +146,7 @@ export class HypSignError extends Error {
 }
 
 export async function createHypSignedPaymentUrl(params: CreatePaymentPageParams): Promise<string> {
-  const creds = getHypCredentials();
+  const creds = await getHypCredentials();
 
   const { raw, fields } = await callHyp({
     action: 'APISign',
@@ -111,7 +179,7 @@ export async function createHypSignedPaymentUrl(params: CreatePaymentPageParams)
 // ─── action=APISign&What=VERIFY — confirm a redirect's authenticity ──────
 
 export async function verifyHypTransaction(redirectParams: Record<string, string>): Promise<{ verified: boolean; fields: Record<string, string> }> {
-  const creds = getHypCredentials();
+  const creds = await getHypCredentials();
   const { fields } = await callHyp({
     action: 'APISign',
     What: 'VERIFY',
@@ -132,7 +200,7 @@ export interface HypToken {
 }
 
 export async function getHypToken(transId: string): Promise<HypToken | null> {
-  const creds = getHypCredentials();
+  const creds = await getHypCredentials();
   const { fields } = await callHyp({ action: 'getToken', Masof: creds.masof, PassP: creds.passP, TransId: transId });
 
   console.log(`[getHypToken] transId=${transId} raw fields:`, JSON.stringify(fields));
@@ -174,7 +242,7 @@ export interface ChargeTokenResult {
 }
 
 export async function chargeHypToken(params: ChargeTokenParams): Promise<ChargeTokenResult> {
-  const creds = getHypCredentials();
+  const creds = await getHypCredentials();
   const yy = String(params.expiryYear % 100).padStart(2, '0');
   const mm = String(params.expiryMonth).padStart(2, '0');
 
@@ -207,7 +275,7 @@ export interface RefundResult {
 }
 
 export async function refundHypTransaction(transId: string, amount: number): Promise<RefundResult> {
-  const creds = getHypCredentials();
+  const creds = await getHypCredentials();
   const { fields } = await callHyp({ action: 'zikoyAPI', Masof: creds.masof, PassP: creds.passP, TransId: transId, Amount: amount });
   const ccode = ccodeOf(fields);
   return { success: ccode === 0, ccode, refundTransactionId: fields.Id };

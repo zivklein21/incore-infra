@@ -53,6 +53,35 @@ resource "aws_iam_role_policy" "lambda_cognito" {
   })
 }
 
+# Admin Portal's Logs Viewer (adminGetLambdaLogs.ts/adminListLogGroups.ts)
+# reads other Lambdas' CloudWatch log groups, and its Dashboard
+# (adminGetDashboardMetrics.ts) reads AWS/ApiGateway metrics — neither is
+# covered by AWSLambdaBasicExecutionRole, which only lets a function write
+# to *its own* log group.
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+resource "aws_iam_role_policy" "lambda_logs_read" {
+  name = "incore-lambda-logs-read-policy"
+  role = aws_iam_role.lambda_execution_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["logs:FilterLogEvents", "logs:GetLogEvents", "logs:DescribeLogStreams", "logs:DescribeLogGroups"]
+        Resource = ["arn:aws:logs:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/incore-*:*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["cloudwatch:GetMetricData"]
+        Resource = ["*"] # GetMetricData doesn't support resource-level scoping
+      },
+    ]
+  })
+}
+
 # ── 2. Build the deployment package ─────────────────────────────────────────
 #
 # One shared code package (compiled src/ output) + one shared dependencies

@@ -85,8 +85,9 @@ export async function handler(
   }
 
   // ── Apply the grant, same as hypPaymentCallback ──────────────────────────
+  let punchCardId: string | undefined;
   if (build.productType === 'punch_card' || build.productType === 'single_ticket') {
-    await grantPunchCardSessions(uid, productId, build.productName, build.sessions);
+    punchCardId = await grantPunchCardSessions(uid, productId, build.productName, build.sessions);
   } else {
     const payload: PaymentSuccessPayload = {
       event: 'payment_success',
@@ -255,12 +256,14 @@ export async function handler(
     // saved-card purchase permanently unrefundable ("missing_transaction_id").
     UpdateExpression: 'SET #status = :completed, hypCCode = :zero, verifiedAt = :now, updatedAt = :now'
       + (billingAgreementId ? ', billingAgreementId = :bid' : '')
-      + (chargeResult.transactionId ? ', hypTransactionId = :tid' : ''),
+      + (chargeResult.transactionId ? ', hypTransactionId = :tid' : '')
+      + (punchCardId ? ', punchCardId = :pcid' : ''),
     ExpressionAttributeNames: { '#status': 'status' },
     ExpressionAttributeValues: {
       ':completed': 'completed', ':zero': 0, ':now': new Date().toISOString(),
       ...(billingAgreementId ? { ':bid': billingAgreementId } : {}),
       ...(chargeResult.transactionId ? { ':tid': chargeResult.transactionId } : {}),
+      ...(punchCardId ? { ':pcid': punchCardId } : {}),
     },
   }));
 

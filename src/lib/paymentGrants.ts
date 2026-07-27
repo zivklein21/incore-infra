@@ -155,7 +155,7 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
 // NOTE: unlike products.ts's grantPunchCard/autoGrantProduct, this
 // deliberately does NOT mirror into the legacy extra.punch_cards array —
 // same as the original functions/src/paymentGrants.ts.
-export async function grantPunchCardSessions(userId: string, productId: string, productName: string, sessions: number): Promise<void> {
+export async function grantPunchCardSessions(userId: string, productId: string, productName: string, sessions: number): Promise<string> {
   const cardId = randomUUID();
   await putPunchCardItem({ memberId: userId, cardId, remainingPunches: sessions, expiryDate: null, notes: productName, source: 'store_purchase' });
 
@@ -173,6 +173,7 @@ export async function grantPunchCardSessions(userId: string, productId: string, 
   }
 
   console.log(`[paymentGrants] punch_card payment userId=${userId} product=${productId} sessions=${sessions} cardId=${cardId}`);
+  return cardId;
 }
 
 // ─── payment_failed / subscription_cancelled handler ─────────────────────────

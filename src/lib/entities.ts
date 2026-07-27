@@ -202,6 +202,25 @@ export interface MemberProfileItem {
   subscriptionExpiryAlertSent?: string;
 }
 
+// PK=ALERT#<id>  SK=METADATA
+// GSI1PK='ALERT' GSI1SK=<createdAtIso>#<id> — reverse-chronological feed for
+// the admin portal's dashboard (adminGetSystemAlerts). Written via
+// recordSystemAlert() (lib/alerts.ts) either from a handler's own
+// failure branch, or automatically by processDlqMessage.ts whenever an
+// async Lambda invocation (EventBridge-scheduled function) exhausts its
+// retries and lands on the DLQ (see dlq.tf) — source is 'dlq:<functionName>'
+// for those. TTL'd after 30 days like other ephemeral items on this table.
+export interface SystemAlertItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  severity: 'warning' | 'error' | 'critical';
+  source: string; // originating function name, e.g. 'hypPaymentCallback' or 'dlq:chargeHypBillingAgreements'
+  message: string;
+  context?: Record<string, unknown>;
+  createdAt: string; // ISO 8601
+  expiresAtEpoch: number;
+}
+
 // PK=ORDER#<orderId>  SK=METADATA
 // GSI1PK=MEMBER#<uid> GSI1SK=ORDER#<createdAtIso>#<orderId> — per-member,
 // chronological (adminRefundMemberLastPayment's "most recent completed order").
@@ -235,6 +254,12 @@ export interface HypOrderItem {
   weeklyLimit?: number;
   allowedLegalCancellationsPerMonth?: number;
   sessions?: number;
+  // Set only for productType punch_card/single_ticket — the PunchCardItem
+  // (PK=MEMBER#<userId>, SK=PUNCHCARD#<punchCardId>) that grantPunchCardSessions
+  // created for this order, so a later refund can find and reverse it. Orders
+  // completed before this field existed have no link and can't be
+  // auto-reversed on refund.
+  punchCardId?: string;
   totalPayments: number;
   amountPerCharge?: number;
   totalAmount?: number;
