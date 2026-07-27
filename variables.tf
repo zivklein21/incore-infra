@@ -60,3 +60,17 @@ variable "hyp_enterprise_terminal" {
   sensitive   = true
   default     = ""
 }
+
+# Browser origins allowed to call the HTTP API with credentials/custom
+# headers (api_gateway.tf's cors_configuration). Only the Next.js Admin
+# Portal (incore-web/incore-devops-admin) is a browser client of this API —
+# the React Native app isn't subject to CORS at all, so this list only ever
+# needs admin-portal origins. Defaults to the local dev server; add the
+# deployed portal's real origin(s) via terraform.tfvars before going to
+# production (wildcard "*" is deliberately not offered here — see
+# api_gateway.tf's comment on why that was the previous, looser default).
+variable "admin_portal_allowed_origins" {
+  description = "Origins (scheme+host, no path) allowed to call the API from a browser — the Admin Portal's dev and deployed URLs."
+  type        = list(string)
+  default     = ["http://localhost:3000"]
+}

@@ -42,3 +42,16 @@ resource "aws_cognito_user_pool_client" "incore_app_client" {
     "ALLOW_REFRESH_TOKEN_AUTH"
   ]
 }
+
+# Consumed by the Admin Portal's .env.local (NEXT_PUBLIC_COGNITO_USER_POOL_ID /
+# NEXT_PUBLIC_COGNITO_CLIENT_ID) — same pool the mobile app uses, see
+# incore-web/incore-devops-admin/src/lib/cognito.ts.
+output "cognito_user_pool_id" {
+  value       = aws_cognito_user_pool.incore_user_pool.id
+  description = "Cognito User Pool ID — NEXT_PUBLIC_COGNITO_USER_POOL_ID in the Admin Portal."
+}
+
+output "cognito_app_client_id" {
+  value       = aws_cognito_user_pool_client.incore_app_client.id
+  description = "Cognito App Client ID — NEXT_PUBLIC_COGNITO_CLIENT_ID in the Admin Portal."
+}

@@ -62,8 +62,11 @@ resource "aws_iam_role_policy" "lambda_s3" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+      Effect = "Allow"
+      # s3:DeleteObject is only exercised by adminDeleteS3Object.ts (Admin
+      # Portal Assets Manager) — every other S3-touching function only
+      # reads/writes.
+      Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
       Resource = [aws_s3_bucket.incore_uploads.arn, "${aws_s3_bucket.incore_uploads.arn}/*"]
     }]
   })

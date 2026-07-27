@@ -50,6 +50,11 @@ export async function handler(
       hasToken: !!a.token,
       amountPerCharge: a.amountPerCharge,
       totalAmount: a.totalAmount ?? null,
+      // Only set on a HYP-native Tash installment sale (see entities.ts) —
+      // lets the admin UI show "3 installments of ₪X" instead of amountPerCharge
+      // alone, which on its own looks like an ordinary recurring subscription.
+      installmentsCount: a.installmentsCount ?? null,
+      installmentAmount: a.installmentAmount ?? null,
       paymentsCompleted: a.paymentsCompleted,
       totalPayments: a.totalPayments,
       consecutiveFailures: a.consecutiveFailures,

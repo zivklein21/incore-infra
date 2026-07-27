@@ -40,6 +40,16 @@ export async function handler(
       status: o.status,
       hypCCode: o.hypCCode ?? null,
       createdAt: o.createdAt ?? null,
+      // Present whenever this order is one of several payments (either a
+      // HYP-native Tash installment sale charged in one shot, or a single
+      // charge out of a subscription/store_installment billing agreement) —
+      // lets the admin UI show a breakdown instead of a bare amount that
+      // reads like a one-off purchase. See entities.ts HypOrderItem.
+      totalPayments: o.totalPayments ?? null,
+      amountPerCharge: o.amountPerCharge ?? null,
+      totalAmount: o.totalAmount ?? null,
+      installmentsCount: o.installmentsCount ?? null,
+      installmentAmount: o.installmentAmount ?? null,
     };
   }));
 
