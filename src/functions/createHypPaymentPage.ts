@@ -60,6 +60,7 @@ export async function handler(
       userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       info: build.productName,
       pageLang: 'HEB',
+      sendReceipt: true,
     });
     return json(200, {
       paymentUrl,

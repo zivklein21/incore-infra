@@ -6,6 +6,7 @@ import { monthKey, endOfMonth, addMonths, firstOfNextMonth } from './entities';
 import { chargeHypToken } from './hypClient';
 import { getMemberIdNumber, getMemberFullName, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from './paymentGrants';
+import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
 
 // Charges a single billing agreement and applies its grant/failure handling.
 // Used by both the nightly cron (chargeHypBillingAgreements) and the admin
@@ -39,6 +40,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         clientName: chargeClientName,
         info: agreement.productName,
         email: chargeEmail || undefined,
+        sendReceipt: true,
       });
     } catch (err: any) {
       console.error(`[chargeOneAgreement] agreement=${agreement.agreementId} charge threw:`, err);
@@ -138,22 +140,52 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
       await handlePaymentFailure(agreement.userId, agreement.targetMonth);
     }
 
+    const transactionType: PaymentFailureTransactionType =
+      agreement.kind === 'subscription' ? 'subscription_renewal' : 'installment_payment';
+
     if (!agreement.token) {
       // No card on file at all — nothing to retry via the decline counter.
       // Leave the agreement active and waiting (same nextChargeDate, so it's
       // picked up again tomorrow); the member fixing their card unblocks it.
+      // This retries every day until fixed, so admins are only paged once
+      // (noCardAdminNotified) rather than nightly forever.
+      if (!agreement.noCardAdminNotified) {
+        await notifyAdminsPaymentFailed({
+          userId: agreement.userId,
+          userName: chargeClientName,
+          transactionType,
+          itemName: agreement.productName,
+          amount: chargeAmount,
+          ccode: result.ccode,
+          hadCardOnFile: false,
+          sourceId: agreement.agreementId,
+        });
+      }
+
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: agreement.PK, SK: agreement.SK },
-        UpdateExpression: 'SET lastChargeResult = :lcr, updatedAt = :now',
+        UpdateExpression: 'SET lastChargeResult = :lcr, updatedAt = :now, noCardAdminNotified = :true',
         ExpressionAttributeValues: {
           ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
           ':now': nowIso,
+          ':true': true,
         },
       }));
     } else {
       const consecutiveFailures = agreement.consecutiveFailures + 1;
       const giveUp = consecutiveFailures >= 2;
+
+      await notifyAdminsPaymentFailed({
+        userId: agreement.userId,
+        userName: chargeClientName,
+        transactionType,
+        itemName: agreement.productName,
+        amount: chargeAmount,
+        ccode: result.ccode,
+        hadCardOnFile: true,
+        sourceId: agreement.agreementId,
+      });
 
       if (giveUp) {
         await ddb.send(new UpdateCommand({

@@ -15,21 +15,16 @@ export interface ReminderSettings {
 export interface ScheduleAlertSettings {
   enabled: boolean;
   templateId: string | null;
-  mode: 'weekly' | 'once';
   weekday: number;
   hour: number;
   minute: number;
-  onceDate: string | null;
-  onceHour: number;
-  onceMinute: number;
   lastSentKey: string | null;
 }
 
 const REMINDER_DEFAULTS: ReminderSettings = { hoursBefore: 2, windowStartHour: 6, windowEndHour: 20 };
 
 const SCHEDULE_ALERT_DEFAULTS: ScheduleAlertSettings = {
-  enabled: false, templateId: null, mode: 'weekly', weekday: 6, hour: 20, minute: 0,
-  onceDate: null, onceHour: 20, onceMinute: 0, lastSentKey: null,
+  enabled: false, templateId: null, weekday: 6, hour: 20, minute: 0, lastSentKey: null,
 };
 
 async function getSettingsItem(): Promise<Record<string, unknown>> {
@@ -51,13 +46,9 @@ export async function getScheduleAlertSettings(): Promise<ScheduleAlertSettings>
   return {
     enabled: typeof d?.enabled === 'boolean' ? d.enabled : SCHEDULE_ALERT_DEFAULTS.enabled,
     templateId: typeof d?.templateId === 'string' ? d.templateId : SCHEDULE_ALERT_DEFAULTS.templateId,
-    mode: d?.mode === 'once' ? 'once' : 'weekly',
     weekday: typeof d?.weekday === 'number' ? d.weekday : SCHEDULE_ALERT_DEFAULTS.weekday,
     hour: typeof d?.hour === 'number' ? d.hour : SCHEDULE_ALERT_DEFAULTS.hour,
     minute: typeof d?.minute === 'number' ? d.minute : SCHEDULE_ALERT_DEFAULTS.minute,
-    onceDate: typeof d?.onceDate === 'string' ? d.onceDate : SCHEDULE_ALERT_DEFAULTS.onceDate,
-    onceHour: typeof d?.onceHour === 'number' ? d.onceHour : SCHEDULE_ALERT_DEFAULTS.onceHour,
-    onceMinute: typeof d?.onceMinute === 'number' ? d.onceMinute : SCHEDULE_ALERT_DEFAULTS.onceMinute,
     lastSentKey: typeof d?.lastSentKey === 'string' ? d.lastSentKey : SCHEDULE_ALERT_DEFAULTS.lastSentKey,
   };
 }

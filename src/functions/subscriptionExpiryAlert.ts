@@ -7,9 +7,14 @@ import type { MembershipItem } from '../lib/entities';
 import { monthKey } from '../lib/entities';
 import { getAllMemberProfiles } from '../lib/memberScan';
 import { getExpoPushToken } from '../lib/push';
+import { resolveTemplate, getMemberLang, fmtDate } from '../lib/templateResolver';
 
+// Used whenever no admin-configured SUBSCRIPTION_EXPIRY template exists yet
+// (or the lookup itself fails) — the alert must still go out either way.
 const EXPIRY_TITLE = '⏰ תזכורת: המנוי שלך מסתיים הלילה!';
 const EXPIRY_BODY = 'מחר מתחיל חודש חדש וזה הזמן לחדש את המנוי שלך ב-INCORE כדי להבטיח את מקומך באימונים הקרובים. היכנסי לאפליקציה להסדרת המנוי! 🤍';
+const EXPIRY_BG = '#5C3A8F';
+const EXPIRY_TEXT = '#FFFFFF';
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const EXPO_CHUNK = 100;
 
@@ -92,15 +97,36 @@ export async function handler(): Promise<void> {
 
   const nowIso = new Date().toISOString();
   const msgExpiresAtMs = Date.now() + 12 * 3_600_000;
-  const pushTokens: string[] = [];
+  const pushMessages: { to: string; title: string; body: string }[] = [];
   const dbWrites: Array<() => Promise<unknown>> = [];
 
   for (const memberId of toAlert) {
     const profile = profileById.get(memberId);
     if (!profile) continue;
 
+    const lang = getMemberLang(profile);
+    const memberName = profile.identity?.name ?? profile.name ?? '';
+
+    // A missing/misconfigured template must never stop the alert from going
+    // out — fall back to the hardcoded copy on a DB error or when no admin
+    // template is configured for this type yet.
+    let resolved: { title: string; body: string; bgColor: string; textColor: string } | null = null;
+    try {
+      resolved = await resolveTemplate('SUBSCRIPTION_EXPIRY', lang, {
+        class_type: '', class_time: '', class_date: '',
+        member_name: memberName,
+        expiry_date: fmtDate(now, lang),
+      });
+    } catch (err: any) {
+      console.error(`[subscriptionExpiryAlert] resolveTemplate failed for member=${memberId}, using fallback copy:`, err);
+    }
+    const title = resolved?.title ?? EXPIRY_TITLE;
+    const body = resolved?.body ?? EXPIRY_BODY;
+    const bgColor = resolved?.bgColor ?? EXPIRY_BG;
+    const textColor = resolved?.textColor ?? EXPIRY_TEXT;
+
     const token = getExpoPushToken(profile);
-    if (token) pushTokens.push(token);
+    if (token) pushMessages.push({ to: token, title, body });
 
     dbWrites.push(() => ddb.send(new PutCommand({
       TableName: TABLE_NAME,
@@ -108,10 +134,10 @@ export async function handler(): Promise<void> {
         PK: `MEMBER#${memberId}`,
         SK: `MESSAGE#expiry_alert_${currentMonth}`,
         type: 'admin_alert',
-        title: EXPIRY_TITLE,
-        body: EXPIRY_BODY,
-        bgColor: '#5C3A8F',
-        textColor: '#FFFFFF',
+        title,
+        body,
+        bgColor,
+        textColor,
         createdAt: nowIso,
         expiresAt: new Date(msgExpiresAtMs).toISOString(),
         expiresAtEpoch: Math.floor(msgExpiresAtMs / 1000),
@@ -130,12 +156,12 @@ export async function handler(): Promise<void> {
   }
 
   let totalPushed = 0;
-  for (const batch of chunk(pushTokens, EXPO_CHUNK)) {
+  for (const batch of chunk(pushMessages, EXPO_CHUNK)) {
     try {
       const resp = await fetch(EXPO_PUSH_URL, {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(batch.map((to) => ({ to, title: EXPIRY_TITLE, body: EXPIRY_BODY, sound: 'default' as const, data: { type: 'subscription_expiry_alert' } }))),
+        body: JSON.stringify(batch.map((m) => ({ to: m.to, title: m.title, body: m.body, sound: 'default' as const, data: { type: 'subscription_expiry_alert' } }))),
       });
       await resp.json();
       totalPushed += batch.length;
