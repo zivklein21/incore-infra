@@ -39,6 +39,8 @@ export async function handler(
   if (typeof body.type === 'string') item.type = body.type;
   if (typeof body.sessions_per_week === 'number') item.sessions_per_week = body.sessions_per_week;
   if (Array.isArray(body.assigned_to)) item.assigned_to = body.assigned_to;
+  if (typeof body.visibility === 'string') item.visibility = body.visibility;
+  if (Array.isArray(body.target_group_ids)) item.target_group_ids = body.target_group_ids;
   if (typeof body.productImageUrl === 'string') item.productImageUrl = body.productImageUrl;
   if (typeof body.monthlyLimit === 'number') item.monthlyLimit = body.monthlyLimit;
   if (typeof body.weeklyLimit === 'number') item.weeklyLimit = body.weeklyLimit;

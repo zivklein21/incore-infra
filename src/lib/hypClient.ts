@@ -120,6 +120,23 @@ function ccodeOf(fields: Record<string, string>): number {
   return Number.isFinite(n) ? n : -1;
 }
 
+// ─── Email receipt (SendHesh) ──────────────────────────────────────────────
+// HYP auto-generates and emails a tax invoice/receipt when SendHesh=True is
+// sent alongside a valid `email`. Callers opt in per request via
+// `sendReceipt` — real purchases/renewals want one, but the ₪1 card-update-
+// only token capture (createHypCardUpdatePage.ts) deliberately never opts
+// in, since there's no real transaction for the customer to be invoiced for.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function receiptParams(email: string | undefined, sendReceipt: boolean | undefined): { SendHesh: 'True' } | Record<string, never> {
+  if (!sendReceipt) return {};
+  if (!email || !EMAIL_RE.test(email)) {
+    console.warn('[hypClient] sendReceipt requested but no valid email on file — skipping SendHesh, checkout continues');
+    return {};
+  }
+  return { SendHesh: 'True' };
+}
+
 // ─── action=APISign&What=SIGN — create a hosted payment page ─────────────
 
 export interface CreatePaymentPageParams {
@@ -137,6 +154,8 @@ export interface CreatePaymentPageParams {
   userId: string;
   info?: string;
   pageLang?: 'HEB' | 'ENG';
+  // See receiptParams() above — opts into HYP emailing an automatic invoice.
+  sendReceipt?: boolean;
 }
 
 export class HypSignError extends Error {
@@ -162,6 +181,7 @@ export async function createHypSignedPaymentUrl(params: CreatePaymentPageParams)
     ...(params.email ? { email: params.email } : {}),
     ...(params.cell ? { cell: params.cell } : {}),
     ...(params.info ? { Info: params.info } : {}),
+    ...receiptParams(params.email, params.sendReceipt),
     UserId: params.userId,
     Tash: params.tash,
     ...(params.tash > 1 ? { TashType: params.tashType ?? 1 } : {}),
@@ -232,6 +252,8 @@ export interface ChargeTokenParams {
   // tashType 1 = standard (no-interest) installments, 6 = credit.
   tash?: number;
   tashType?: number;
+  // See receiptParams() above — opts into HYP emailing an automatic invoice.
+  sendReceipt?: boolean;
 }
 
 export interface ChargeTokenResult {
@@ -259,6 +281,7 @@ export async function chargeHypToken(params: ChargeTokenParams): Promise<ChargeT
     ClientName: params.clientName,
     Info: params.info,
     ...(params.email ? { email: params.email } : {}),
+    ...receiptParams(params.email, params.sendReceipt),
     ...(params.tash && params.tash > 1 ? { Tash: params.tash, TashType: params.tashType ?? 1 } : {}),
   });
 

@@ -5,9 +5,10 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { HypOrderItem, MemberProfileItem, ProductItem } from '../lib/entities';
 import { monthKey, firstOfNextMonth } from '../lib/entities';
 import { verifyHypTransaction, getHypToken, inquireCardBrand, refundHypTransaction } from '../lib/hypClient';
-import { getPolicySettings } from '../lib/hypOrders';
+import { getPolicySettings, getMemberFullName } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
+import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from '../lib/adminNotify';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
@@ -53,7 +54,14 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
     const nowIso = new Date().toISOString();
 
-    if (!verified) {
+    // `verified` only confirms HYP genuinely signed this redirect — a
+    // correctly-signed redirect for a transaction the card issuer declined
+    // is still `verified === true`. The actual approve/decline outcome is
+    // `ccode` (0 = approved), which must be checked separately or a real
+    // decline sails straight through to the grant-access path below.
+    const approved = verified && Number.isFinite(ccode) && ccode === 0;
+
+    if (!approved) {
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: orderKey,
@@ -61,6 +69,27 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: { ':failed': 'failed', ':ccode': Number.isFinite(ccode) ? ccode : -1, ':now': nowIso },
       }));
+
+      // A card-update-only order is just a token capture, not a real
+      // purchase — nothing an admin needs to act on if it fails.
+      if (!order.isCardUpdateOnly) {
+        const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${order.userId}`, SK: 'PROFILE' } }));
+        const member = memberRes.Item as MemberProfileItem | undefined;
+        const transactionType: PaymentFailureTransactionType =
+          order.productType === 'subscription' || order.productType === 'mid_month' ? 'subscription_signup' : 'store_purchase';
+
+        await notifyAdminsPaymentFailed({
+          userId: order.userId,
+          userName: member ? getMemberFullName(member) : 'Unknown Member',
+          transactionType,
+          itemName: order.productName,
+          amount: order.amount,
+          ccode: Number.isFinite(ccode) ? ccode : -1,
+          hadCardOnFile: true,
+          sourceId: orderId,
+        });
+      }
+
       return redirectTo('failed');
     }
 
@@ -263,7 +292,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: `MEMBER#${order.userId}`, SK: 'PROFILE' },
-        UpdateExpression: 'SET payment = :p',
+        UpdateExpression: 'SET payment = :p REMOVE admin.forceShowPaymentButton',
         ExpressionAttributeValues: {
           ':p': {
             ...currentPayment,

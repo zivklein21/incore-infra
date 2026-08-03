@@ -28,8 +28,11 @@ export async function handler(
     id: (n.PK as string).replace('NOTIFICATION#', ''),
     type: n.type,
     priority: n.priority,
+    title: n.title,
     message: n.message,
     createdAt: n.createdAt,
+    // Payment-failure alerts only — undefined for other notification types.
+    memberId: n.memberId,
   }));
 
   return json(200, { notifications });

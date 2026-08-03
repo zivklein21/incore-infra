@@ -54,7 +54,11 @@ export async function handler(
   const memberId = event.queryStringParameters?.memberId;
   if (!memberId) return json(400, { error: 'missing_member_id' });
 
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' } }));
+  // Strongly consistent: an admin re-opening this screen right after
+  // flipping a toggle here (e.g. forceShowPaymentButton) must never see a
+  // stale pre-write value — the default eventually-consistent read can
+  // occasionally still return the old item for a brief window after a write.
+  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' }, ConsistentRead: true }));
   const p = res.Item as MemberProfileItem | undefined;
   if (!p) return json(200, null);
 
@@ -129,5 +133,6 @@ export async function handler(
     // show what they'll actually be charged next, same as getProfile.ts
     // already exposes to the member's own profile screen.
     pendingMembershipTypeId: p.pending_membership?.type ?? null,
+    forceShowPaymentButton: p.admin?.forceShowPaymentButton === true,
   });
 }

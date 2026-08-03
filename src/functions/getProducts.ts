@@ -28,6 +28,8 @@ export async function handler(
     sessions_per_week: p.sessions_per_week,
     is_public: p.is_public ?? true,
     assigned_to: p.assigned_to ?? [],
+    visibility: p.visibility,
+    target_group_ids: p.target_group_ids ?? [],
     active: p.active ?? true,
     created_at: p.createdAt ?? null,
     productImageUrl: p.productImageUrl,

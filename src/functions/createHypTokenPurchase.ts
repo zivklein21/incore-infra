@@ -66,6 +66,7 @@ export async function handler(
       clientName: [build.clientFirstName, build.clientLastName].filter(Boolean).join(' '),
       info: build.productName,
       email: build.email || undefined,
+      sendReceipt: true,
       ...(isInstallmentSale ? { tash: build.totalPayments, tashType: 1 } : {}),
     });
   } catch (err: any) {
@@ -244,7 +245,7 @@ export async function handler(
   await ddb.send(new UpdateCommand({
     TableName: TABLE_NAME,
     Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' },
-    UpdateExpression: 'SET payment = :p',
+    UpdateExpression: 'SET payment = :p REMOVE admin.forceShowPaymentButton',
     ExpressionAttributeValues: { ':p': memberPaymentUpdate },
   }));
 

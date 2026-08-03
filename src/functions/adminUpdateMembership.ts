@@ -6,13 +6,21 @@ import { isAdmin } from '../lib/auth';
 
 // POST /adminUpdateMembership
 // Body: { memberId, membershipId, targetMonth, monthlyLimit?, weeklyLimit?,
-//         productId?, productName?, allowedLegalCancellationsPerMonth? }
+//         productId?, productName?, allowedLegalCancellationsPerMonth?, endDate? }
 // Auth: Cognito JWT, caller must be admin
 //
 // Partial update of an existing membership's plan/limits — used by
 // MemberDetailsScreen's "edit weekly/monthly limit" and "repair
 // membership" (re-point at a different product) actions. Does not touch
 // usage/weeklyUsage counters.
+//
+// `endDate` is only meaningful for CUSTOM_MIGRATION memberships — that's
+// the one type monthEndRollover.ts actually reads it for (see
+// hypBillingAgreements-adjacent rollover logic); on a regular subscription
+// it's just that month's billing-window boundary and gets replaced every
+// renewal, so the frontend only ever sends this for CUSTOM_MIGRATION items.
+// Accepted generically here like the other optional fields, with no
+// server-side type check, matching this endpoint's existing trust model.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -23,6 +31,7 @@ export async function handler(
     memberId?: unknown; membershipId?: unknown; targetMonth?: unknown;
     monthlyLimit?: unknown; weeklyLimit?: unknown; productId?: unknown;
     productName?: unknown; allowedLegalCancellationsPerMonth?: unknown;
+    endDate?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -43,6 +52,7 @@ export async function handler(
   if (typeof body.productId === 'string') fields.productId = body.productId;
   if (typeof body.productName === 'string') fields.productName = body.productName;
   if (typeof body.allowedLegalCancellationsPerMonth === 'number') fields.allowedLegalCancellationsPerMonth = body.allowedLegalCancellationsPerMonth;
+  if (typeof body.endDate === 'string' && !isNaN(new Date(body.endDate).getTime())) fields.endDate = body.endDate;
   if (Object.keys(fields).length === 0) return json(400, { error: 'no_fields_to_update' });
 
   const names: Record<string, string> = {};

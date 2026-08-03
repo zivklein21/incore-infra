@@ -2,7 +2,7 @@ import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { NotificationTemplateItem } from './entities';
 
-export type TemplateType = 'CLASS_CANCEL' | 'CLASS_UPDATE' | 'BOOK_CANCEL' | 'REMINDER' | 'SPOT_IS_OPEN' | 'CUSTOM' | 'MEMBERSHIP_ALERT';
+export type TemplateType = 'CLASS_CANCEL' | 'CLASS_UPDATE' | 'BOOK_CANCEL' | 'REMINDER' | 'SPOT_IS_OPEN' | 'CUSTOM' | 'MEMBERSHIP_ALERT' | 'SUBSCRIPTION_EXPIRY';
 export type Lang = 'he' | 'en';
 
 export interface TemplateVars {

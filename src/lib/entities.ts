@@ -66,6 +66,11 @@ export interface MembershipItem {
   usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number };
   weeklyUsage: Record<string, number>;
   type?: string; // 'CUSTOM_MIGRATION' for admin-manual migration memberships
+  // Only meaningfully populated for CUSTOM_MIGRATION items today (see
+  // adminGrantCustomMigration.ts) — a custom-duration bridge's real
+  // start/end, independent of the calendar month it's filed under.
+  startDate?: string;
+  endDate?: string;
   weeklyProcessed?: Record<string, boolean>;
   monthEndProcessed?: Record<string, boolean>;
 }
@@ -197,6 +202,7 @@ export interface MemberProfileItem {
     hasUnreadAlert?: boolean;
     require_health_form?: boolean;
     require_registration_form?: boolean;
+    forceShowPaymentButton?: boolean;
   };
   subscriptionStatus?: string;
   subscriptionExpiryAlertSent?: string;
@@ -318,6 +324,11 @@ export interface HypBillingAgreementItem {
   consecutiveFailures: number;
   sourceOrderId: string;
   lastChargeResult?: { at: string; ccode: number; hypTransactionId: string | null; success: boolean };
+  // Set the first time a "no card on file" charge attempt notifies admins —
+  // that failure mode retries daily forever (unlike a real decline, which
+  // gives up after 2 tries), so this gates it to a single admin push instead
+  // of paging them every night until the member adds a card.
+  noCardAdminNotified?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -342,6 +353,11 @@ export interface ProductItem {
   allowedLegalCancellationsPerMonth?: number;
   is_public?: boolean;
   assigned_to?: string[];
+  // GROUPS targeting: visibility mode + subscription-type Product IDs to target
+  // when visibility === 'GROUPS'. is_public/assigned_to stay the source of
+  // truth for legacy readers; these are additive.
+  visibility?: 'PUBLIC' | 'PRIVATE' | 'GROUPS';
+  target_group_ids?: string[];
   expires_at?: string | null;
   productImageUrl?: string;
   // Admin Membership-plan-manager-only fields (unused by the Store).

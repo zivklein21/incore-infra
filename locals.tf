@@ -56,6 +56,7 @@ locals {
     adminSaveTermsOfServiceContent     = { method = "POST" }
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
+    adminSetForceShowPaymentButton     = { method = "POST" }
     adminSetHypBillingAgreementStatus  = { method = "POST" }
     adminSetMemberAlert                = { method = "POST" }
     adminUpdateMemberCredit            = { method = "POST" }
@@ -118,6 +119,7 @@ locals {
     renewSubscriptionWithToken         = { method = "POST" }
     resizeProfilePhoto                 = { method = "POST" }
     saveClassSeries                    = { method = "POST" }
+    saveScheduleAlertSettings          = { method = "POST" }
     saveSupportSettings                = { method = "POST" }
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }
@@ -142,7 +144,9 @@ locals {
     activateProratedSubscription     = { method = "POST" } # SECURITY: no auth in original — see README.md
     adminBackfillResizeProfilePhotos = { method = "POST" } # auth: x-backfill-secret header
     confirmWaitlistSpot              = { method = "POST" } # SECURITY: no auth in original
-    hypPaymentCallback               = { method = "GET" }  # HYP browser redirect — must stay public
+    hypPaymentCallback               = { method = "GET" }  # HYP browser redirect — must stay public. Legacy combined endpoint, kept live until the HYP masof portal's Success/Failed Transaction URLs are switched to the two below.
+    hypPaymentSuccessCallback        = { method = "GET" }  # HYP browser redirect — must stay public. Configure as masof "Success page URL".
+    hypPaymentFailureCallback        = { method = "GET" }  # HYP browser redirect — must stay public. Configure as masof "Failed Transaction" custom link.
     rejectWaitlistOffer              = { method = "POST" } # SECURITY: no auth in original
     sendBookCancelNotification       = { method = "POST" } # SECURITY: no auth in original
     sendClassCancelNotifications     = { method = "POST" } # SECURITY: no auth in original
