@@ -13,10 +13,9 @@ import type { ClassItem, RegistrationItem } from '../lib/entities';
 // (decrementing the class's attendee count for REGISTERED ones — cancelled
 // registrations are already gone from REG# by the time they're cancelled,
 // see adminCancelRegistration.ts's Delete), strips them from every class's
-// waitlist, then deletes the profile itself. Does NOT delete their
-// cancellation history (CANCEL# items) or membership history — those stay
-// as an audit trail, matching the old Firestore version leaving the
-// cancellations subcollection alone.
+// waitlist, then deletes every remaining item under PK=MEMBER#<id> (profile,
+// wallet, punch cards, cancellation history, membership history, messages,
+// etc.) so no trace of the member is left in the table.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -32,7 +31,7 @@ export async function handler(
   const memberId = typeof body.memberId === 'string' ? body.memberId.trim() : '';
   if (!memberId) return json(400, { error: 'missing_member_id' });
 
-  const [regsRes, classesRes] = await Promise.all([
+  const [regsRes, classesRes, memberItemsRes] = await Promise.all([
     ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
       IndexName: 'GSI1',
@@ -44,10 +43,16 @@ export async function handler(
       FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
       ExpressionAttributeValues: { ':prefix': 'CLASS#', ':metadata': 'METADATA' },
     })),
+    ddb.send(new QueryCommand({
+      TableName: TABLE_NAME,
+      KeyConditionExpression: 'PK = :pk',
+      ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}` },
+    })),
   ]);
 
   const registrations = (regsRes.Items ?? []) as RegistrationItem[];
   const classes = (classesRes.Items ?? []) as ClassItem[];
+  const memberItems = (memberItemsRes.Items ?? []) as { PK: string; SK: string }[];
 
   await Promise.all([
     ...registrations.map(async (r) => {
@@ -71,7 +76,12 @@ export async function handler(
       }))),
   ]);
 
-  await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' } }));
+  await Promise.all(
+    memberItems.map((item) => ddb.send(new DeleteCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: item.PK, SK: item.SK },
+    }))),
+  );
 
   return json(200, { success: true });
 }
