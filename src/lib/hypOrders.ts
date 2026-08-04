@@ -48,6 +48,7 @@ export async function getPolicySettings(): Promise<{ standingOrderMonths: number
 export interface OrderBuild {
   productType: HypProductType;
   productName: string;
+  description: string;
   clientFirstName: string;
   clientLastName: string;
   email: string;
@@ -105,6 +106,7 @@ export async function buildOrderFromProduct(
 
   const productType = (product.type ?? 'punch_card') as HypProductType;
   const productName = product.name ?? '';
+  const description = product.description ?? '';
 
   const { firstName: clientFirstName, lastName: clientLastName } = getMemberFirstLastName(member);
   const email = member.identity?.email || member.email || '';
@@ -170,7 +172,7 @@ export async function buildOrderFromProduct(
     ok: true,
     member,
     build: {
-      productType, productName, clientFirstName, clientLastName, email, cell,
+      productType, productName, description, clientFirstName, clientLastName, email, cell,
       paymentMethod, firstChargeAmount, totalPayments, amountPerCharge, totalAmount,
       targetMonth, startDate, endDate,
       monthlyLimit: product.monthlyLimit && product.monthlyLimit > 0 ? product.monthlyLimit : product.sessions ?? 0,
@@ -179,6 +181,12 @@ export async function buildOrderFromProduct(
       sessions: product.sessions ?? 0,
     },
   };
+}
+
+// The "Info" string HYP shows on the hosted page / statement — product name
+// alone, or "name - description" when the product has one.
+export function buildHypInfo(name: string, description?: string): string {
+  return description ? `${name} - ${description}` : name;
 }
 
 export function orderFromBuild(orderId: string, uid: string, productId: string, build: OrderBuild): HypOrderItem {
@@ -201,6 +209,7 @@ export function orderFromBuild(orderId: string, uid: string, productId: string, 
     amount: build.firstChargeAmount,
     productId,
     productName: build.productName,
+    ...(build.description ? { description: build.description } : {}),
     productType: build.productType,
     paymentMethod: build.paymentMethod,
     totalPayments: build.totalPayments,

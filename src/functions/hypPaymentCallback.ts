@@ -127,7 +127,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     // before the member ever pays anything. Their mid-month product is a
     // one-off bridge; the recurring charge from next month onward must use
     // the ASSIGNED PLAN's price/name/limits, never the mid-month product's own.
-    let assignedPlan: { productId: string; productName: string; price: number; monthlyLimit: number; weeklyLimit: number; allowedLegalCancellationsPerMonth: number } | undefined;
+    let assignedPlan: { productId: string; productName: string; description?: string; price: number; monthlyLimit: number; weeklyLimit: number; allowedLegalCancellationsPerMonth: number } | undefined;
 
     if (order.productType === 'mid_month') {
       const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${order.userId}`, SK: 'PROFILE' } }));
@@ -141,6 +141,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
           assignedPlan = {
             productId: assignedPlanId,
             productName: plan.name ?? order.productName,
+            description: plan.description,
             price: plan.price ?? 0,
             monthlyLimit: plan.monthlyLimit && plan.monthlyLimit > 0 ? plan.monthlyLimit : plan.sessions ?? 0,
             weeklyLimit: plan.weeklyLimit && plan.weeklyLimit > 0 ? plan.weeklyLimit : plan.sessions_per_week ?? 0,
@@ -210,6 +211,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
               kind,
               productId: order.productId,
               productName: order.productName,
+              ...(order.description ? { description: order.description } : {}),
               token: token.token,
               tokenExpiryMonth: token.expiryMonth,
               tokenExpiryYear: token.expiryYear,
@@ -248,6 +250,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
               kind,
               productId: assignedPlan?.productId ?? order.productId,
               productName: assignedPlan?.productName ?? order.productName,
+              ...((assignedPlan?.description ?? order.description) ? { description: assignedPlan?.description ?? order.description } : {}),
               token: token.token,
               tokenExpiryMonth: token.expiryMonth,
               tokenExpiryYear: token.expiryYear,

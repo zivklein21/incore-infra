@@ -5,7 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import type { MemberProfileItem, ProductItem } from '../lib/entities';
 import { firstOfNextMonth, monthKey } from '../lib/entities';
-import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
+import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, getPolicySettings, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { chargeHypToken } from '../lib/hypClient';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
@@ -64,7 +64,7 @@ export async function handler(
       amount: chargeAmount,
       userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       clientName: [build.clientFirstName, build.clientLastName].filter(Boolean).join(' '),
-      info: build.productName,
+      info: buildHypInfo(build.productName, build.description),
       email: build.email || undefined,
       sendReceipt: true,
       ...(isInstallmentSale ? { tash: build.totalPayments, tashType: 1 } : {}),
@@ -118,7 +118,7 @@ export async function handler(
   // ended up with a mis-tagged 'store_installment' agreement charging the
   // bridge product's own price forever, instead of becoming a real
   // 'subscription' agreement at their assigned plan's price.
-  let assignedPlan: { productId: string; productName: string; price: number; monthlyLimit: number; weeklyLimit: number; allowedLegalCancellationsPerMonth: number } | undefined;
+  let assignedPlan: { productId: string; productName: string; description?: string; price: number; monthlyLimit: number; weeklyLimit: number; allowedLegalCancellationsPerMonth: number } | undefined;
 
   if (build.productType === 'mid_month') {
     const assignedPlanId = member.pending_membership?.type ?? '';
@@ -129,6 +129,7 @@ export async function handler(
         assignedPlan = {
           productId: assignedPlanId,
           productName: plan.name ?? build.productName,
+          description: plan.description,
           price: plan.price ?? 0,
           monthlyLimit: plan.monthlyLimit && plan.monthlyLimit > 0 ? plan.monthlyLimit : plan.sessions ?? 0,
           weeklyLimit: plan.weeklyLimit && plan.weeklyLimit > 0 ? plan.weeklyLimit : plan.sessions_per_week ?? 0,
@@ -184,6 +185,7 @@ export async function handler(
           kind,
           productId,
           productName: build.productName,
+          ...(build.description ? { description: build.description } : {}),
           token, tokenExpiryMonth: expiryMonth, tokenExpiryYear: expiryYear,
           amountPerCharge: build.amountPerCharge,
           totalAmount: build.totalAmount,
@@ -217,6 +219,7 @@ export async function handler(
           kind,
           productId: assignedPlan?.productId ?? productId,
           productName: assignedPlan?.productName ?? build.productName,
+          ...((assignedPlan?.description ?? build.description) ? { description: assignedPlan?.description ?? build.description } : {}),
           token, tokenExpiryMonth: expiryMonth, tokenExpiryYear: expiryYear,
           amountPerCharge: assignedPlan?.price ?? build.amountPerCharge,
           totalPayments: assignedPlanTotalPayments ?? build.totalPayments,

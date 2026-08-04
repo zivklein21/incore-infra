@@ -251,6 +251,9 @@ export interface HypOrderItem {
   amount: number;
   productId: string;
   productName: string;
+  // Denormalized from ProductItem.description at order-creation time (same
+  // reasoning as productName) — used to build the "Info" string sent to HYP.
+  description?: string;
   productType: HypProductType;
   paymentMethod: HypPaymentMethod;
   targetMonth?: string;
@@ -307,6 +310,10 @@ export interface HypBillingAgreementItem {
   kind: HypAgreementKind;
   productId: string;
   productName: string;
+  // Same reasoning as HypOrderItem.description — denormalized so recurring
+  // charges (chargeOneAgreement) can build the "Info" string without an
+  // extra live product lookup on every renewal.
+  description?: string;
   token: string;
   tokenExpiryMonth: number;
   tokenExpiryYear: number;
