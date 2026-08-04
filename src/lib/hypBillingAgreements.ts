@@ -4,7 +4,7 @@ import { ddb, TABLE_NAME } from './dynamo';
 import type { HypBillingAgreementItem, MemberProfileItem } from './entities';
 import { monthKey, endOfMonth, addMonths, firstOfNextMonth } from './entities';
 import { chargeHypToken } from './hypClient';
-import { getMemberIdNumber, getMemberFullName, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
+import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from './paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
 
@@ -38,7 +38,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         amount: chargeAmount,
         userId: chargeUserId,
         clientName: chargeClientName,
-        info: agreement.productName,
+        info: buildHypInfo(agreement.productName, agreement.description),
         email: chargeEmail || undefined,
         sendReceipt: true,
       });

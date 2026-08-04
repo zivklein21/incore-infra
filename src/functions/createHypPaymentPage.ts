@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
+import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
 
 // POST /createHypPaymentPage
@@ -58,7 +58,7 @@ export async function handler(
       email: build.email || undefined,
       cell: build.cell || undefined,
       userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
-      info: build.productName,
+      info: buildHypInfo(build.productName, build.description),
       pageLang: 'HEB',
       sendReceipt: true,
     });
