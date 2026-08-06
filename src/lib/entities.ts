@@ -12,6 +12,38 @@ export interface ClassItem {
   className?: string;
   isWaitlistEnabled?: boolean;
   waitlist?: WaitlistEntry[];
+  // Only ever set together, and only when isPrivate is true — see
+  // validatePrivateFields(). A private class is filtered out of getClasses.ts
+  // and 404s from getClassDetail.ts/bookClass.ts for anyone not in
+  // allowedMemberIds (and not already registered, and not an admin).
+  isPrivate?: boolean;
+  allowedMemberIds?: string[];
+}
+
+// Shared validation for the isPrivate/allowedMemberIds pair, used by
+// createClass.ts, updateClass.ts, and saveClassSeries.ts so the three
+// writers don't each reimplement the same rules slightly differently.
+//
+// `currentAllowedMemberIds` is the existing item's list (undefined on
+// create) — used as a fallback when an update sends isPrivate: true without
+// also sending a fresh allowedMemberIds array (e.g. an admin toggling other
+// fields on an already-private class).
+export function validatePrivateFields(
+  isPrivate: boolean,
+  rawAllowedMemberIds: unknown,
+  capacity: number,
+  currentAllowedMemberIds?: string[],
+): { ok: true; allowedMemberIds: string[] } | { ok: false; error: string } {
+  if (!isPrivate) return { ok: true, allowedMemberIds: [] };
+
+  const providedIds = Array.isArray(rawAllowedMemberIds)
+    ? rawAllowedMemberIds.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+    : null;
+  const allowedMemberIds = Array.from(new Set(providedIds ?? currentAllowedMemberIds ?? []));
+
+  if (allowedMemberIds.length === 0) return { ok: false, error: 'missing_allowed_member_ids' };
+  if (allowedMemberIds.length > capacity) return { ok: false, error: 'allowed_members_exceed_capacity' };
+  return { ok: true, allowedMemberIds };
 }
 
 export interface WaitlistEntry {

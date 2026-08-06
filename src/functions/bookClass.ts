@@ -108,6 +108,14 @@ export async function handler(
   const classItem = classRes.Item as ClassItem | undefined;
   if (!classItem) return json(404, { error: 'class_not_found' });
 
+  // 404, not 403 — a private class this member isn't allowed into must be
+  // indistinguishable from a nonexistent classId (see getClassDetail.ts's
+  // same choice). Admins use adminAddToClass, not this self-service path,
+  // to add trainees to a private session.
+  if (classItem.isPrivate && !(classItem.allowedMemberIds ?? []).includes(uid)) {
+    return json(404, { error: 'class_not_found' });
+  }
+
   const existingReg = regRes.Item as { status?: string } | undefined;
   if (existingReg?.status === 'REGISTERED') return json(400, { error: 'already_booked' });
 

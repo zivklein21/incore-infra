@@ -35,7 +35,8 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const uid = event.queryStringParameters?.memberId || callerUid;
-  if (uid !== callerUid && !(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const callerIsAdmin = await isAdmin(callerUid);
+  if (uid !== callerUid && !callerIsAdmin) return json(403, { error: 'forbidden' });
 
   const [classesRes, regsRes] = await Promise.all([
     ddb.send(new ScanCommand({
@@ -61,23 +62,35 @@ export async function handler(
     ((regsRes.Items ?? []) as RegistrationItem[]).map((r) => [r.classId, r.consumedFrom]),
   );
 
-  const classes = ((classesRes.Items ?? []) as ClassItem[]).map((c) => {
-    const classId = c.PK.replace('CLASS#', '');
-    const isWaitlisted = (c.waitlist ?? []).some(
-      (entry) => entry.member === uid && (entry.status === 'waiting' || entry.status === 'pending'),
-    );
+  // Private classes are excluded for non-admins unless uid is explicitly
+  // allowed or already registered — the latter keeps a class visible to a
+  // member who was later removed from allowedMemberIds (see updateClass.ts's
+  // "cascade non-goal": editing the allow-list never cancels a registration,
+  // so it must not silently disappear from the member's own schedule either).
+  const classes = ((classesRes.Items ?? []) as ClassItem[])
+    .filter((c) => {
+      if (!c.isPrivate || callerIsAdmin) return true;
+      const classId = c.PK.replace('CLASS#', '');
+      return (c.allowedMemberIds ?? []).includes(uid) || bookedClassInfo.has(classId);
+    })
+    .map((c) => {
+      const classId = c.PK.replace('CLASS#', '');
+      const isWaitlisted = (c.waitlist ?? []).some(
+        (entry) => entry.member === uid && (entry.status === 'waiting' || entry.status === 'pending'),
+      );
 
-    return {
-      id: classId,
-      classType: c.className ?? '',
-      date: c.date,
-      registered: c.currentAttendeesCount ?? 0,
-      capacity: c.capacity ?? 5,
-      isBooked: bookedClassInfo.has(classId),
-      isWaitlisted,
-      consumedFrom: bookedClassInfo.get(classId) ?? null,
-    };
-  });
+      return {
+        id: classId,
+        classType: c.className ?? '',
+        date: c.date,
+        registered: c.currentAttendeesCount ?? 0,
+        capacity: c.capacity ?? 5,
+        isBooked: bookedClassInfo.has(classId),
+        isWaitlisted,
+        consumedFrom: bookedClassInfo.get(classId) ?? null,
+        isPrivate: c.isPrivate === true,
+      };
+    });
 
   return json(200, { classes });
 }

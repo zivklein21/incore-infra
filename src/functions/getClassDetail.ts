@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
+import { isAdmin } from '../lib/auth';
 import type { ClassItem, RegistrationItem } from '../lib/entities';
 
 // GET or POST /getClassDetail?classId=xxx
@@ -45,6 +46,17 @@ export async function handler(
   const registration = regRes.Item as RegistrationItem | undefined;
   const isBooked = registration?.status === 'REGISTERED';
 
+  // 404, not 403, for a private class the caller can't see — a 403 would
+  // confirm something exists at this id, which is exactly the existence
+  // oracle a "must not see it anywhere, even by guessed/deep-linked id"
+  // requirement rules out (mirrors bookClass.ts's same choice).
+  if (item.isPrivate) {
+    const allowed = (item.allowedMemberIds ?? []).includes(uid);
+    if (!allowed && !isBooked && !(await isAdmin(uid))) {
+      return json(404, { error: 'class_not_found' });
+    }
+  }
+
   const waitlist = item.waitlist ?? [];
   let isOnWaitlist = false;
   let waitlistStatus: string | null = null;
@@ -73,6 +85,8 @@ export async function handler(
     allowWaitlist: item.isWaitlistEnabled ?? false,
     notes: item.notes ?? '',
     seriesId: item.series_id ?? null,
+    isPrivate: item.isPrivate === true,
+    allowedMemberIds: item.allowedMemberIds ?? [],
     isBooked,
     bookedSource: isBooked ? registration?.consumedFrom ?? null : null,
     isOnWaitlist,

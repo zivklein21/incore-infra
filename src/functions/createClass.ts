@@ -4,13 +4,19 @@ import { PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { israelDateStr } from '../lib/entities';
+import { israelDateStr, validatePrivateFields } from '../lib/entities';
 
 // POST /createClass
 // Auth: Cognito JWT, caller must be admin
 // Body: { date: string (ISO 8601), capacity: number, className: string,
 //          durationMin?: number, notes?: string, isWaitlistEnabled?: boolean,
-//          seriesId?: string }
+//          seriesId?: string, isPrivate?: boolean, allowedMemberIds?: string[] }
+//
+// isPrivate: true forces capacity to 1 (a private class is a one-on-one
+// slot) and requires a non-empty allowedMemberIds, capped at that capacity
+// — see validatePrivateFields() in entities.ts. Auto-registering those
+// members is orchestrated client-side (useCreateClass.ts chains
+// adminAddToClass calls after this returns), not here.
 //
 // Single-class create only — no server-side "repeat weekly" expansion (the
 // old Firestore useCreateClass.ts looped client-side over deterministic
@@ -30,6 +36,7 @@ export async function handler(
   let body: {
     date?: unknown; capacity?: unknown; className?: unknown; isWaitlistEnabled?: unknown;
     durationMin?: unknown; notes?: unknown; repeatWeekly?: unknown; seriesId?: unknown;
+    isPrivate?: unknown; allowedMemberIds?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -41,7 +48,7 @@ export async function handler(
   const parsedDate = dateStr ? new Date(dateStr) : null;
   if (!parsedDate || Number.isNaN(parsedDate.getTime())) return json(400, { error: 'invalid_date' });
 
-  const capacity = typeof body.capacity === 'number' && body.capacity > 0 ? body.capacity : 5;
+  let capacity = typeof body.capacity === 'number' && body.capacity > 0 ? body.capacity : 5;
   const className = typeof body.className === 'string' ? body.className.trim() : '';
   if (!className) return json(400, { error: 'missing_class_name' });
   const isWaitlistEnabled = body.isWaitlistEnabled === true;
@@ -49,6 +56,15 @@ export async function handler(
   const notes = typeof body.notes === 'string' ? body.notes : '';
   const repeatWeekly = body.repeatWeekly === true;
   const seriesId = typeof body.seriesId === 'string' && body.seriesId ? body.seriesId : null;
+
+  const isPrivate = body.isPrivate === true;
+  // A private class is a one-on-one slot — capacity is always exactly 1,
+  // regardless of what the client sent, so it can't be bypassed by calling
+  // this endpoint directly. This also means allowedMemberIds can never hold
+  // more than one id (validatePrivateFields rejects exceeding capacity).
+  if (isPrivate) capacity = 1;
+  const privateFields = validatePrivateFields(isPrivate, body.allowedMemberIds, capacity);
+  if (!privateFields.ok) return json(400, { error: privateFields.error });
 
   const classId = randomUUID();
 
@@ -70,6 +86,10 @@ export async function handler(
     createdBy: uid,
   };
   if (seriesId) item.series_id = seriesId;
+  if (isPrivate) {
+    item.isPrivate = true;
+    item.allowedMemberIds = privateFields.allowedMemberIds;
+  }
 
   await ddb.send(new PutCommand({
     TableName: TABLE_NAME,
