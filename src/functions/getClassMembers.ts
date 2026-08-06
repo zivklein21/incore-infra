@@ -64,8 +64,10 @@ export async function handler(
   const registrations = (regsRes.Items ?? []) as RegistrationItem[];
   const waitlist = classItem.waitlist ?? [];
 
+  // Trial (guest) registrations have no MemberProfileItem to resolve — their
+  // display name is denormalized directly onto the RegistrationItem instead.
   const memberIds = Array.from(new Set([
-    ...registrations.map((r) => r.userId),
+    ...registrations.filter((r) => r.consumedFrom !== 'TRIAL').map((r) => r.userId),
     ...waitlist.map((w) => w.member),
   ]));
   const profiles = await Promise.all(
@@ -74,8 +76,11 @@ export async function handler(
   const profileById = new Map(memberIds.map((id, i) => [id, profiles[i].Item as MemberProfileItem | undefined]));
 
   const registered = registrations.map((r) => {
+    if (r.consumedFrom === 'TRIAL') {
+      return { id: r.userId, name: r.fullName || 'Trial Trainee', subtitle: '', membershipStatus: 'active' as const, isTrial: true };
+    }
     const p = profileById.get(r.userId);
-    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p), membershipStatus: deriveStatus(p) };
+    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p), membershipStatus: deriveStatus(p), isTrial: false };
   });
 
   const waitlistOut = waitlist.map((w) => {

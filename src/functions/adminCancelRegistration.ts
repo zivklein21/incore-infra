@@ -24,7 +24,7 @@ export async function handler(
 
   const userId = typeof body.userId === 'string' ? body.userId.trim() : '';
   const classId = typeof body.classId === 'string' ? body.classId.trim() : '';
-  const refundTo = body.refundTo === 'wallet' || body.refundTo === 'membership' ? (body.refundTo as 'wallet' | 'membership') : 'none';
+  const requestedRefundTo = body.refundTo === 'wallet' || body.refundTo === 'membership' ? (body.refundTo as 'wallet' | 'membership') : 'none';
   if (!userId || !classId) return json(400, { error: 'missing_fields', required: ['userId', 'classId'] });
 
   const regKey = { PK: `CLASS#${classId}`, SK: `REG#${userId}` };
@@ -40,6 +40,10 @@ export async function handler(
   if (!regData) return json(400, { error: 'not_booked' });
   if (!(classRes.Item as ClassItem | undefined)) return json(400, { error: 'class_not_found' });
   if (regData.status !== 'REGISTERED') return json(400, { error: 'already_cancelled' });
+
+  // Trial registrations never consumed a wallet punch or membership slot —
+  // ignore whatever the caller requested and always treat as a plain removal.
+  const refundTo = regData.consumedFrom === 'TRIAL' ? 'none' : requestedRefundTo;
 
   const nowIso = new Date().toISOString();
   const cancelPayload: Record<string, unknown> = {

@@ -52,6 +52,10 @@ export interface RegistrationItem {
   adminCardId?: string;
   reminderSent?: boolean;
   reminderSentAt?: string;
+  // Denormalized display name for trial (guest) registrations, i.e.
+  // consumedFrom === 'TRIAL' — those have no MemberProfileItem to resolve a
+  // name from. See getClassMembers.ts.
+  fullName?: string;
 }
 
 export interface MembershipItem {

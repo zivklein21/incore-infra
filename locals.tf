@@ -9,6 +9,7 @@ locals {
     acceptPolicies                     = { method = "POST" }
     adminAddMemberCredit               = { method = "POST" }
     adminAddToClass                    = { method = "POST" }
+    adminAddTrialToClass               = { method = "POST" }
     adminApproveWaitlist               = { method = "POST" }
     adminCancelRegistration            = { method = "POST" }
     adminChangeHypBillingAgreementPlan = { method = "POST" }
