@@ -135,18 +135,9 @@ export async function handler(
 }
 
 function generateInitialPassword(): string {
-  // Cognito's password policy (cognito.tf) requires upper+lower+number+symbol
-  // and min length 8 — unlike the old Firebase flow's 7-digit-numeric temp
-  // password, which Firebase Auth didn't enforce complexity on.
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const lower = 'abcdefghijkmnpqrstuvwxyz';
-  const digits = '23456789';
-  const symbols = '!@#$%';
-  const pick = (chars: string) => chars[Math.floor(Math.random() * chars.length)];
-  const required = [pick(upper), pick(lower), pick(digits), pick(symbols)];
-  const all = upper + lower + digits + symbols;
-  const rest = Array.from({ length: 6 }, () => pick(all));
-  return [...required, ...rest].sort(() => Math.random() - 0.5).join('');
+  // Cognito's password policy (cognito.tf) is numeric-only, min length 6 —
+  // matches the old Firebase flow's 7-digit-numeric temp password.
+  return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
 const IOS_APP_URL     = 'https://apps.apple.com/il/app/incore-studio/id6771026998';

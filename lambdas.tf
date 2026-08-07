@@ -84,10 +84,13 @@ resource "aws_iam_role_policy" "lambda_logs_read" {
 
 # ── 2. Build the deployment package ─────────────────────────────────────────
 #
-# One shared code package (compiled src/ output) + one shared dependencies
-# Layer (node_modules), reused by all 61 Lambda functions — only each
-# function's `handler` setting differs. This avoids 61 separate build/zip
-# pipelines for what is otherwise identical code.
+# `npm run build` (scripts/build.mjs) bundles each src/functions/*.ts entry
+# point with esbuild into its own self-contained dist/<name>.js — real npm
+# dependencies stay external, loaded instead from one shared dependencies
+# Layer (node_modules) reused by every function. Each function is zipped and
+# hashed independently below (data.archive_file.function_code), so Terraform
+# only re-uploads the Lambdas whose bundled code actually changed, instead
+# of every function sharing one zip/hash and redeploying together.
 #
 # NOTE (sharp native bindings): sharp ships a platform-specific binary.
 # `npm install` below must run on a Linux host matching the Lambda
@@ -114,6 +117,14 @@ resource "null_resource" "build_functions" {
   }
 }
 
+# Installs a clean, isolated copy of only package.json's "dependencies" (via
+# npm ci --omit=dev in .layer_deps/, separate from the root node_modules
+# that build_functions needs its devDependencies — typescript, esbuild — to
+# stay intact for). The root node_modules is NOT what gets copied into the
+# layer: devDependencies have no business in the runtime Layer, and once
+# esbuild joined them the full node_modules zip (~62MB) started tripping
+# PublishLayerVersion's ~70MB base64-request-body ceiling. Prod-only comes
+# to ~14MB zipped.
 resource "null_resource" "stage_layer" {
   depends_on = [null_resource.build_functions]
 
@@ -122,16 +133,30 @@ resource "null_resource" "stage_layer" {
   }
 
   provisioner "local-exec" {
-    command     = "rm -rf layer_build && mkdir -p layer_build/nodejs && cp -r node_modules layer_build/nodejs/node_modules"
+    command     = <<-EOT
+      rm -rf layer_build .layer_deps
+      mkdir -p .layer_deps layer_build/nodejs
+      cp package.json package-lock.json .layer_deps/
+      cd .layer_deps && npm ci --omit=dev && cd ..
+      cp -r .layer_deps/node_modules layer_build/nodejs/node_modules
+      rm -rf .layer_deps
+    EOT
     working_dir = path.module
   }
 }
 
+# One zip/hash per function (each dist/<name>.js is a self-contained esbuild
+# bundle — see scripts/build.mjs) instead of one shared zip for all of
+# dist/. This is what lets Terraform scope source_code_hash changes, and
+# therefore Lambda updates, to only the functions whose bundled output
+# actually changed — previously every function shared the same hash, so any
+# single-function change forced a redeploy of all ~137 Lambdas.
 data "archive_file" "function_code" {
+  for_each    = toset(local.all_function_names)
   depends_on  = [null_resource.build_functions]
   type        = "zip"
-  source_dir  = "${path.module}/dist"
-  output_path = "${path.module}/exports/incore_functions.zip"
+  source_file = "${path.module}/dist/${each.key}.js"
+  output_path = "${path.module}/exports/${each.key}.zip"
 }
 
 data "archive_file" "dependencies_layer" {
@@ -158,10 +183,10 @@ resource "aws_lambda_function" "fn" {
   for_each = toset(local.all_function_names)
 
   function_name    = "incore-${lower(replace(each.key, "/([A-Z])/", "-$1"))}"
-  filename         = data.archive_file.function_code.output_path
-  source_code_hash = data.archive_file.function_code.output_base64sha256
+  filename         = data.archive_file.function_code[each.key].output_path
+  source_code_hash = data.archive_file.function_code[each.key].output_base64sha256
   role             = aws_iam_role.lambda_execution_role.arn
-  handler          = "functions/${each.key}.handler"
+  handler          = "${each.key}.handler"
   runtime          = "nodejs20.x"
   timeout          = contains(keys(local.scheduled_functions), each.key) ? 300 : 30
   memory_size      = contains(["resizeProfilePhoto", "adminBackfillResizeProfilePhotos"], each.key) ? 512 : 128
