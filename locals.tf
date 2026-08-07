@@ -91,6 +91,7 @@ locals {
     getCancellationPolicySettings      = { method = "ANY" }
     getClassDetail                     = { method = "ANY" }
     getClassMembers                    = { method = "ANY" }
+    getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
     getClasses                         = { method = "ANY" }
     getClassTypes                      = { method = "ANY" }
     getFileUrl                         = { method = "ANY" }
