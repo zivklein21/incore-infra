@@ -65,6 +65,7 @@ locals {
     adminUpdateMemberMembershipBadge   = { method = "POST" }
     adminUpdateMemberPersonal          = { method = "POST" }
     adminUpdateMemberWallet            = { method = "POST" }
+    adminUpdatePendingMembership       = { method = "POST" }
     adminUpdateTableItem               = { method = "POST" } # Admin Portal: Data Viewer
     adminWhoAmI                        = { method = "ANY" }  # Admin Portal: auth-gate check
     bookClass                          = { method = "POST" }
