@@ -45,6 +45,16 @@ export async function handler(): Promise<void> {
       if (!fresh || fresh.status !== 'ACTIVE') { skipped++; continue; }
       if (fresh.weeklyProcessed?.[weekKey]) { skipped++; continue; }
 
+      // Validity window guard — status alone isn't enough: a CUSTOM_MIGRATION
+      // item can carry an admin-set startDate/endDate outside "now" even
+      // while status is still ACTIVE (e.g. not yet activated, or past its
+      // own end but not yet closed out by monthEndRollover). Skip entirely,
+      // no credit and no weeklyProcessed write, so it's re-evaluated once it
+      // enters its real window.
+      const nowMs = Date.now();
+      if (fresh.startDate && new Date(fresh.startDate).getTime() > nowMs) { skipped++; continue; }
+      if (fresh.endDate && new Date(fresh.endDate).getTime() < nowMs) { skipped++; continue; }
+
       const weeklyLimit = fresh.weeklyLimit ?? 0;
       const newWeeklyProcessed = { ...fresh.weeklyProcessed, [weekKey]: true };
 
