@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr } from '../lib/entities';
+import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass } from '../lib/entities';
 
 // ─── Entity key design (DynamoDB single-table) ─────────────────────────────
 //
@@ -139,7 +139,7 @@ export async function handler(
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': `MEMBERSHIP#${queryMonth}#` },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => m.status === 'ACTIVE') ?? null;
+  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
 
   let consumedFrom: ConsumedFrom;
   let membershipId = '';

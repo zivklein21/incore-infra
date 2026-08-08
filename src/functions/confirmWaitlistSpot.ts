@@ -4,7 +4,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import type { ClassItem, MembershipItem, WalletItem, PunchCardItem } from '../lib/entities';
-import { monthKey, computeWeekKey } from '../lib/entities';
+import { monthKey, computeWeekKey, isMembershipUsableForClass } from '../lib/entities';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
@@ -67,7 +67,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': `MEMBERSHIP#${targetMonth}#` },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => m.status === 'ACTIVE') ?? null;
+  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
 
   const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];

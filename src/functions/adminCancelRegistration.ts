@@ -5,6 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { RegistrationItem, ClassItem } from '../lib/entities';
+import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
 
 // POST /adminCancelRegistration
 // Body: { userId, classId, refundTo: 'none' | 'wallet' | 'membership' }
@@ -38,7 +39,8 @@ export async function handler(
   ]);
   const regData = regRes.Item as RegistrationItem | undefined;
   if (!regData) return json(400, { error: 'not_booked' });
-  if (!(classRes.Item as ClassItem | undefined)) return json(400, { error: 'class_not_found' });
+  const classItem = classRes.Item as ClassItem | undefined;
+  if (!classItem) return json(400, { error: 'class_not_found' });
   if (regData.status !== 'REGISTERED') return json(400, { error: 'already_cancelled' });
 
   // Trial registrations never consumed a wallet punch or membership slot —
@@ -120,5 +122,13 @@ export async function handler(
   }
 
   console.log(`[adminCancelRegistration] admin=${callerUid} user=${userId} class=${classId} refundTo=${refundTo}`);
+
+  const remainingAfterCancel = Math.max(0, (classItem.currentAttendeesCount ?? 0) - 1);
+  try {
+    await maybeSendSoleAttendeeAlert(classId, classItem, remainingAfterCancel);
+  } catch (err: any) {
+    console.error('[adminCancelRegistration] sole-attendee alert failed (non-fatal):', err);
+  }
+
   return json(200, { success: true, refundTo });
 }

@@ -433,6 +433,19 @@ export interface PunchCardItem {
   source: string;
 }
 
+// A PENDING grant (see adminGrantCustomMigration.ts) is usable as soon as
+// the class itself falls within its start/end window, even before the
+// nightly activatePendingMemberships cron flips status to ACTIVE — waiting
+// for the cron would otherwise block booking a class that's clearly within
+// the paid-for window just because "today" is still before startDate.
+export function isMembershipUsableForClass(m: MembershipItem, classDate: Date): boolean {
+  if (m.status === 'ACTIVE') return true;
+  if (m.status === 'PENDING' && m.startDate && classDate >= new Date(m.startDate)) {
+    return !m.endDate || classDate <= new Date(m.endDate);
+  }
+  return false;
+}
+
 export function monthKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
 }

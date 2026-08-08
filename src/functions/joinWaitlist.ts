@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import type { ClassItem, MembershipItem, PunchCardItem, WalletItem, WaitlistEntry } from '../lib/entities';
-import { monthKey } from '../lib/entities';
+import { monthKey, isMembershipUsableForClass } from '../lib/entities';
 
 function hasAnyUsableCredit(
   membership: MembershipItem | null,
@@ -69,7 +69,7 @@ export async function handler(
       ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'PUNCHCARD#' },
     })),
   ]);
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => m.status === 'ACTIVE') ?? null;
+  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
   const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
