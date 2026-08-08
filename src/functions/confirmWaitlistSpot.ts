@@ -4,7 +4,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import type { ClassItem, MembershipItem, WalletItem, PunchCardItem } from '../lib/entities';
-import { monthKey, computeWeekKey, isMembershipUsableForClass } from '../lib/entities';
+import { monthKey, computeWeekKey, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
@@ -80,7 +80,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
-    const withinMonthly = monthlyUsed < membership.monthlyLimit;
+    const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
 
     if (withinWeekly && withinMonthly) {
       consumedFrom = 'MEMBERSHIP';

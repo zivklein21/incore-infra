@@ -6,7 +6,8 @@ import { isAdmin } from '../lib/auth';
 
 // POST /adminUpdateMembership
 // Body: { memberId, membershipId, targetMonth, monthlyLimit?, weeklyLimit?,
-//         productId?, productName?, allowedLegalCancellationsPerMonth?, endDate? }
+//         productId?, productName?, allowedLegalCancellationsPerMonth?, endDate?,
+//         manualAdjustment? }
 // Auth: Cognito JWT, caller must be admin
 //
 // Partial update of an existing membership's plan/limits — used by
@@ -31,7 +32,7 @@ export async function handler(
     memberId?: unknown; membershipId?: unknown; targetMonth?: unknown;
     monthlyLimit?: unknown; weeklyLimit?: unknown; productId?: unknown;
     productName?: unknown; allowedLegalCancellationsPerMonth?: unknown;
-    endDate?: unknown;
+    endDate?: unknown; manualAdjustment?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -53,6 +54,7 @@ export async function handler(
   if (typeof body.productName === 'string') fields.productName = body.productName;
   if (typeof body.allowedLegalCancellationsPerMonth === 'number') fields.allowedLegalCancellationsPerMonth = body.allowedLegalCancellationsPerMonth;
   if (typeof body.endDate === 'string' && !isNaN(new Date(body.endDate).getTime())) fields.endDate = body.endDate;
+  if (typeof body.manualAdjustment === 'number') fields.manualAdjustment = body.manualAdjustment;
   if (Object.keys(fields).length === 0) return json(400, { error: 'no_fields_to_update' });
 
   const names: Record<string, string> = {};

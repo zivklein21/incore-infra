@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass } from '../lib/entities';
+import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
 
 // ─── Entity key design (DynamoDB single-table) ─────────────────────────────
 //
@@ -167,10 +167,10 @@ export async function handler(
       },
     }));
 
-    if ((futureRes.Items?.length ?? 0) >= membership.monthlyLimit) {
+    if ((futureRes.Items?.length ?? 0) >= getEffectiveMonthlyLimit(membership)) {
       return json(403, {
         error: 'future_monthly_limit_reached',
-        message: `You have reached the maximum booking limit for the next month (${membership.monthlyLimit}).`,
+        message: `You have reached the maximum booking limit for the next month (${getEffectiveMonthlyLimit(membership)}).`,
       });
     }
 
@@ -180,7 +180,7 @@ export async function handler(
     const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
-    const withinMonthly = monthlyUsed < membership.monthlyLimit;
+    const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
 
     if (withinWeekly && withinMonthly) {
       consumedFrom = 'MEMBERSHIP';

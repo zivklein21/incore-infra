@@ -58,6 +58,7 @@ export async function handler(
     membershipId: m.membershipId,
     weeklyLimit: m.weeklyLimit,
     monthlyLimit: m.monthlyLimit,
+    manualAdjustment: m.manualAdjustment ?? 0,
     weeklyUsage: m.weeklyUsage ?? {},
     totalMonthlyUsed: m.usage?.totalMonthlyUsed ?? 0,
   });

@@ -47,6 +47,7 @@ export async function buildMembershipResponse(item: FullMembershipItem) {
     legalCancellationsUsed: item.usage?.legalCancellationsUsed ?? 0,
     lateCancellationsUsed: item.usage?.lateCancellationsUsed ?? 0,
     monthlyLimit: productData?.monthlyLimit ?? item.monthlyLimit ?? 0,
+    manualAdjustment: item.manualAdjustment ?? 0,
     weeklyLimit: productData?.weeklyLimit ?? item.weeklyLimit ?? 0,
     allowedLegalCancellationsPerMonth: productData?.allowedLegalCancellationsPerMonth ?? item.allowedLegalCancellationsPerMonth ?? 0,
     isAutoRenew: item.isAutoRenew === true,

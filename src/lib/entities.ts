@@ -101,6 +101,9 @@ export interface MembershipItem {
   allowedLegalCancellationsPerMonth: number;
   usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number };
   weeklyUsage: Record<string, number>;
+  // Admin manual balance nudge (+/-), applied on top of monthlyLimit without
+  // touching the contracted total or usage history — see getEffectiveMonthlyLimit.
+  manualAdjustment?: number;
   type?: string; // 'CUSTOM_MIGRATION' for admin-manual migration memberships
   // Only meaningfully populated for CUSTOM_MIGRATION items today (see
   // adminGrantCustomMigration.ts) — a custom-duration bridge's real
@@ -448,6 +451,10 @@ export function isMembershipUsableForClass(m: MembershipItem, classDate: Date): 
 
 export function monthKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function getEffectiveMonthlyLimit(m: MembershipItem): number {
+  return m.monthlyLimit + (m.manualAdjustment ?? 0);
 }
 
 export function computeWeekKey(date: Date): string {
