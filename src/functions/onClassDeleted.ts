@@ -2,7 +2,7 @@ import type { DynamoDBStreamEvent } from 'aws-lambda';
 import { QueryCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { oldImage } from '../lib/dynamoStream';
-import type { ClassItem, RegistrationItem } from '../lib/entities';
+import { deriveMemberName, type ClassItem, type RegistrationItem } from '../lib/entities';
 import { extractMemberIds, writeNotification, getMemberProfile } from '../lib/classNotifications';
 import { resolveTemplate, getMemberLang, fmtTime, fmtDate, type TemplateVars } from '../lib/templateResolver';
 
@@ -38,7 +38,7 @@ export async function handler(event: DynamoDBStreamEvent): Promise<void> {
         class_type: classType,
         class_time: fmtTime(classDate),
         class_date: fmtDate(classDate, lang),
-        member_name: profile.name ?? '',
+        member_name: deriveMemberName(profile),
       };
       const resolved = await resolveTemplate('CLASS_CANCEL', lang, vars);
       if (!resolved) return;

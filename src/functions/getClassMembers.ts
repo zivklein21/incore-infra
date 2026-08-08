@@ -3,7 +3,9 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { ClassItem, MemberProfileItem, RegistrationItem } from '../lib/entities';
+import type { ClassItem, MemberProfileItem, MembershipItem, RegistrationItem } from '../lib/entities';
+
+type FullMembershipItem = MembershipItem & { productName?: string; title?: string };
 
 // GET or POST /getClassMembers?classId=xxx
 // Auth: Cognito JWT, caller must be admin
@@ -21,7 +23,14 @@ function deriveName(p: MemberProfileItem | undefined): string {
     || 'Unknown Member';
 }
 
-function deriveSubtitle(p: MemberProfileItem | undefined): string {
+// CUSTOM_MIGRATION memberships (manually-created bridges for trainees
+// onboarded mid-cycle from the old system, see adminGrantCustomMigration.ts)
+// never populate the legacy profile.membership.plan bag, so a migrated
+// member's registration otherwise falls through to a blank subtitle.
+function deriveSubtitle(p: MemberProfileItem | undefined, membership?: FullMembershipItem): string {
+  if (membership?.type === 'CUSTOM_MIGRATION') {
+    return membership.productName || membership.title || 'מנוי מעבר';
+  }
   const plan = p?.membership?.plan;
   return typeof plan === 'string' ? plan : '';
 }
@@ -64,8 +73,10 @@ export async function handler(
   const registrations = (regsRes.Items ?? []) as RegistrationItem[];
   const waitlist = classItem.waitlist ?? [];
 
+  // Trial (guest) registrations have no MemberProfileItem to resolve — their
+  // display name is denormalized directly onto the RegistrationItem instead.
   const memberIds = Array.from(new Set([
-    ...registrations.map((r) => r.userId),
+    ...registrations.filter((r) => r.consumedFrom !== 'TRIAL').map((r) => r.userId),
     ...waitlist.map((w) => w.member),
   ]));
   const profiles = await Promise.all(
@@ -73,9 +84,30 @@ export async function handler(
   );
   const profileById = new Map(memberIds.map((id, i) => [id, profiles[i].Item as MemberProfileItem | undefined]));
 
+  // Resolve the actual MembershipItem each registration was booked against
+  // (rather than the member's current active membership — the reg may be
+  // for a past date) so CUSTOM_MIGRATION bridges resolve to a readable
+  // subtitle instead of the empty legacy profile.membership bag.
+  const membershipRegs = registrations.filter(
+    (r) => (r.consumedFrom === 'MEMBERSHIP' || r.consumedFrom === 'FUTURE_SUBSCRIPTION') && r.membershipId,
+  );
+  const memberships = await Promise.all(
+    membershipRegs.map((r) => ddb.send(new GetCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: `MEMBER#${r.userId}`, SK: `MEMBERSHIP#${r.targetMonth}#${r.membershipId}` },
+    }))),
+  );
+  const membershipByRegKey = new Map(
+    membershipRegs.map((r, i) => [`${r.userId}#${r.membershipId}`, memberships[i].Item as FullMembershipItem | undefined]),
+  );
+
   const registered = registrations.map((r) => {
+    if (r.consumedFrom === 'TRIAL') {
+      return { id: r.userId, name: r.fullName || 'Trial Trainee', subtitle: '', membershipStatus: 'active' as const, isTrial: true };
+    }
     const p = profileById.get(r.userId);
-    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p), membershipStatus: deriveStatus(p) };
+    const membership = membershipByRegKey.get(`${r.userId}#${r.membershipId}`);
+    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p, membership), membershipStatus: deriveStatus(p), isTrial: false };
   });
 
   const waitlistOut = waitlist.map((w) => {

@@ -5,7 +5,7 @@
     "node": "20"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc --noEmit && node scripts/build.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "@types/aws-lambda": "^8.10.140",
     "@types/node": "^20.14.0",
     "@types/nodemailer": "^7.0.2",
+    "esbuild": "^0.24.0",
     "typescript": "^5.4.0"
   }
 }

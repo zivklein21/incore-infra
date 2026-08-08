@@ -27,4 +27,5 @@ terraform.rc
 node_modules/
 dist/
 layer_build/
+.layer_deps/
 exports/

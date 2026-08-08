@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { NotificationTemplateItem, MemberProfileItem } from './entities';
+import { deriveMemberName, type NotificationTemplateItem, type MemberProfileItem } from './entities';
 import { getExpoPushToken } from './push';
 import { getAllMemberProfiles } from './memberScan';
 
@@ -18,17 +18,6 @@ interface PushMessage {
 
 function resolvePlaceholders(text: string, vars: Record<string, string>): string {
   return text.replace(/\{([^}]+)\}/g, (_, key: string) => vars[key] ?? '');
-}
-
-function deriveMemberName(profile: MemberProfileItem & { identity?: { name?: string; full_name?: string; first_name?: string; last_name?: string } }): string {
-  const id = profile.identity;
-  if (id?.name) return id.name;
-  if (id?.full_name) return id.full_name;
-  const first = id?.first_name ?? '';
-  const last = id?.last_name ?? '';
-  if (first || last) return `${first} ${last}`.trim();
-  if (profile.name) return profile.name;
-  return '';
 }
 
 function isMemberAdmin(profile: MemberProfileItem): boolean {

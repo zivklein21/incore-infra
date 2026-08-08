@@ -4,12 +4,17 @@ import { ScanCommand, QueryCommand, UpdateCommand, PutCommand, GetCommand } from
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { israelDateStr } from '../lib/entities';
+import { israelDateStr, validatePrivateFields } from '../lib/entities';
 import type { ClassItem, RegistrationItem } from '../lib/entities';
 
 // POST /saveClassSeries
 // Auth: Cognito JWT, caller must be admin
-// Body: { classId, date (ISO), capacity, durationMin, repeatWeekly, allowWaitlist, notes, className? }
+// Body: { classId, date (ISO), capacity, durationMin, repeatWeekly, allowWaitlist, notes, className?,
+//          isPrivate?, allowedMemberIds? }
+//
+// isPrivate/allowedMemberIds follow the same validation as updateClass.ts
+// (see validatePrivateFields()) and are propagated to every future sibling
+// via propUpdate below, same as every other field here.
 //
 // "Apply to all future occurrences" — updates classId itself, then every
 // other class sharing its series_id with a date after classId's *original*
@@ -28,6 +33,7 @@ export async function handler(
   let body: {
     classId?: unknown; date?: unknown; capacity?: unknown; durationMin?: unknown;
     repeatWeekly?: unknown; allowWaitlist?: unknown; notes?: unknown; className?: unknown;
+    isPrivate?: unknown; allowedMemberIds?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -52,13 +58,44 @@ export async function handler(
   const dateChanged = newDate.getTime() !== originalDate.getTime();
   const seriesId = current.series_id;
 
+  // Resolves to the isPrivate value classId (and every future sibling) ends
+  // up with — see updateClass.ts's identical willBePrivate comment.
+  const willBePrivate = typeof body.isPrivate === 'boolean' ? body.isPrivate : current.isPrivate === true;
+
   const propUpdate: Record<string, unknown> = {};
-  if (typeof body.capacity === 'number') propUpdate.capacity = body.capacity;
+  if (willBePrivate) {
+    // A private class is a one-on-one slot — capacity is always exactly 1,
+    // propagated to every future sibling the same as every other field here.
+    propUpdate.capacity = 1;
+  } else if (typeof body.capacity === 'number') {
+    propUpdate.capacity = body.capacity;
+  }
   if (typeof body.durationMin === 'number') propUpdate.duration_min = body.durationMin;
   if (typeof body.repeatWeekly === 'boolean') propUpdate.repeat_weekly = body.repeatWeekly;
   if (typeof body.allowWaitlist === 'boolean') propUpdate.isWaitlistEnabled = body.allowWaitlist;
   if (typeof body.notes === 'string') propUpdate.notes = body.notes;
   if (typeof body.className === 'string' && body.className.trim()) propUpdate.className = body.className.trim();
+
+  const effectiveCapacity = willBePrivate
+    ? 1
+    : (typeof body.capacity === 'number' && body.capacity > 0 ? body.capacity : (current.capacity ?? 5));
+
+  if (typeof body.isPrivate === 'boolean') {
+    if (body.isPrivate) {
+      const privateFields = validatePrivateFields(true, body.allowedMemberIds, effectiveCapacity, current.allowedMemberIds);
+      if (!privateFields.ok) return json(400, { error: privateFields.error });
+      propUpdate.isPrivate = true;
+      propUpdate.allowedMemberIds = privateFields.allowedMemberIds;
+    } else {
+      propUpdate.isPrivate = false;
+      propUpdate.allowedMemberIds = [];
+    }
+  } else if (body.allowedMemberIds !== undefined) {
+    if (!current.isPrivate) return json(400, { error: 'not_private' });
+    const privateFields = validatePrivateFields(true, body.allowedMemberIds, effectiveCapacity, current.allowedMemberIds);
+    if (!privateFields.ok) return json(400, { error: privateFields.error });
+    propUpdate.allowedMemberIds = privateFields.allowedMemberIds;
+  }
 
   // ── Update classId itself ─────────────────────────────────────────────────
   const setClauses = ['#date = :date', 'GSI2PK = :gsi2pk', 'GSI2SK = :gsi2sk', ...Object.keys(propUpdate).map((k) => `${k} = :${k}`)];

@@ -3,7 +3,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
-import type { MemberProfileItem } from '../lib/entities';
+import { deriveMemberName, type MemberProfileItem } from '../lib/entities';
 import { resolveTemplate, getMemberLang } from '../lib/templateResolver';
 import { israelDateStrOffset, formatExpiryForLocale, membershipEndStr } from '../lib/membershipReminders';
 
@@ -35,7 +35,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
   const msg = await resolveTemplate('MEMBERSHIP_ALERT', lang, {
     class_type: '', class_time: '', class_date: '',
-    member_name: profile.identity?.name ?? '',
+    member_name: deriveMemberName(profile),
     expiry_date: endStr ? formatExpiryForLocale(endStr, lang) : '',
   });
 

@@ -12,6 +12,38 @@ export interface ClassItem {
   className?: string;
   isWaitlistEnabled?: boolean;
   waitlist?: WaitlistEntry[];
+  // Only ever set together, and only when isPrivate is true — see
+  // validatePrivateFields(). A private class is filtered out of getClasses.ts
+  // and 404s from getClassDetail.ts/bookClass.ts for anyone not in
+  // allowedMemberIds (and not already registered, and not an admin).
+  isPrivate?: boolean;
+  allowedMemberIds?: string[];
+}
+
+// Shared validation for the isPrivate/allowedMemberIds pair, used by
+// createClass.ts, updateClass.ts, and saveClassSeries.ts so the three
+// writers don't each reimplement the same rules slightly differently.
+//
+// `currentAllowedMemberIds` is the existing item's list (undefined on
+// create) — used as a fallback when an update sends isPrivate: true without
+// also sending a fresh allowedMemberIds array (e.g. an admin toggling other
+// fields on an already-private class).
+export function validatePrivateFields(
+  isPrivate: boolean,
+  rawAllowedMemberIds: unknown,
+  capacity: number,
+  currentAllowedMemberIds?: string[],
+): { ok: true; allowedMemberIds: string[] } | { ok: false; error: string } {
+  if (!isPrivate) return { ok: true, allowedMemberIds: [] };
+
+  const providedIds = Array.isArray(rawAllowedMemberIds)
+    ? rawAllowedMemberIds.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map(v => v.trim())
+    : null;
+  const allowedMemberIds = Array.from(new Set(providedIds ?? currentAllowedMemberIds ?? []));
+
+  if (allowedMemberIds.length === 0) return { ok: false, error: 'missing_allowed_member_ids' };
+  if (allowedMemberIds.length > capacity) return { ok: false, error: 'allowed_members_exceed_capacity' };
+  return { ok: true, allowedMemberIds };
 }
 
 export interface WaitlistEntry {
@@ -52,6 +84,10 @@ export interface RegistrationItem {
   adminCardId?: string;
   reminderSent?: boolean;
   reminderSentAt?: string;
+  // Denormalized display name for trial (guest) registrations, i.e.
+  // consumedFrom === 'TRIAL' — those have no MemberProfileItem to resolve a
+  // name from. See getClassMembers.ts.
+  fullName?: string;
 }
 
 export interface MembershipItem {
@@ -65,6 +101,9 @@ export interface MembershipItem {
   allowedLegalCancellationsPerMonth: number;
   usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number };
   weeklyUsage: Record<string, number>;
+  // Admin manual balance nudge (+/-), applied on top of monthlyLimit without
+  // touching the contracted total or usage history — see getEffectiveMonthlyLimit.
+  manualAdjustment?: number;
   type?: string; // 'CUSTOM_MIGRATION' for admin-manual migration memberships
   // Only meaningfully populated for CUSTOM_MIGRATION items today (see
   // adminGrantCustomMigration.ts) — a custom-duration bridge's real
@@ -206,6 +245,22 @@ export interface MemberProfileItem {
   };
   subscriptionStatus?: string;
   subscriptionExpiryAlertSent?: string;
+}
+
+// Same fallback chain as getProfile.ts's `name` resolution — identity.name,
+// then identity.first_name+last_name, then the top-level (new-profile) name
+// field. Members migrated from the old Firestore shape only have identity.*
+// populated, so skipping straight to profile.name (as several notification
+// call sites used to) silently resolves to an empty string instead of
+// falling back.
+export function deriveMemberName(profile: MemberProfileItem): string {
+  const id = profile.identity;
+  if (id?.name) return id.name;
+  if (id?.full_name) return id.full_name;
+  const first = id?.first_name ?? '';
+  const last = id?.last_name ?? '';
+  if (first || last) return `${first} ${last}`.trim();
+  return profile.name ?? '';
 }
 
 // PK=ALERT#<id>  SK=METADATA
@@ -397,8 +452,25 @@ export interface PunchCardItem {
   source: string;
 }
 
+// A PENDING grant (see adminGrantCustomMigration.ts) is usable as soon as
+// the class itself falls within its start/end window, even before the
+// nightly activatePendingMemberships cron flips status to ACTIVE — waiting
+// for the cron would otherwise block booking a class that's clearly within
+// the paid-for window just because "today" is still before startDate.
+export function isMembershipUsableForClass(m: MembershipItem, classDate: Date): boolean {
+  if (m.status === 'ACTIVE') return true;
+  if (m.status === 'PENDING' && m.startDate && classDate >= new Date(m.startDate)) {
+    return !m.endDate || classDate <= new Date(m.endDate);
+  }
+  return false;
+}
+
 export function monthKey(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+export function getEffectiveMonthlyLimit(m: MembershipItem): number {
+  return m.monthlyLimit + (m.manualAdjustment ?? 0);
 }
 
 export function computeWeekKey(date: Date): string {

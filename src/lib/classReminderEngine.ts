@@ -1,6 +1,6 @@
 import { QueryCommand, UpdateCommand, PutCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { ClassItem, RegistrationItem, MemberProfileItem } from './entities';
+import { deriveMemberName, type ClassItem, type RegistrationItem, type MemberProfileItem } from './entities';
 import { getReminderSettings } from './notificationTiming';
 import { fmtTime, fmtDate, getMemberLang } from './templateResolver';
 import { israelHour, israelDateStrOf, israelHourToUTC } from './israelTime';
@@ -57,17 +57,6 @@ function resolveFromRaw(raw: RawTemplate, lang: 'he' | 'en', vars: { class_type:
     bgColor: raw.bgColor || '#5C3A8F',
     textColor: raw.textColor || '#FFFFFF',
   };
-}
-
-function deriveName(profile: MemberProfileItem): string {
-  const id = profile.identity;
-  if (id?.name) return id.name;
-  if (id?.full_name) return id.full_name;
-  const f = id?.first_name ?? '';
-  const l = id?.last_name ?? '';
-  if (f || l) return `${f} ${l}`.trim();
-  if (profile.name) return profile.name;
-  return '';
 }
 
 function getExpoPushToken(profile: MemberProfileItem): string {
@@ -188,7 +177,7 @@ export async function runClassReminderEngine(): Promise<Record<string, unknown>>
         class_type: classTypeName,
         class_time: fmtTime(classDate),
         class_date: fmtDate(classDate, lang),
-        member_name: deriveName(profile),
+        member_name: deriveMemberName(profile),
       });
 
       const token = getExpoPushToken(profile);

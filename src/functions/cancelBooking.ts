@@ -6,6 +6,7 @@ import { getUid, json } from '../lib/http';
 import type { ClassItem, RegistrationItem, MemberProfileItem } from '../lib/entities';
 import { evaluateCancellationPolicy } from '../lib/cancellationPolicy';
 import { notifyAdmins } from '../lib/adminNotify';
+import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
 
 // POST /cancelBooking
 // Body: { classId: string, cancellationReason?: string }
@@ -182,6 +183,12 @@ export async function handler(
     }
   }
 
+  try {
+    await maybeSendSoleAttendeeAlert(classId, classItem, policy.remainingAfterCancel);
+  } catch (err: any) {
+    console.error('[cancelBooking] sole-attendee alert failed (non-fatal):', err);
+  }
+
   return json(200, {
     success: true,
     cancellationStatus: cancelStatus,
@@ -219,12 +226,12 @@ async function sendDropoutAlert(classId: string, classItem: ClassItem): Promise<
   const lastTraineeName = (memberRes.Item as MemberProfileItem | undefined)?.name ?? '';
   const className = classItem.className ?? '';
   const classDateStr = new Date(classItem.date).toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  const message = `Alert: Late cancellation in class ${className} (on ${classDateStr}) left ${lastTraineeName} alone in the class!`;
+  const message = `On ${classDateStr} ${lastTraineeName} was left alone in the class!`;
 
   await notifyAdmins({
     type: 'CRITICAL_CLASS_DROPOUT',
     priority: 'HIGH',
-    pushTitle: 'Critical Alert: Class at Risk of Cancellation',
+    pushTitle: 'Critical Alert:',
     message,
     extra: { classId, className, classTimestamp: classItem.date, lastTraineeId, lastTraineeName },
   });

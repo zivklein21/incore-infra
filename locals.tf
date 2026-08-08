@@ -9,6 +9,7 @@ locals {
     acceptPolicies                     = { method = "POST" }
     adminAddMemberCredit               = { method = "POST" }
     adminAddToClass                    = { method = "POST" }
+    adminAddTrialToClass               = { method = "POST" }
     adminApproveWaitlist               = { method = "POST" }
     adminCancelRegistration            = { method = "POST" }
     adminChangeHypBillingAgreementPlan = { method = "POST" }
@@ -64,6 +65,7 @@ locals {
     adminUpdateMemberMembershipBadge   = { method = "POST" }
     adminUpdateMemberPersonal          = { method = "POST" }
     adminUpdateMemberWallet            = { method = "POST" }
+    adminUpdatePendingMembership       = { method = "POST" }
     adminUpdateTableItem               = { method = "POST" } # Admin Portal: Data Viewer
     adminWhoAmI                        = { method = "ANY" }  # Admin Portal: auth-gate check
     bookClass                          = { method = "POST" }
@@ -90,6 +92,7 @@ locals {
     getCancellationPolicySettings      = { method = "ANY" }
     getClassDetail                     = { method = "ANY" }
     getClassMembers                    = { method = "ANY" }
+    getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
     getClasses                         = { method = "ANY" }
     getClassTypes                      = { method = "ANY" }
     getFileUrl                         = { method = "ANY" }
@@ -165,6 +168,7 @@ locals {
   # exactly rather than requiring manual UTC/DST conversion.
   scheduled_functions = {
     expireProducts             = "cron(0 2 * * ? *)"       # 02:00 daily
+    activatePendingMemberships = "cron(0 1 * * ? *)"       # 01:00 daily
     clearUsedPunchCards        = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards  = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
     weekendSessionsRoutine     = "cron(59 23 ? * SAT *)"   # Saturday 23:59

@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr } from '../lib/entities';
+import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
 
 // ─── Entity key design (DynamoDB single-table) ─────────────────────────────
 //
@@ -108,6 +108,14 @@ export async function handler(
   const classItem = classRes.Item as ClassItem | undefined;
   if (!classItem) return json(404, { error: 'class_not_found' });
 
+  // 404, not 403 — a private class this member isn't allowed into must be
+  // indistinguishable from a nonexistent classId (see getClassDetail.ts's
+  // same choice). Admins use adminAddToClass, not this self-service path,
+  // to add trainees to a private session.
+  if (classItem.isPrivate && !(classItem.allowedMemberIds ?? []).includes(uid)) {
+    return json(404, { error: 'class_not_found' });
+  }
+
   const existingReg = regRes.Item as { status?: string } | undefined;
   if (existingReg?.status === 'REGISTERED') return json(400, { error: 'already_booked' });
 
@@ -131,7 +139,7 @@ export async function handler(
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': `MEMBERSHIP#${queryMonth}#` },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => m.status === 'ACTIVE') ?? null;
+  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
 
   let consumedFrom: ConsumedFrom;
   let membershipId = '';
@@ -159,10 +167,10 @@ export async function handler(
       },
     }));
 
-    if ((futureRes.Items?.length ?? 0) >= membership.monthlyLimit) {
+    if ((futureRes.Items?.length ?? 0) >= getEffectiveMonthlyLimit(membership)) {
       return json(403, {
         error: 'future_monthly_limit_reached',
-        message: `You have reached the maximum booking limit for the next month (${membership.monthlyLimit}).`,
+        message: `You have reached the maximum booking limit for the next month (${getEffectiveMonthlyLimit(membership)}).`,
       });
     }
 
@@ -172,7 +180,7 @@ export async function handler(
     const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
-    const withinMonthly = monthlyUsed < membership.monthlyLimit;
+    const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
 
     if (withinWeekly && withinMonthly) {
       consumedFrom = 'MEMBERSHIP';

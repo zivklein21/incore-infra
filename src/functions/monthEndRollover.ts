@@ -4,7 +4,7 @@
 import { ScanCommand, GetCommand, UpdateCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { MembershipItem, SupportInquiryItem } from '../lib/entities';
-import { monthKey, endOfMonth } from '../lib/entities';
+import { monthKey, endOfMonth, getEffectiveMonthlyLimit } from '../lib/entities';
 
 export async function handler(): Promise<void> {
   const now = new Date();
@@ -54,7 +54,7 @@ export async function handler(): Promise<void> {
 
       const monthlyLimit = fresh.monthlyLimit ?? 0;
       const totalUsed = fresh.usage?.totalMonthlyUsed ?? 0;
-      const remaining = Math.max(0, monthlyLimit - totalUsed);
+      const remaining = Math.max(0, getEffectiveMonthlyLimit(fresh) - totalUsed);
       const newMonthEndProcessed = { ...fresh.monthEndProcessed, [currentMonth]: true };
 
       // A custom-duration membership (e.g. a 6-week admin migration bridge)

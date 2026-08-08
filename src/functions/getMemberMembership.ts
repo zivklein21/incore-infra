@@ -5,7 +5,10 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MembershipItem, ProductItem } from '../lib/entities';
 
-const STATUS_PRIORITY: Record<string, number> = { ACTIVE: 0, PAST_DUE: 1, CANCELLED: 2, EXPIRED: 3 };
+// PENDING ranks above the lapsed statuses — a member with a future-dated
+// grant queued up and an old CANCELLED/EXPIRED record from a prior month
+// should see the pending one, not the stale one, when only one can be shown.
+const STATUS_PRIORITY: Record<string, number> = { ACTIVE: 0, PENDING: 1, PAST_DUE: 2, CANCELLED: 3, EXPIRED: 4 };
 
 type FullMembershipItem = MembershipItem & {
   productId?: string; productName?: string; startDate?: string; endDate?: string; createdAt?: string;
@@ -44,6 +47,7 @@ export async function buildMembershipResponse(item: FullMembershipItem) {
     legalCancellationsUsed: item.usage?.legalCancellationsUsed ?? 0,
     lateCancellationsUsed: item.usage?.lateCancellationsUsed ?? 0,
     monthlyLimit: productData?.monthlyLimit ?? item.monthlyLimit ?? 0,
+    manualAdjustment: item.manualAdjustment ?? 0,
     weeklyLimit: productData?.weeklyLimit ?? item.weeklyLimit ?? 0,
     allowedLegalCancellationsPerMonth: productData?.allowedLegalCancellationsPerMonth ?? item.allowedLegalCancellationsPerMonth ?? 0,
     isAutoRenew: item.isAutoRenew === true,

@@ -8,13 +8,14 @@ resource "aws_cognito_user_pool" "incore_user_pool" {
   # Automatically verify email addresses via confirmation codes during sign-up
   auto_verified_attributes = ["email"]
 
-  # 2. Password complexity policy for enhanced security
+  # 2. Password policy — numeric-only temporary PINs (see adminCreateUser.ts's
+  # generateInitialPassword)
   password_policy {
-    minimum_length    = 8
-    require_lowercase = true
+    minimum_length    = 6
+    require_lowercase = false
     require_numbers   = true
-    require_symbols   = true
-    require_uppercase = true
+    require_symbols   = false
+    require_uppercase = false
   }
 
   # 3. Required schema attributes that every trainee must provide during sign-up

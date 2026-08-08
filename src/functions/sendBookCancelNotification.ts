@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
-import type { ClassItem } from '../lib/entities';
+import { deriveMemberName, type ClassItem } from '../lib/entities';
 import { writeNotification, getMemberProfile } from '../lib/classNotifications';
 import { resolveTemplate, getMemberLang, fmtTime, fmtDate, type TemplateVars } from '../lib/templateResolver';
 
@@ -33,7 +33,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const classDate = new Date(classItem.date);
   const classType = classItem.className ?? '';
   const lang = getMemberLang(profile);
-  const memberName = profile.name ?? '';
+  const memberName = deriveMemberName(profile);
 
   const vars: TemplateVars = {
     class_type: classType,

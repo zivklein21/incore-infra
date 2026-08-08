@@ -72,6 +72,12 @@ export async function handler(
   startDate.setHours(0, 0, 0, 0);
   endDate.setHours(23, 59, 59, 999);
 
+  // A future startDate means this membership isn't usable yet — it must not
+  // read as ACTIVE (which would make it eligible for booking/rollover
+  // before its window opens). activatePendingMemberships flips it to ACTIVE
+  // once startDate arrives.
+  const status = startDate.getTime() > Date.now() ? 'PENDING' : 'ACTIVE';
+
   const membershipId = randomUUID();
   const nowIso = new Date().toISOString();
 
@@ -82,7 +88,7 @@ export async function handler(
       SK: `MEMBERSHIP#${targetMonth}#${membershipId}`,
       membershipId,
       type: 'CUSTOM_MIGRATION',
-      status: 'ACTIVE',
+      status,
       title,
       isManuallyCreated: true,
       requiresPayment: false,
@@ -103,7 +109,7 @@ export async function handler(
     },
   }));
 
-  console.log(`[adminGrantCustomMigration] admin=${adminUid} member=${memberId} month=${targetMonth} membershipId=${membershipId}`);
+  console.log(`[adminGrantCustomMigration] admin=${adminUid} member=${memberId} month=${targetMonth} membershipId=${membershipId} status=${status}`);
 
   return json(201, {
     success: true,
@@ -111,6 +117,7 @@ export async function handler(
     targetMonth,
     startDate: startDate.toISOString(),
     endDate: endDate.toISOString(),
+    status,
     type: 'CUSTOM_MIGRATION',
   });
 }
