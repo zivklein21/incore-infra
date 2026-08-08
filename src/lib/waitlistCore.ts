@@ -1,6 +1,6 @@
 import { GetCommand, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { ClassItem, WaitlistEntry, MemberProfileItem } from './entities';
+import { deriveMemberName, type ClassItem, type WaitlistEntry, type MemberProfileItem } from './entities';
 import { resolveTemplate, getMemberLang, fmtTime, fmtDate, type TemplateVars } from './templateResolver';
 
 export const OFFER_WINDOW_MS = 60 * 60 * 1000; // 1 hour
@@ -70,7 +70,7 @@ export async function broadcastSpotOpen(classId: string): Promise<void> {
     class_type: classType,
     class_time: fmtTime(classDate),
     class_date: fmtDate(classDate, lang),
-    member_name: profile?.name ?? '',
+    member_name: profile ? deriveMemberName(profile) : '',
   };
 
   const resolved = await resolveTemplate('SPOT_IS_OPEN', lang, vars);

@@ -247,6 +247,22 @@ export interface MemberProfileItem {
   subscriptionExpiryAlertSent?: string;
 }
 
+// Same fallback chain as getProfile.ts's `name` resolution — identity.name,
+// then identity.first_name+last_name, then the top-level (new-profile) name
+// field. Members migrated from the old Firestore shape only have identity.*
+// populated, so skipping straight to profile.name (as several notification
+// call sites used to) silently resolves to an empty string instead of
+// falling back.
+export function deriveMemberName(profile: MemberProfileItem): string {
+  const id = profile.identity;
+  if (id?.name) return id.name;
+  if (id?.full_name) return id.full_name;
+  const first = id?.first_name ?? '';
+  const last = id?.last_name ?? '';
+  if (first || last) return `${first} ${last}`.trim();
+  return profile.name ?? '';
+}
+
 // PK=ALERT#<id>  SK=METADATA
 // GSI1PK='ALERT' GSI1SK=<createdAtIso>#<id> — reverse-chronological feed for
 // the admin portal's dashboard (adminGetSystemAlerts). Written via

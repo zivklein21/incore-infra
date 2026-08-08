@@ -3,7 +3,7 @@
 import { randomUUID } from 'crypto';
 import { ScanCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
-import type { MembershipItem } from '../lib/entities';
+import { deriveMemberName, type MembershipItem } from '../lib/entities';
 import { monthKey } from '../lib/entities';
 import { getAllMemberProfiles } from '../lib/memberScan';
 import { getExpoPushToken } from '../lib/push';
@@ -105,7 +105,7 @@ export async function handler(): Promise<void> {
     if (!profile) continue;
 
     const lang = getMemberLang(profile);
-    const memberName = profile.identity?.name ?? profile.name ?? '';
+    const memberName = deriveMemberName(profile);
 
     // A missing/misconfigured template must never stop the alert from going
     // out — fall back to the hardcoded copy on a DB error or when no admin

@@ -4,7 +4,7 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { MemberProfileItem } from '../lib/entities';
+import { deriveMemberName, type MemberProfileItem } from '../lib/entities';
 
 // POST /adminSendClassMessage
 // Body: { memberIds, classId, classType, classDate, msgType, title, body, bgColor, textColor }
@@ -52,7 +52,7 @@ export async function handler(
   await Promise.all(memberIds.map(async (id) => {
     const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${id}`, SK: 'PROFILE' } }));
     const profile = res.Item as MemberProfileItem | undefined;
-    const fullName = profile?.identity?.name || profile?.name || '';
+    const fullName = profile ? deriveMemberName(profile) : '';
     const fn = firstName(fullName);
     const personalizedTitle = title.replace(/\{member_name\}/g, fn);
     const personalizedBody = text.replace(/\{member_name\}/g, fn);

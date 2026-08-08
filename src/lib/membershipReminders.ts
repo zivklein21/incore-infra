@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { MemberProfileItem } from './entities';
+import { deriveMemberName, type MemberProfileItem } from './entities';
 import { resolveTemplate, getMemberLang, type TemplateType } from './templateResolver';
 
 // Returns YYYY-MM-DD in Israel timezone, offset by `days` from today.
@@ -31,7 +31,7 @@ export async function sendReminder(
   endStr: string,
 ): Promise<void> {
   const lang = getMemberLang(profile);
-  const memberName = profile.identity?.name ?? profile.name ?? '';
+  const memberName = deriveMemberName(profile);
 
   const msg = await resolveTemplate(type, lang, {
     class_type: '', class_time: '', class_date: '',

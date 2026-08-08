@@ -4,7 +4,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { monthKey, computeWeekKey, israelDateStr, type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem } from '../lib/entities';
+import { monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass, type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem } from '../lib/entities';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
@@ -114,14 +114,20 @@ export async function handler(
   let adminCardId = '';
 
   if (deductSession) {
+    // Not status=ACTIVE-only: a PENDING membership (future-dated grant not yet
+    // flipped by the nightly activatePendingMemberships cron) whose own
+    // start/end window already covers this class should count too — same
+    // eligibility rule bookClass.ts/getActiveMembership.ts use, so an admin
+    // manually adding someone isn't blocked by a cron that hasn't run yet.
     const membRes = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      FilterExpression: '#status = :active',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':pk': `MEMBER#${userId}`, ':prefix': 'MEMBERSHIP#', ':active': 'ACTIVE' },
+      ExpressionAttributeValues: { ':pk': `MEMBER#${userId}`, ':prefix': 'MEMBERSHIP#' },
     }));
-    activeMembership = (membRes.Items ?? [])[0] as MembershipItem | undefined;
+    const usableMemberships = ((membRes.Items ?? []) as (MembershipItem & { createdAt?: string })[])
+      .filter((m) => isMembershipUsableForClass(m, classDate))
+      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+    activeMembership = usableMemberships[0];
     membershipId = activeMembership?.membershipId ?? '';
 
     if (activeMembership) {

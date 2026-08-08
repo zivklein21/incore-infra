@@ -52,7 +52,7 @@ export async function handler(
     PK: cancelKey.PK,
     SK: cancelKey.SK,
     classId,
-    status: 'LEGALLY_CANCELLED',
+    status: 'ADMIN_CANCELLED',
     consumedFrom: regData.consumedFrom ?? '',
     membershipId: regData.membershipId ?? '',
     adminCardId: regData.adminCardId ?? null,
