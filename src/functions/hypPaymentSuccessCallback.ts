@@ -43,7 +43,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     }
 
     // ── Verify with HYP — never trust the raw redirect params alone ──────
-    const { verified, fields } = await verifyHypTransaction(q as Record<string, string>);
+    const { verified, fields } = await verifyHypTransaction(event.rawQueryString);
     const ccode = Number(fields.CCode ?? q.CCode);
 
     console.log(`[hypPaymentSuccessCallback] order=${orderId} raw redirect query:`, JSON.stringify(q));

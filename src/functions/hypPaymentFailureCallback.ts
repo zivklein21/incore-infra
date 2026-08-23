@@ -51,7 +51,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     // is already implied by which URL HYP chose to redirect to, so unlike
     // the success endpoint this doesn't need to branch on ccode — only on
     // whether the redirect is authentic at all.
-    const { verified, fields } = await verifyHypTransaction(q as Record<string, string>);
+    const { verified, fields } = await verifyHypTransaction(event.rawQueryString);
     const ccode = Number(fields.CCode ?? q.CCode);
 
     console.log(`[hypPaymentFailureCallback] order=${orderId} raw redirect query:`, JSON.stringify(q));
