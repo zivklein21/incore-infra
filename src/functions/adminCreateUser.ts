@@ -8,6 +8,7 @@ import * as nodemailer from 'nodemailer';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
 
 // POST /adminCreateUser
 // Auth: Cognito JWT, caller must be admin
@@ -130,6 +131,13 @@ export async function handler(
     // Non-fatal — the account exists and works even if the email fails.
     console.error('[adminCreateUser] welcome email failed', err);
   });
+
+  // Symmetric with adminUpdatePendingMembership.ts's own bridge call — almost
+  // always a no-op here since a brand-new member has no prior saved token,
+  // but keeps both pending_membership write sites consistent.
+  if (profileItem.pending_membership) {
+    await bridgeTokenToBillingAgreement(uid);
+  }
 
   return json(200, { success: true, uid });
 }

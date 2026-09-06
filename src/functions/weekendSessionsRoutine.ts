@@ -1,4 +1,7 @@
-// EventBridge Scheduled Rule — unix-cron "59 23 * * 6" (Saturday 23:59), Asia/Jerusalem.
+// EventBridge Scheduled Rule — unix-cron "59 23 * * 4" (Thursday 23:59), Asia/Jerusalem.
+// Runs before the Fri/Sat weekend (no classes those days) rather than after
+// it, so any unused weekly quota lands in wallet.extraPunches while members
+// can still use it to book over the weekend instead of only from Sunday on.
 //
 // For each member with an ACTIVE membership: credit unused weekly slots
 // (weeklyLimit - utilized, capped by monthly headroom) to wallet.extraPunches,

@@ -31,7 +31,11 @@ export async function evaluateCancellationPolicy(
   const hoursUntilClass = (classDate.getTime() - now.getTime()) / 3_600_000;
   const remainingAfterCancel = Math.max(0, currentAttendees - 1);
   const isTimeOk = hoursUntilClass >= CANCEL_WINDOW_HOURS;
-  const isOccupancyOk = remainingAfterCancel >= MIN_TRAINEES_REQUIRED;
+  // The floor only protects OTHER attendees from being left in a
+  // too-small class — if the class is already below minimum with this
+  // member still in it (e.g. they're the sole attendee), there's no one
+  // else to protect and leaving can't make that any worse.
+  const isOccupancyOk = currentAttendees < MIN_TRAINEES_REQUIRED || remainingAfterCancel >= MIN_TRAINEES_REQUIRED;
 
   const isWalletSource = regData.consumedFrom === 'EXTRA_PUNCH' || regData.consumedFrom === 'ADMIN_CARD';
   let isQuotaOk = isWalletSource;

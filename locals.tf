@@ -45,6 +45,7 @@ locals {
     adminRefundOrder                   = { method = "POST" }
     adminRejectWaitlist                = { method = "POST" }
     adminRemoveLegalCancellation       = { method = "POST" }
+    adminResetMemberPassword           = { method = "POST" } # IAM-privileged (AdminSetUserPassword) — see handler comment
     adminRevertLateCancellation        = { method = "POST" }
     adminRevokeParentalConsent         = { method = "POST" }
     adminRunHypBillingCycle            = { method = "POST" }
@@ -171,7 +172,7 @@ locals {
     activatePendingMemberships = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
     clearUsedPunchCards        = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards  = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
-    weekendSessionsRoutine     = "cron(59 23 ? * SAT *)"   # Saturday 23:59
+    weekendSessionsRoutine     = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend
     monthEndRollover           = "cron(59 23 28-31 * ? *)" # 23:59 on days 28-31 (last-day guard inside)
     subscriptionExpiryAlert    = "cron(0 20 28-31 * ? *)"  # 20:00 on days 28-31 (last-day guard inside)
     classReminderEngine        = "cron(0 * * * ? *)"       # top of every hour

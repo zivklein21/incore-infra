@@ -8,6 +8,7 @@ import { getPolicySettings, getMemberFullName } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from './paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
+import { bridgeTokenToBillingAgreement } from './hypBillingAgreements';
 
 type OrderKey = { PK: string; SK: string };
 
@@ -251,6 +252,13 @@ export async function applyHypPaymentSuccess(
         UpdateExpression: 'REMOVE payment.cardBrand',
       })).catch(() => {});
     }
+
+    // This order's own needsBillingAgreement branch above already covers
+    // itself — this call is for any OTHER plan (a pending_membership, or an
+    // active membership admin-granted without a checkout) that had no
+    // agreement yet and can now use the token this order just (re)saved.
+    // bridgeTokenToBillingAgreement no-ops instantly if one already exists.
+    await bridgeTokenToBillingAgreement(order.userId);
   }
 
   await ddb.send(new UpdateCommand({

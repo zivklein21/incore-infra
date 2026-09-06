@@ -68,9 +68,14 @@ export async function handler(
   const newAttendees = newClass.currentAttendeesCount ?? 0;
   if (newAttendees >= newCapacity) return json(400, { error: 'new_class_full' });
 
-  // 3. Studio safety shield — old class must keep >= MIN_TRAINEES_REQUIRED after swap
+  // 3. Studio safety shield — old class must keep >= MIN_TRAINEES_REQUIRED after
+  // swap, but only when it currently meets that minimum. If it's already below
+  // minimum (e.g. this member is the sole attendee), there's no one else left
+  // to protect, so the swap is always allowed regardless of remaining time.
   const oldAttendees = oldClass.currentAttendeesCount ?? 0;
-  if (oldAttendees - 1 < MIN_TRAINEES_REQUIRED) return json(400, { error: 'minimum_occupancy_violation' });
+  if (oldAttendees >= MIN_TRAINEES_REQUIRED && oldAttendees - 1 < MIN_TRAINEES_REQUIRED) {
+    return json(400, { error: 'minimum_occupancy_violation' });
+  }
 
   const nowIso = new Date().toISOString();
   const newRegPayload: Record<string, unknown> = {
@@ -110,8 +115,10 @@ export async function handler(
         TableName: TABLE_NAME,
         Key: oldClassKey,
         UpdateExpression: 'ADD currentAttendeesCount :negOne',
-        ConditionExpression: 'currentAttendeesCount >= :minPlusOne',
-        ExpressionAttributeValues: { ':negOne': -1, ':minPlusOne': MIN_TRAINEES_REQUIRED + 1 },
+        // Mirrors the pre-check above: allow when already below minimum
+        // (sole attendee) or when enough will remain after the swap.
+        ConditionExpression: 'currentAttendeesCount < :minRequired OR currentAttendeesCount >= :minPlusOne',
+        ExpressionAttributeValues: { ':negOne': -1, ':minRequired': MIN_TRAINEES_REQUIRED, ':minPlusOne': MIN_TRAINEES_REQUIRED + 1 },
       },
     },
     {

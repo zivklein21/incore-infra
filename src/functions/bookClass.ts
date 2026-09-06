@@ -141,11 +141,24 @@ export async function handler(
   }));
   const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
 
+  // A membership whose real endDate already reaches the class date isn't
+  // actually "future" from the member's own plan's point of view — it's
+  // the same membership they're on today, just being booked ahead of time.
+  // This is the normal case for a CUSTOM_MIGRATION bridge, whose endDate
+  // commonly extends past the calendar month it's filed under (see
+  // adminGrantCustomMigration.ts) — those are never isAutoRenew, so without
+  // this check every bridge member would be blocked from booking into any
+  // month past the one their record started in, even while still well
+  // inside their granted window. Route this case through the normal
+  // per-membership consumption below instead of the future-only path.
+  const membershipCoversClassDate = !!membership?.endDate && classDate <= new Date(membership.endDate);
+  const treatAsFuture = isFutureBooking && !membershipCoversClassDate;
+
   let consumedFrom: ConsumedFrom;
   let membershipId = '';
   let adminCardId = '';
 
-  if (isFutureBooking) {
+  if (treatAsFuture) {
     if (!membership) {
       return json(403, { error: 'membership_required', message: 'Future bookings require an active membership for the current month.' });
     }
@@ -289,10 +302,17 @@ export async function handler(
   ];
 
   if (membershipId && consumedFrom === 'MEMBERSHIP') {
+    // membership.targetMonth (the month the record is actually filed
+    // under), not classTargetMonth (the class's own month) — a
+    // membershipCoversClassDate booking consumes a membership filed under
+    // an earlier month than the class it's paying for, e.g. a
+    // CUSTOM_MIGRATION bridge filed under 2026-08 covering a class on
+    // 2026-09-10; classTargetMonth here would point at a SK the item was
+    // never written under.
     transactItems.push({
       Update: {
         TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${uid}`, SK: `MEMBERSHIP#${classTargetMonth}#${membershipId}` },
+        Key: { PK: `MEMBER#${uid}`, SK: `MEMBERSHIP#${membership!.targetMonth}#${membershipId}` },
         // usage is ALSO a DynamoDB reserved keyword, same class of bug as
         // #cap above.
         UpdateExpression: 'ADD #usage.totalMonthlyUsed :one, weeklyUsage.#wk :one SET updatedAt = :now',

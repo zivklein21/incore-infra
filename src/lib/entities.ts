@@ -385,6 +385,11 @@ export interface HypBillingAgreementItem {
   targetMonth?: string;
   consecutiveFailures: number;
   sourceOrderId: string;
+  // Set only when this agreement was created by bridgeTokenToBillingAgreement
+  // (hypBillingAgreements.ts) instead of a real checkout — i.e. it reuses a
+  // token saved by some other order rather than one captured for this plan.
+  // sourceOrderId is 'BRIDGED' (no real order backs it) whenever this is set.
+  bridgedFrom?: 'pending_membership' | 'active_membership';
   lastChargeResult?: { at: string; ccode: number; hypTransactionId: string | null; success: boolean };
   // Set the first time a "no card on file" charge attempt notifies admins —
   // that failure mode retries daily forever (unlike a real decline, which

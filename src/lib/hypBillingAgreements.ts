@@ -1,10 +1,11 @@
 import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { HypBillingAgreementItem, MemberProfileItem } from './entities';
+import type { HypBillingAgreementItem, MemberProfileItem, ProductItem, MembershipItem } from './entities';
 import { monthKey, endOfMonth, addMonths, firstOfNextMonth } from './entities';
 import { chargeHypToken } from './hypClient';
-import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
+import { getMemberIdNumber, getMemberFullName, buildHypInfo, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
+import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from './paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
 
@@ -237,4 +238,125 @@ export async function runHypBillingCycle(): Promise<{ processed: number; succeed
 
   console.log(`[chargeHypBillingAgreements] processed=${due.length} succeeded=${succeeded} failed=${failed}`);
   return { processed: due.length, succeeded, failed };
+}
+
+// ── Bridge: link an already-saved token to a plan that has no billing
+// agreement yet — an admin-assigned pending_membership, or an active
+// membership that was itself granted from a subscription purchase but never
+// got its own agreement (e.g. admin-granted). This never charges anything;
+// it only creates the agreement (targeting the 1st of next month) so the
+// existing cron above picks it up exactly like any organically-created one.
+// Called from adminUpdatePendingMembership.ts, adminCreateUser.ts (both
+// after writing pending_membership), and hypPaymentGrant.ts (after any
+// order refreshes the member's saved token) — see entities.ts's
+// HypBillingAgreementItem.bridgedFrom for the audit trail this leaves.
+export async function bridgeTokenToBillingAgreement(userId: string): Promise<void> {
+  try {
+    const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${userId}`, SK: 'PROFILE' } }));
+    const member = memberRes.Item as MemberProfileItem | undefined;
+    const payment = member?.payment;
+    if (!payment?.hypToken || !payment.hypTokenExpiryMonth || !payment.hypTokenExpiryYear) return;
+
+    // Last day of the token's expiry month, end of day — a token is usable
+    // through the end of its printed expiry month, same as any card.
+    const tokenExpiryEnd = new Date(payment.hypTokenExpiryYear, payment.hypTokenExpiryMonth, 0, 23, 59, 59, 999);
+    if (tokenExpiryEnd < new Date()) {
+      console.log(`[bridgeTokenToBillingAgreement] user=${userId} skip: saved token expired ${payment.hypTokenExpiryMonth}/${payment.hypTokenExpiryYear}`);
+      return;
+    }
+
+    // Already has an open subscription agreement (organic or previously
+    // bridged) — nothing to do. Makes this safe to call repeatedly from
+    // every hook site without ever creating a duplicate.
+    const existing = await queryOpenAgreementsForMember(userId, 'subscription');
+    if (existing.length > 0) return;
+
+    let productId: string | undefined;
+    let productName: string | undefined;
+    let description: string | undefined;
+    let price = 0;
+    let bridgedFrom: NonNullable<HypBillingAgreementItem['bridgedFrom']> | undefined;
+
+    const pendingPlanId = member?.pending_membership?.type;
+    if (pendingPlanId) {
+      const productRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `PRODUCT#${pendingPlanId}`, SK: 'METADATA' } }));
+      const product = productRes.Item as ProductItem | undefined;
+      if (product && product.type === 'subscription' && product.active !== false) {
+        productId = pendingPlanId;
+        productName = product.name ?? '';
+        description = product.description;
+        price = product.price ?? 0;
+        bridgedFrom = 'pending_membership';
+      }
+    }
+
+    if (!productId) {
+      const membershipRes = await ddb.send(new QueryCommand({
+        TableName: TABLE_NAME,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+        ExpressionAttributeValues: { ':pk': `MEMBER#${userId}`, ':prefix': 'MEMBERSHIP#' },
+      }));
+      const memberships = (membershipRes.Items ?? []) as (MembershipItem & { createdAt?: string; productId?: string; productName?: string })[];
+      const active = memberships
+        .filter((m) => m.status === 'ACTIVE' && m.isAutoRenew && m.productId)
+        .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))[0];
+      if (active) {
+        productId = active.productId;
+        productName = active.productName ?? '';
+        bridgedFrom = 'active_membership';
+      }
+    }
+
+    if (!productId || !bridgedFrom) return;
+
+    const agreementId = randomUUID();
+    const nowIso = new Date().toISOString();
+    const nextChargeDate = firstOfNextMonth(new Date());
+
+    await ddb.send(new PutCommand({
+      TableName: TABLE_NAME,
+      Item: {
+        PK: `AGREEMENT#${agreementId}`,
+        SK: 'METADATA',
+        GSI1PK: `MEMBER#${userId}`,
+        GSI1SK: `AGREEMENT#subscription#${agreementId}`,
+        GSI2PK: 'AGREEMENT',
+        GSI2SK: `${nowIso}#${agreementId}`,
+        GSI3PK: 'AGREEMENT_STATUS#active',
+        GSI3SK: nextChargeDate.toISOString(),
+        agreementId,
+        userId,
+        status: 'active',
+        kind: 'subscription',
+        productId,
+        productName,
+        ...(description ? { description } : {}),
+        token: payment.hypToken,
+        tokenExpiryMonth: payment.hypTokenExpiryMonth,
+        tokenExpiryYear: payment.hypTokenExpiryYear,
+        amountPerCharge: price,
+        totalPayments: (await getPolicySettings()).standingOrderMonths,
+        paymentsCompleted: 0,
+        nextChargeDate: nextChargeDate.toISOString(),
+        targetMonth: monthKey(nextChargeDate),
+        consecutiveFailures: 0,
+        sourceOrderId: 'BRIDGED',
+        bridgedFrom,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      },
+    }));
+
+    if (bridgedFrom === 'pending_membership') {
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: { PK: `MEMBER#${userId}`, SK: 'PROFILE' },
+        UpdateExpression: 'REMOVE pending_membership',
+      }));
+    }
+
+    console.log(`[bridgeTokenToBillingAgreement] user=${userId} bridged agreement=${agreementId} product=${productId} source=${bridgedFrom} nextChargeDate=${nextChargeDate.toISOString()}`);
+  } catch (err: any) {
+    console.error(`[bridgeTokenToBillingAgreement] user=${userId} failed:`, err);
+  }
 }
