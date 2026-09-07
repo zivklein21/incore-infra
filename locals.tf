@@ -27,6 +27,7 @@ locals {
     adminEvictFutureRegistrations      = { method = "POST" }
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
     adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
+    adminGetMemberFamilyInfo           = { method = "ANY" } # Family Accounts: MemberDetailsScreen's Family card
     adminGetMemberships                = { method = "ANY" }
     adminGetS3ObjectMetadata           = { method = "ANY" }  # Admin Portal: Assets Manager
     adminGetS3UploadUrl                = { method = "POST" } # Admin Portal: Assets Manager
@@ -36,6 +37,8 @@ locals {
     adminGetTableShape                 = { method = "ANY" }  # Admin Portal: Data Viewer filter discovery
     adminGrantCustomMigration          = { method = "POST" }
     adminGrantMembership               = { method = "POST" }
+    adminLinkFamilyMember              = { method = "POST" } # Family Accounts: link a parent/child pair
+    adminListFamilyLinks               = { method = "ANY" }  # Family Accounts: Admin Portal household list
     adminListHypBillingAgreements      = { method = "ANY" }
     adminListHypOrders                 = { method = "ANY" }
     adminListLogGroups                 = { method = "ANY" } # Admin Portal: Logs Viewer
@@ -61,6 +64,7 @@ locals {
     adminSetForceShowPaymentButton     = { method = "POST" }
     adminSetHypBillingAgreementStatus  = { method = "POST" }
     adminSetMemberAlert                = { method = "POST" }
+    adminUnlinkFamilyMember            = { method = "POST" } # Family Accounts: remove a parent/child link
     adminUpdateMemberCredit            = { method = "POST" }
     adminUpdateMembership              = { method = "POST" }
     adminUpdateMemberMembershipBadge   = { method = "POST" }
@@ -119,6 +123,7 @@ locals {
     grantPunchCard                     = { method = "POST" }
     joinWaitlist                       = { method = "POST" }
     leaveWaitlist                      = { method = "POST" }
+    listMyFamily                       = { method = "ANY" }  # Family Accounts: a member's own linked children
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }
     resizeProfilePhoto                 = { method = "POST" }
@@ -131,6 +136,7 @@ locals {
     submitParentalConsent              = { method = "POST" }
     submitRegistrationForm             = { method = "POST" }
     swapClass                          = { method = "POST" }
+    switchProfile                      = { method = "POST" } # Family Accounts: parent -> linked child token swap
     triggerTemplateAlert               = { method = "POST" }
     updateClass                        = { method = "POST" }
     updateProfile                      = { method = "POST" }
@@ -208,11 +214,23 @@ locals {
   # api_gateway.tf instead of the usual one-function-one-route mapping.
   cors_preflight_function = "corsPreflight"
 
+  # Cognito User Pool custom-auth triggers (Family Accounts' switchProfile.ts
+  # flow — see cognito.tf's lambda_config). Invoked directly by Cognito, not
+  # via API Gateway, so — like cors_preflight_function above — these are
+  # built here (for a Lambda to exist) but deliberately excluded from
+  # all_http_functions/http_authenticated_functions so no route is created.
+  cognito_custom_auth_functions = [
+    "cognitoDefineAuthChallenge",
+    "cognitoCreateAuthChallenge",
+    "cognitoVerifyAuthChallengeResponse",
+  ]
+
   all_function_names = distinct(concat(
     keys(local.all_http_functions),
     keys(local.scheduled_functions),
     local.stream_functions,
     local.sqs_functions,
     [local.cors_preflight_function],
+    local.cognito_custom_auth_functions,
   ))
 }

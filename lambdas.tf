@@ -44,9 +44,11 @@ resource "aws_iam_role_policy" "lambda_cognito" {
     Statement = [{
       Effect   = "Allow"
       Action = [
-        "cognito-idp:AdminDeleteUser", 
-        "cognito-idp:AdminCreateUser", 
-        "cognito-idp:AdminSetUserPassword"
+        "cognito-idp:AdminDeleteUser",
+        "cognito-idp:AdminCreateUser",
+        "cognito-idp:AdminSetUserPassword",
+        "cognito-idp:AdminInitiateAuth",
+        "cognito-idp:AdminRespondToAuthChallenge"
       ]
       Resource = [aws_cognito_user_pool.incore_user_pool.arn]
     }]
@@ -180,7 +182,17 @@ resource "aws_lambda_layer_version" "dependencies" {
 # cron, or DynamoDB Streams consumer). Env vars are set uniformly — a
 # function that doesn't reference an unused one is harmless.
 resource "aws_lambda_function" "fn" {
-  for_each = toset(local.all_function_names)
+  # Family Accounts: the 3 Cognito CUSTOM_AUTH triggers are deliberately
+  # EXCLUDED from this for_each and built as a wholly separate resource
+  # below (aws_lambda_function.cognito_trigger_fn) instead of just getting a
+  # conditional inside this one. Terraform attributes a reference anywhere
+  # in a for_each resource's body to every instance of that resource,
+  # regardless of which conditional branch it's in — so as long as ANY
+  # instance of "fn" needs COGNITO_USER_POOL_ID (all the non-trigger ones
+  # do), the whole resource depends on the user pool, and the user pool's
+  # own lambda_config (cognito.tf) depending back on 3 specific "fn"
+  # instances is a real cycle. Splitting the resource is the only clean fix.
+  for_each = toset([for name in local.all_function_names : name if !contains(local.cognito_custom_auth_functions, name)])
 
   function_name    = "incore-${lower(replace(each.key, "/([A-Z])/", "-$1"))}"
   filename         = data.archive_file.function_code[each.key].output_path
@@ -197,6 +209,7 @@ resource "aws_lambda_function" "fn" {
       TABLE_NAME              = aws_dynamodb_table.incore_table.name
       BUCKET_NAME             = aws_s3_bucket.incore_uploads.bucket
       COGNITO_USER_POOL_ID    = aws_cognito_user_pool.incore_user_pool.id
+      COGNITO_APP_CLIENT_ID   = aws_cognito_user_pool_client.incore_app_client.id
       GMAIL_APP_PASSWORD      = var.gmail_app_password
       HYP_MASOF               = var.hyp_masof
       HYP_KEY                 = var.hyp_key
@@ -205,6 +218,37 @@ resource "aws_lambda_function" "fn" {
       HYP_ENTERPRISE_USER     = var.hyp_enterprise_user
       HYP_ENTERPRISE_PASSWORD = var.hyp_enterprise_password
       HYP_ENTERPRISE_TERMINAL = var.hyp_enterprise_terminal
+    }
+  }
+}
+
+# Family Accounts: the 3 Cognito CUSTOM_AUTH triggers, split out from
+# aws_lambda_function.fn above specifically so this resource's body never
+# textually references aws_cognito_user_pool/aws_cognito_user_pool_client in
+# any form — see the comment on "fn"'s for_each for why that reference
+# (even an unused one) would create a cycle with the user pool's own
+# lambda_config, which needs these three functions' ARNs. They don't need
+# the pool/client id anyway: Cognito passes userPoolId directly in the
+# trigger event payload, and unlike switchProfile.ts (a normal HTTP
+# function), they never call the Cognito API themselves — only DynamoDB
+# (TABLE_NAME), for the SwitchNonceItem lookups (see
+# cognitoCreateAuthChallenge.ts / cognitoVerifyAuthChallengeResponse.ts).
+resource "aws_lambda_function" "cognito_trigger_fn" {
+  for_each = toset(local.cognito_custom_auth_functions)
+
+  function_name    = "incore-${lower(replace(each.key, "/([A-Z])/", "-$1"))}"
+  filename         = data.archive_file.function_code[each.key].output_path
+  source_code_hash = data.archive_file.function_code[each.key].output_base64sha256
+  role             = aws_iam_role.lambda_execution_role.arn
+  handler          = "${each.key}.handler"
+  runtime          = "nodejs20.x"
+  timeout          = 30
+  memory_size      = 128
+  layers           = [aws_lambda_layer_version.dependencies.arn]
+
+  environment {
+    variables = {
+      TABLE_NAME = aws_dynamodb_table.incore_table.name
     }
   }
 }

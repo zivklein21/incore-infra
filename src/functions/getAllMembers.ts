@@ -69,6 +69,7 @@ export async function handler(
       return {
         id,
         name: deriveName(p),
+        email: p.identity?.email ?? p.email ?? '',
         phone: p.identity?.phone ?? p.phone ?? '',
         subtitle: typeof p.membership?.plan === 'string' ? p.membership.plan : '',
         membershipStatus: deriveStatus(p.membership?.status),

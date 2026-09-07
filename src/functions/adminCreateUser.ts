@@ -12,7 +12,13 @@ import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
 
 // POST /adminCreateUser
 // Auth: Cognito JWT, caller must be admin
-// Body: { email, firstName, lastName, phone, birthday?, age?, requireHealthForm?, requireRegistrationForm?, membershipId? }
+// Body: { email, firstName, lastName, phone, birthday?, age?, requireHealthForm?, requireRegistrationForm?, membershipId?, accountType? }
+//
+// accountType: 'parent_only' (Family Accounts) marks a member created solely
+// to hold family links — no membership/booking of their own; the client
+// hides their schedule/booking tab and leads with their linked child's
+// profile instead (see the Family Accounts plan). Omit or 'member' for a
+// normal trainee account.
 //
 // SECURITY NOTE for whoever reviews this before deploying: AdminCreateUser
 // is an IAM-privileged Cognito action — it can create arbitrary accounts
@@ -44,7 +50,7 @@ export async function handler(
   let body: {
     email?: unknown; firstName?: unknown; lastName?: unknown; phone?: unknown;
     birthday?: unknown; age?: unknown; requireHealthForm?: unknown;
-    requireRegistrationForm?: unknown; membershipId?: unknown;
+    requireRegistrationForm?: unknown; membershipId?: unknown; accountType?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -58,6 +64,7 @@ export async function handler(
   if (!email || !firstName) return json(400, { error: 'missing_required_fields' });
   const name = [firstName, lastName].filter(Boolean).join(' ');
   const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+  const accountType = body.accountType === 'parent_only' ? 'parent_only' as const : 'member' as const;
 
   const userPoolId = process.env.COGNITO_USER_POOL_ID as string;
   const cognito = new CognitoIdentityProviderClient({});
@@ -97,6 +104,7 @@ export async function handler(
       email,
       phone,
       role: 'member',
+      accountType,
       ...(typeof body.birthday === 'string' ? { birthday: body.birthday } : {}),
       ...(typeof body.age === 'number' ? { age: body.age } : {}),
     },

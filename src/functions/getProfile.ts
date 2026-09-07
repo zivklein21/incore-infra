@@ -138,6 +138,10 @@ export async function handler(
     photoUrl,
     role,
     isAdmin: role === 'admin',
+    // Family Accounts: 'parent_only' — created solely to hold family links,
+    // no membership/booking of their own (adminCreateUser.ts). Undefined/
+    // 'member' is a normal trainee account.
+    accountType: profile.identity?.accountType ?? 'member',
     hasMembership: !!activeMembership,
     membershipType: activeMembership?.type ?? null,
     membershipStatus: activeMembership?.status ?? null,
