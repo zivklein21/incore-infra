@@ -1,7 +1,17 @@
-// EventBridge Scheduled Rule — unix-cron "0 1 * * *" (01:00 daily), Asia/Jerusalem.
+// EventBridge Scheduled Rule — unix-cron "5 3 * * *" (03:05 daily), Asia/Jerusalem.
 // Flips PENDING memberships (future-dated CUSTOM_MIGRATION grants — see
 // adminGrantCustomMigration.ts) to ACTIVE once their startDate has arrived.
 // Nothing else creates PENDING memberships today.
+//
+// Why 03:05 and not right after local midnight: adminGrantCustomMigration.ts
+// computes startDate with Date#setHours(0,0,0,0), which zeroes to midnight in
+// the Lambda's runtime timezone. Lambda's Node runtime defaults to UTC (no TZ
+// env var is set — see lambdas.tf), so the stored startDate is actually UTC
+// midnight, not Israel-local midnight. Israel is UTC+2/+3, so UTC midnight
+// only arrives at 02:00-03:00 Israel time. Running this before 03:00 Israel
+// (the old schedule ran at 01:00) meant "today's" startDate hadn't crossed
+// its UTC boundary yet, so same-day memberships were skipped for a full
+// extra day. 03:05 is safely past that boundary year-round.
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { MembershipItem } from '../lib/entities';

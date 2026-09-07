@@ -4,7 +4,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { RegistrationItem, ClassItem } from '../lib/entities';
+import type { RegistrationItem, ClassItem, MembershipItem } from '../lib/entities';
 import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
 
 // POST /adminCancelRegistration
@@ -96,19 +96,29 @@ export async function handler(
   }
 
   if (refundTo === 'membership' && regData.membershipId) {
-    const wKey = regData.weekKey;
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${userId}`, SK: `MEMBERSHIP#${regData.targetMonth}#${regData.membershipId}` },
-        // usage is a DynamoDB reserved keyword — bare here it fails every call.
-        UpdateExpression: wKey
-          ? 'ADD #usage.totalMonthlyUsed :negOne, weeklyUsage.#wk :negOne SET updatedAt = :now'
-          : 'ADD #usage.totalMonthlyUsed :negOne SET updatedAt = :now',
-        ExpressionAttributeNames: wKey ? { '#wk': wKey, '#usage': 'usage' } : { '#usage': 'usage' },
-        ExpressionAttributeValues: { ':negOne': -1, ':now': nowIso },
-      },
-    });
+    const membershipKey = { PK: `MEMBER#${userId}`, SK: `MEMBERSHIP#${regData.targetMonth}#${regData.membershipId}` };
+    // ADD on usage.* / weeklyUsage.* requires those maps to already exist on
+    // the item — a legacy/imported membership record missing either would
+    // throw a ValidationException that aborts the WHOLE transaction, blocking
+    // the admin from removing the member at all. Skip the membership counter
+    // update rather than let a bookkeeping field take down the removal.
+    const membershipRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: membershipKey }));
+    const membership = membershipRes.Item as MembershipItem | undefined;
+    if (membership?.usage && membership.weeklyUsage) {
+      const wKey = regData.weekKey;
+      transactItems.push({
+        Update: {
+          TableName: TABLE_NAME,
+          Key: membershipKey,
+          // usage is a DynamoDB reserved keyword — bare here it fails every call.
+          UpdateExpression: wKey
+            ? 'ADD #usage.totalMonthlyUsed :negOne, weeklyUsage.#wk :negOne SET updatedAt = :now'
+            : 'ADD #usage.totalMonthlyUsed :negOne SET updatedAt = :now',
+          ExpressionAttributeNames: wKey ? { '#wk': wKey, '#usage': 'usage' } : { '#usage': 'usage' },
+          ExpressionAttributeValues: { ':negOne': -1, ':now': nowIso },
+        },
+      });
+    }
   }
 
   try {

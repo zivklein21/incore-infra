@@ -99,7 +99,32 @@ export async function buildOrderFromProduct(
   const isSubscription = product.type === 'subscription';
   const isPublic = isSubscription ? product.is_public !== false : product.is_public === true;
   const assignedTo = product.assigned_to ?? [];
-  if (!isPublic && !assignedTo.includes(uid)) return { ok: false, error: 'product_not_assigned' };
+
+  // Cached so both this gate and the subscription start-date logic below
+  // share one query instead of two.
+  let activeMembershipsCache: Awaited<ReturnType<typeof queryAllActiveMemberships>> | null = null;
+  const getActiveMemberships = async () => {
+    if (activeMembershipsCache === null) activeMembershipsCache = await queryAllActiveMemberships(uid);
+    return activeMembershipsCache;
+  };
+
+  const visibility = product.visibility ?? (isPublic ? 'PUBLIC' : 'PRIVATE');
+  let hasAccess: boolean;
+  if (visibility === 'PUBLIC') {
+    hasAccess = true;
+  } else if (visibility === 'GROUPS') {
+    // Same "effective group" resolution as the client's canUserAccessProduct:
+    // an active membership's product wins; with none, an admin-assigned
+    // pending_membership stands in so a not-yet-billed member gets correct
+    // access at checkout too, not just in the product list they see.
+    const activeMemberships = await getActiveMemberships();
+    const activeProductId = (activeMemberships[0] as (typeof activeMemberships[number] & { productId?: string }) | undefined)?.productId ?? null;
+    const effectiveGroupProductId = activeProductId || member.pending_membership?.type || null;
+    hasAccess = !!effectiveGroupProductId && (product.target_group_ids ?? []).includes(effectiveGroupProductId);
+  } else {
+    hasAccess = assignedTo.includes(uid);
+  }
+  if (!hasAccess) return { ok: false, error: 'product_not_assigned' };
 
   const price = product.price ?? 0;
   if (price <= 0) return { ok: false, error: 'invalid_price' };
@@ -143,7 +168,7 @@ export async function buildOrderFromProduct(
   let endDate: string | undefined;
 
   if (productType === 'subscription') {
-    const activeMemberships = await queryAllActiveMemberships(uid);
+    const activeMemberships = await getActiveMemberships();
     const hasActiveMembership = activeMemberships.length > 0;
 
     let start: Date;

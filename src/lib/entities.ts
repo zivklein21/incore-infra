@@ -174,7 +174,10 @@ export interface MemberProfileItem {
   name?: string;
   email?: string;
   role?: string;
-  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number };
+  // 'parent_only' — created solely to hold Family Accounts links (adminCreateUser.ts's
+  // accountType field), no membership/booking of their own. Undefined/'member' is
+  // the default, ordinary trainee account. See listMyFamily.ts/switchProfile.ts.
+  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number; accountType?: 'member' | 'parent_only' };
   phone?: string;
   birthday?: string | number;
   // S3 object key (incore_uploads is fully private, see s3.tf) for the
@@ -385,6 +388,11 @@ export interface HypBillingAgreementItem {
   targetMonth?: string;
   consecutiveFailures: number;
   sourceOrderId: string;
+  // Set only when this agreement was created by bridgeTokenToBillingAgreement
+  // (hypBillingAgreements.ts) instead of a real checkout — i.e. it reuses a
+  // token saved by some other order rather than one captured for this plan.
+  // sourceOrderId is 'BRIDGED' (no real order backs it) whenever this is set.
+  bridgedFrom?: 'pending_membership' | 'active_membership';
   lastChargeResult?: { at: string; ccode: number; hypTransactionId: string | null; success: boolean };
   // Set the first time a "no card on file" charge attempt notifies admins —
   // that failure mode retries daily forever (unlike a real decline, which
@@ -432,6 +440,43 @@ export interface ProductItem {
 export interface WalletItem {
   PK: string; SK: string;
   extraPunches: number;
+}
+
+// PK=MEMBER#<parentUid>  SK=FAMILY#<childUid>
+// GSI1PK=MEMBER#<childUid> GSI1SK=FAMILYOF#<parentUid> — reverse lookup
+// ("who is this member's parent"), used by adminLinkFamilyMember.ts to
+// enforce one-parent-per-child and by switchProfile.ts-adjacent checks.
+// childName is a denormalized display hint only, set at link time — never
+// trusted as source of truth; adminListFamilyLinks.ts/listMyFamily.ts
+// re-resolve names live from the child's own MemberProfileItem.
+export interface FamilyLinkItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  linkId: string;
+  parentUid: string;
+  childUid: string;
+  childName?: string;
+  status: 'active';
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=SWITCHNONCE#<childUid>  SK=NONCE#<nonceId>
+// Ephemeral, single-use secret driving the CUSTOM_AUTH challenge flow that
+// lets switchProfile.ts obtain a linked child's real Cognito tokens without
+// ever knowing their password — see cognitoCreateAuthChallenge.ts /
+// cognitoVerifyAuthChallengeResponse.ts. TTL'd via the table's existing
+// expiresAtEpoch attribute; consumed synchronously within one switchProfile
+// invocation, so a short window is enough.
+export interface SwitchNonceItem {
+  PK: string; SK: string;
+  nonceId: string;
+  parentUid: string;
+  childUid: string;
+  secret: string;
+  consumed: boolean;
+  createdAt: string;
+  expiresAtEpoch: number;
 }
 
 // PK=CAMPAIGN#<monthId>  SK=METADATA  (monthId = "YYYY-MM")

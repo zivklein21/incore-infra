@@ -198,16 +198,30 @@ export async function createHypSignedPaymentUrl(params: CreatePaymentPageParams)
 
 // ─── action=APISign&What=VERIFY — confirm a redirect's authenticity ──────
 
-export async function verifyHypTransaction(redirectParams: Record<string, string>): Promise<{ verified: boolean; fields: Record<string, string> }> {
+// HYP's own docs: VERIFY must be sent "all parameters passed to your
+// success page URL, in the same order" — HYP recomputes its signature over
+// that exact byte sequence. Rebuilding the request from a parsed
+// Record<string, string> (as this used to) breaks that in two ways: (1)
+// API Gateway's parsed queryStringParameters doesn't preserve the
+// original field order, and (2) URLSearchParams decodes then re-encodes
+// every value as UTF-8, which corrupts any non-ASCII byte sequence (e.g. a
+// windows-1255-encoded Hebrew name echoed back in Fild1) before it's sent
+// back out. Either one alone is enough to make HYP reject a genuinely
+// approved charge as unverifiable (a bare `CCode=200`, no other fields).
+// event.rawQueryString is passed through by API Gateway untouched, so
+// concatenating it as-is preserves both the order and the exact bytes.
+export async function verifyHypTransaction(rawRedirectQueryString: string): Promise<{ verified: boolean; fields: Record<string, string> }> {
   const creds = await getHypCredentials();
-  const { fields } = await callHyp({
+  const authPrefix = new URLSearchParams({
     action: 'APISign',
     What: 'VERIFY',
     Masof: creds.masof,
     KEY: creds.key,
     PassP: creds.passP,
-    ...redirectParams,
-  });
+  }).toString();
+
+  const response = await fetch(`${HYP_BASE_URL}?${authPrefix}&${rawRedirectQueryString}`, { method: 'GET' });
+  const fields = parseHypResponse(await response.text());
   return { verified: ccodeOf(fields) === 0, fields };
 }
 

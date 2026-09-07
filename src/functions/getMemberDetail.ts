@@ -134,5 +134,13 @@ export async function handler(
     // already exposes to the member's own profile screen.
     pendingMembershipTypeId: p.pending_membership?.type ?? null,
     forceShowPaymentButton: p.admin?.forceShowPaymentButton === true,
+    payment: {
+      hasSavedCard: p.payment?.hasSavedCard === true,
+      hypTokenLast4: p.payment?.hypToken && p.payment.hypToken.length >= 4
+        ? p.payment.hypToken.slice(-4) : null,
+      hypTokenExpiryMonth: p.payment?.hypTokenExpiryMonth ?? null,
+      hypTokenExpiryYear: p.payment?.hypTokenExpiryYear ?? null,
+      cardBrand: p.payment?.cardBrand ?? null,
+    },
   });
 }

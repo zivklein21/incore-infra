@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import type { ClassItem, RegistrationItem, MemberProfileItem } from '../lib/entities';
+import type { ClassItem, RegistrationItem, MemberProfileItem, MembershipItem } from '../lib/entities';
 import { evaluateCancellationPolicy } from '../lib/cancellationPolicy';
 import { notifyAdmins } from '../lib/adminNotify';
 import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
@@ -74,6 +74,18 @@ export async function handler(
     adminCardExists = !!cardRes.Item;
   }
 
+  // ADD on usage.* / weeklyUsage.* requires those maps to already exist on the
+  // item — a legacy/imported membership record missing either would throw a
+  // ValidationException that aborts the WHOLE transaction, blocking the
+  // member from cancelling their own booking at all. Skip the membership
+  // counter update rather than let a bookkeeping field take down the cancel.
+  let membershipUsable = false;
+  if (membershipKey && isMembershipBased) {
+    const membershipRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: membershipKey }));
+    const membership = membershipRes.Item as MembershipItem | undefined;
+    membershipUsable = !!membership?.usage && !!membership.weeklyUsage;
+  }
+
   const nowIso = new Date().toISOString();
   const cancelPayload: Record<string, unknown> = {
     PK: cancelKey.PK,
@@ -111,7 +123,7 @@ export async function handler(
   ];
 
   if (policy.isLegal) {
-    if (membershipKey && isMembershipBased) {
+    if (membershipKey && membershipUsable) {
       const wKey = regData.weekKey;
       transactItems.push({
         Update: {
@@ -147,7 +159,7 @@ export async function handler(
         },
       });
     }
-  } else if (membershipKey && isMembershipBased) {
+  } else if (membershipKey && membershipUsable) {
     const wKey = regData.weekKey;
     transactItems.push({
       Update: {
