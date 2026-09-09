@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 
@@ -28,7 +29,10 @@ export async function handler(
   const childUid = typeof body.childUid === 'string' ? body.childUid.trim() : '';
   if (!parentUid || !childUid) return json(400, { error: 'missing_required_fields' });
 
-  await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${parentUid}`, SK: `FAMILY#${childUid}` } }));
+  const resolvedParent = await resolveMemberProfile(parentUid);
+  if (!resolvedParent) return json(404, { error: 'parent_not_found' });
+
+  await ddb.send(new DeleteCommand({ TableName: resolvedParent.table, Key: { PK: `MEMBER#${parentUid}`, SK: `FAMILY#${childUid}` } }));
 
   return json(200, { success: true });
 }

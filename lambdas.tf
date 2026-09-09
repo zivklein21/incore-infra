@@ -19,6 +19,8 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 }
 
 # Inline policy to give this role full access to our specific DynamoDB Table
+# (both incore_table and forca_table — see lib/memberLookup.ts for why every
+# function needs read access to both, even though most only ever write to one).
 resource "aws_iam_role_policy" "lambda_dynamodb" {
   name = "incore-lambda-dynamodb-policy"
   role = aws_iam_role.lambda_execution_role.id
@@ -26,9 +28,12 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["dynamodb:*"]
-      Resource = [aws_dynamodb_table.incore_table.arn, "${aws_dynamodb_table.incore_table.arn}/index/*"]
+      Effect = "Allow"
+      Action = ["dynamodb:*"]
+      Resource = [
+        aws_dynamodb_table.incore_table.arn, "${aws_dynamodb_table.incore_table.arn}/index/*",
+        aws_dynamodb_table.forca_table.arn, "${aws_dynamodb_table.forca_table.arn}/index/*",
+      ]
     }]
   })
 }
@@ -207,6 +212,7 @@ resource "aws_lambda_function" "fn" {
   environment {
     variables = {
       TABLE_NAME              = aws_dynamodb_table.incore_table.name
+      FORCA_TABLE_NAME        = aws_dynamodb_table.forca_table.name
       BUCKET_NAME             = aws_s3_bucket.incore_uploads.bucket
       COGNITO_USER_POOL_ID    = aws_cognito_user_pool.incore_user_pool.id
       COGNITO_APP_CLIENT_ID   = aws_cognito_user_pool_client.incore_app_client.id
@@ -231,8 +237,11 @@ resource "aws_lambda_function" "fn" {
 # the pool/client id anyway: Cognito passes userPoolId directly in the
 # trigger event payload, and unlike switchProfile.ts (a normal HTTP
 # function), they never call the Cognito API themselves — only DynamoDB
-# (TABLE_NAME), for the SwitchNonceItem lookups (see
-# cognitoCreateAuthChallenge.ts / cognitoVerifyAuthChallengeResponse.ts).
+# (TABLE_NAME/FORCA_TABLE_NAME), for the SwitchNonceItem lookups (see
+# cognitoCreateAuthChallenge.ts / cognitoVerifyAuthChallengeResponse.ts —
+# these dual-lookup both tables by childUid the same way switchProfile.ts
+# does, since the trigger has no other signal for which brand the child
+# belongs to).
 resource "aws_lambda_function" "cognito_trigger_fn" {
   for_each = toset(local.cognito_custom_auth_functions)
 
@@ -248,7 +257,8 @@ resource "aws_lambda_function" "cognito_trigger_fn" {
 
   environment {
     variables = {
-      TABLE_NAME = aws_dynamodb_table.incore_table.name
+      TABLE_NAME       = aws_dynamodb_table.incore_table.name
+      FORCA_TABLE_NAME = aws_dynamodb_table.forca_table.name
     }
   }
 }

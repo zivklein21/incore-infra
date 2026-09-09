@@ -1,8 +1,8 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { ddb } from '../lib/dynamo';
+import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
-import type { MemberProfileItem } from '../lib/entities';
 
 // POST /submitHealthDeclaration
 // Auth: Cognito JWT (any signed-in member)
@@ -31,10 +31,9 @@ export async function handler(
   const name = typeof body.name === 'string' ? body.name : '';
   const answers = (body.answers && typeof body.answers === 'object') ? body.answers : {};
 
-  const key = { PK: `MEMBER#${uid}`, SK: 'PROFILE' };
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: key }));
-  const profile = res.Item as MemberProfileItem | undefined;
-  if (!profile) return json(404, { error: 'member_not_found' });
+  const resolved = await resolveMemberProfile(uid);
+  if (!resolved) return json(404, { error: 'member_not_found' });
+  const { table, profile } = resolved;
 
   const healthDeclaration: Record<string, unknown> = {
     submitted_at: new Date().toISOString(),
@@ -54,8 +53,8 @@ export async function handler(
   };
 
   await ddb.send(new UpdateCommand({
-    TableName: TABLE_NAME,
-    Key: key,
+    TableName: table,
+    Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' },
     UpdateExpression: 'SET forms = :forms',
     ExpressionAttributeValues: { ':forms': forms },
   }));

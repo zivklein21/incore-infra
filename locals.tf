@@ -11,6 +11,7 @@ locals {
     adminAddToClass                    = { method = "POST" }
     adminAddTrialToClass               = { method = "POST" }
     adminApproveWaitlist               = { method = "POST" }
+    adminAssignGroup                   = { method = "POST" } # FORCA Coach feature: assign a trainee to a Group
     adminCancelRegistration            = { method = "POST" }
     adminChangeHypBillingAgreementPlan = { method = "POST" }
     adminChargeHypAgreementNow         = { method = "POST" }
@@ -19,6 +20,8 @@ locals {
     adminClearMemberships              = { method = "POST" }
     adminCreateUser                    = { method = "POST" } # IAM-privileged (AdminCreateUser) — see handler comment
     adminDeleteClassType               = { method = "POST" }
+    adminDeleteCoach                   = { method = "POST" } # FORCA Coach feature
+    adminDeleteGroup                   = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                  = { method = "POST" }
     adminDeleteMemberCredit            = { method = "POST" }
     adminDeleteNotificationTemplate    = { method = "POST" }
@@ -39,6 +42,7 @@ locals {
     adminGrantMembership               = { method = "POST" }
     adminLinkFamilyMember              = { method = "POST" } # Family Accounts: link a parent/child pair
     adminListFamilyLinks               = { method = "ANY" }  # Family Accounts: Admin Portal household list
+    adminListGroups                    = { method = "ANY" }  # FORCA Coach feature
     adminListHypBillingAgreements      = { method = "ANY" }
     adminListHypOrders                 = { method = "ANY" }
     adminListLogGroups                 = { method = "ANY" } # Admin Portal: Logs Viewer
@@ -54,6 +58,7 @@ locals {
     adminRunHypBillingCycle            = { method = "POST" }
     adminSaveBirthdayCampaign          = { method = "POST" }
     adminSaveClassType                 = { method = "POST" }
+    adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
     adminSaveNotificationTemplate      = { method = "POST" }
     adminSaveProduct                   = { method = "POST" }
     adminSaveRegistrationFormConfig    = { method = "POST" }
@@ -65,6 +70,7 @@ locals {
     adminSetHypBillingAgreementStatus  = { method = "POST" }
     adminSetMemberAlert                = { method = "POST" }
     adminUnlinkFamilyMember            = { method = "POST" } # Family Accounts: remove a parent/child link
+    adminUpdateCoachPersonal           = { method = "POST" } # FORCA Coach feature
     adminUpdateMemberCredit            = { method = "POST" }
     adminUpdateMembership              = { method = "POST" }
     adminUpdateMemberMembershipBadge   = { method = "POST" }
@@ -82,6 +88,7 @@ locals {
     createHypPaymentPage               = { method = "POST" }
     createHypTokenPurchase             = { method = "POST" }
     createSupportInquiry               = { method = "POST" }
+    createTrainingSession              = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
     deleteClass                        = { method = "POST" }
     deleteClassSeries                  = { method = "POST" }
     deleteMemberMessage                = { method = "POST" }
@@ -100,6 +107,7 @@ locals {
     getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
     getClasses                         = { method = "ANY" }
     getClassTypes                      = { method = "ANY" }
+    getCoachSessions                   = { method = "ANY" } # FORCA Coach feature: isCoachOrAdmin-gated
     getFileUrl                         = { method = "ANY" }
     getHypOrderStatus                  = { method = "ANY" }
     getInquiryMessages                 = { method = "ANY" }
@@ -124,6 +132,7 @@ locals {
     joinWaitlist                       = { method = "POST" }
     leaveWaitlist                      = { method = "POST" }
     listMyFamily                       = { method = "ANY" }  # Family Accounts: a member's own linked children
+    markActualAttendance               = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }
     resizeProfilePhoto                 = { method = "POST" }

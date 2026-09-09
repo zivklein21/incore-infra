@@ -1,13 +1,18 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 
 // POST /adminSaveProduct
-// Body: { id?: string, ...ProductItem fields } — omit id to create
+// Body: { id?: string, brand?: 'incore' | 'forca', ...ProductItem fields } — omit id to create
 // Auth: Cognito JWT, caller must be admin
+//
+// brand comes from the admin's Backoffice toggle (AdminBrandModeContext),
+// same permissive pattern as adminCreateUser.ts — anything but the literal
+// 'forca' defaults to 'incore'. Picks which table this plan is written to;
+// see the FORCA data separation plan.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -52,7 +57,8 @@ export async function handler(
   if (Array.isArray(body.allowed_class_ids)) item.allowed_class_ids = body.allowed_class_ids;
   if (isNew) item.createdAt = new Date().toISOString();
 
-  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+  const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
+  await ddb.send(new PutCommand({ TableName: tableForBrand(brand), Item: item }));
 
   return json(200, { success: true, id });
 }

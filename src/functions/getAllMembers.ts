@@ -4,6 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { getAllMemberProfiles } from '../lib/memberScan';
+import { tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import type { MemberProfileItem } from '../lib/entities';
 
@@ -32,18 +33,24 @@ function computeAge(birthday: string | number | undefined): number | null {
   return age;
 }
 
-// GET or POST /getAllMembers
+// GET or POST /getAllMembers?brand=incore|forca
 // Auth: Cognito JWT, caller must be admin
 // Full-table scan via getAllMemberProfiles() — same documented <=50-user
 // scale tradeoff already accepted by every other admin-scan caller
 // (birthday rewards, membership reminders, template broadcasts).
+//
+// brand picks which table to scan — the table itself is the brand filter
+// now (see the FORCA data separation plan), so this only ever returns one
+// brand's members per call. Defaults to 'incore' for callers that don't
+// pass it yet.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  const profiles = await getAllMemberProfiles();
+  const brand = event.queryStringParameters?.brand === 'forca' ? 'forca' as const : 'incore' as const;
+  const profiles = await getAllMemberProfiles(tableForBrand(brand));
 
   const members = await Promise.all(profiles
     .filter((p) => (p.identity?.role ?? p.role) !== 'admin')
@@ -84,6 +91,7 @@ export async function handler(
         agreedToPolicies: forms.agreedToPolicies === true,
         role: p.identity?.role ?? p.role ?? 'member',
         brand: p.identity?.brand ?? 'incore',
+        groupId: p.identity?.groupId ?? null,
         age: computeAge(birthday ?? undefined),
         birthday,
         photoUrl,

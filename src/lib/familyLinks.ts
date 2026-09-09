@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from './dynamo';
-import { deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from './entities';
+import { ddb } from './dynamo';
+import { resolveMemberProfile } from './memberLookup';
+import { deriveMemberName, type FamilyLinkItem } from './entities';
 
 export type CreateFamilyLinkResult =
   | { ok: true; linkId: string }
@@ -18,12 +19,25 @@ export async function createFamilyLink(
   childUid: string,
   callerUid: string,
 ): Promise<CreateFamilyLinkResult> {
-  const [parentRes, childRes, existingLinkRes, childAlreadyLinkedRes] = await Promise.all([
-    ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${parentUid}`, SK: 'PROFILE' } })),
-    ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${childUid}`, SK: 'PROFILE' } })),
-    ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${parentUid}`, SK: `FAMILY#${childUid}` } })),
+  const [resolvedParent, resolvedChild] = await Promise.all([
+    resolveMemberProfile(parentUid),
+    resolveMemberProfile(childUid),
+  ]);
+  if (!resolvedParent) return { ok: false, error: 'parent_not_found' };
+  if (!resolvedChild) return { ok: false, error: 'child_not_found' };
+  // INCORE and FORCA are fully separate tables — a family link is a single
+  // item that has to live in one of them, so a parent and child in
+  // different tables can't be linked at all, not just "shouldn't be." This
+  // is the same rule the old single-table brand_mismatch check enforced,
+  // now structural rather than a value comparison.
+  if (resolvedParent.table !== resolvedChild.table) return { ok: false, error: 'brand_mismatch' };
+  const table = resolvedParent.table;
+  const { profile: childProfile } = resolvedChild;
+
+  const [existingLinkRes, childAlreadyLinkedRes] = await Promise.all([
+    ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${parentUid}`, SK: `FAMILY#${childUid}` } })),
     ddb.send(new QueryCommand({
-      TableName: TABLE_NAME,
+      TableName: table,
       IndexName: 'GSI1',
       // GSI1 is shared by every entity with a "generic member-scoped
       // lookup" (registrations, support inquiries, orders, billing
@@ -33,21 +47,8 @@ export async function createFamilyLink(
       ExpressionAttributeValues: { ':pk': `MEMBER#${childUid}`, ':prefix': 'FAMILYOF#' },
     })),
   ]);
-
-  const parentProfile = parentRes.Item as MemberProfileItem | undefined;
-  const childProfile = childRes.Item as MemberProfileItem | undefined;
-  if (!parentProfile) return { ok: false, error: 'parent_not_found' };
-  if (!childProfile) return { ok: false, error: 'child_not_found' };
   if (existingLinkRes.Item) return { ok: false, error: 'already_linked' };
   if ((childAlreadyLinkedRes.Items?.length ?? 0) > 0) return { ok: false, error: 'child_already_linked' };
-  // INCORE and FORCA are kept as fully separate households — a FORCA
-  // trainee's parent must herself be a FORCA account and vice versa (see
-  // adminCreateUser.ts, which only ever auto-links within the same brand).
-  // Undefined brand on either side defaults to 'incore', same as everywhere
-  // else identity.brand is read.
-  const parentBrand = parentProfile.identity?.brand ?? 'incore';
-  const childBrand = childProfile.identity?.brand ?? 'incore';
-  if (parentBrand !== childBrand) return { ok: false, error: 'brand_mismatch' };
 
   const linkId = randomUUID();
   const nowIso = new Date().toISOString();
@@ -65,7 +66,7 @@ export async function createFamilyLink(
     createdBy: callerUid,
   };
 
-  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+  await ddb.send(new PutCommand({ TableName: table, Item: item }));
 
   return { ok: true, linkId };
 }

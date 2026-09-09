@@ -1,12 +1,13 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { resolveMemberProfile } from '../lib/memberLookup';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { computeComplianceFlags, type MemberProfileItem, type MembershipItem } from '../lib/entities';
+import { computeComplianceFlags, type MembershipItem } from '../lib/entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -50,22 +51,17 @@ export async function handler(
     return json(403, { error: 'forbidden' });
   }
 
-  const [profileRes, membershipsRes] = await Promise.all([
-    ddb.send(new GetCommand({
-      TableName: TABLE_NAME,
-      Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' },
-    })),
-    ddb.send(new QueryCommand({
-      TableName: TABLE_NAME,
-      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      FilterExpression: '#status = :active',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'MEMBERSHIP#', ':active': 'ACTIVE' },
-    })),
-  ]);
+  const resolved = await resolveMemberProfile(memberId);
+  if (!resolved) return json(404, { error: 'member_not_found' });
+  const { table, profile } = resolved;
 
-  const profile = profileRes.Item as MemberProfileItem | undefined;
-  if (!profile) return json(404, { error: 'member_not_found' });
+  const membershipsRes = await ddb.send(new QueryCommand({
+    TableName: table,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+    FilterExpression: '#status = :active',
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'MEMBERSHIP#', ':active': 'ACTIVE' },
+  }));
 
   const memberships = (membershipsRes.Items ?? []) as MembershipItem[];
   const activeMembership = memberships[0] ?? null;

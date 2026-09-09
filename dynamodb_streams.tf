@@ -12,9 +12,12 @@ resource "aws_iam_role_policy" "lambda_dynamodb_streams" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
-      Action   = ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator", "dynamodb:ListStreams"]
-      Resource = ["${aws_dynamodb_table.incore_table.arn}/stream/*"]
+      Effect = "Allow"
+      Action = ["dynamodb:DescribeStream", "dynamodb:GetRecords", "dynamodb:GetShardIterator", "dynamodb:ListStreams"]
+      Resource = [
+        "${aws_dynamodb_table.incore_table.arn}/stream/*",
+        "${aws_dynamodb_table.forca_table.arn}/stream/*",
+      ]
     }]
   })
 }
@@ -55,6 +58,24 @@ resource "aws_lambda_event_source_mapping" "fn" {
   for_each = toset(local.stream_functions)
 
   event_source_arn  = aws_dynamodb_table.incore_table.stream_arn
+  function_name     = aws_lambda_function.fn[each.key].arn
+  starting_position = "LATEST"
+  batch_size        = 10
+
+  filter_criteria {
+    filter {
+      pattern = jsonencode(local.stream_filter_criteria[each.key])
+    }
+  }
+}
+
+# Same 6 consumers, wired to forca_table's own stream too — a separate
+# resource (not a for_each over both tables on "fn" above) so this is purely
+# additive and never touches/recreates the existing incore mappings.
+resource "aws_lambda_event_source_mapping" "forca_fn" {
+  for_each = toset(local.stream_functions)
+
+  event_source_arn  = aws_dynamodb_table.forca_table.stream_arn
   function_name     = aws_lambda_function.fn[each.key].arn
   starting_position = "LATEST"
   batch_size        = 10

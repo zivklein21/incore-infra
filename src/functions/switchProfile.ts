@@ -6,7 +6,8 @@ import {
   AdminRespondToAuthChallengeCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { deriveMemberName, type MemberProfileItem, type FamilyLinkItem, type SwitchNonceItem } from '../lib/entities';
 
@@ -48,11 +49,19 @@ export async function handler(
   const childUid = typeof body.childUid === 'string' ? body.childUid.trim() : '';
   if (!childUid) return json(400, { error: 'missing_child_uid' });
 
-  const linkRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${callerUid}`, SK: `FAMILY#${childUid}` } }));
+  // Parent and child always resolve to the same table — createFamilyLink()
+  // rejects any link that would span tables — so finding the caller's own
+  // table also tells us where the FamilyLinkItem, child profile, and the
+  // SwitchNonceItem below all live.
+  const resolvedCaller = await resolveMemberProfile(callerUid);
+  if (!resolvedCaller) return json(404, { error: 'member_not_found' });
+  const { table } = resolvedCaller;
+
+  const linkRes = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${callerUid}`, SK: `FAMILY#${childUid}` } }));
   const link = linkRes.Item as FamilyLinkItem | undefined;
   if (!link || link.status !== 'active') return json(403, { error: 'forbidden' });
 
-  const childProfileRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${childUid}`, SK: 'PROFILE' } }));
+  const childProfileRes = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${childUid}`, SK: 'PROFILE' } }));
   const childProfile = childProfileRes.Item as MemberProfileItem | undefined;
   if (!childProfile) return json(404, { error: 'child_not_found' });
 
@@ -74,7 +83,7 @@ export async function handler(
     createdAt: nowIso,
     expiresAtEpoch: Math.floor(Date.now() / 1000) + NONCE_TTL_SECONDS,
   };
-  await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: nonceItem }));
+  await ddb.send(new PutCommand({ TableName: table, Item: nonceItem }));
 
   try {
     const initRes = await cognito.send(new AdminInitiateAuthCommand({

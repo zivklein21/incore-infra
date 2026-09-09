@@ -88,6 +88,30 @@ export interface RegistrationItem {
   // consumedFrom === 'TRIAL' — those have no MemberProfileItem to resolve a
   // name from. See getClassMembers.ts.
   fullName?: string;
+  // FORCA training-session attendance — createTrainingSession.ts sets both
+  // at auto-registration time (declaredAttendance always starts 'pending';
+  // trainee-side self-declaration isn't built yet). markActualAttendance.ts
+  // is a coach's (or admin's) only write action anywhere in the FORCA
+  // Coach feature. Undefined on every ordinary INCORE registration.
+  declaredAttendance?: 'pending' | 'yes' | 'no';
+  actualAttendance?: 'present' | 'absent' | null;
+}
+
+// PK=GROUP#<id>  SK=METADATA
+// FORCA-only, persistent training cohort — a trainee is assigned to at most
+// one via identity.groupId. createTrainingSession.ts scans for members with
+// a given groupId and auto-registers all of them, uncapped — see
+// adminSaveGroup.ts. FORCA has no separate membership-plan concept the way
+// INCORE does (ProductItem) — a Group doubles as that: it carries the same
+// name/description/price/sessionsPerWeek shape a membership plan would.
+export interface GroupItem {
+  PK: string; SK: string;
+  name: string;
+  description?: string;
+  price?: number;
+  sessionsPerWeek?: number;
+  createdAt: string;
+  createdBy: string;
 }
 
 export interface MembershipItem {
@@ -182,7 +206,12 @@ export interface MemberProfileItem {
   // (adminCreateUser.ts). Lives only here, never denormalized onto memberships/
   // registrations/orders — those are filtered by joining back to this field via
   // the member id. Undefined ⇒ treat as 'incore' (pre-FORCA legacy members).
-  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number; accountType?: 'member' | 'parent_only'; brand?: 'incore' | 'forca' };
+  // identity.role — 'admin' | 'coach' | 'member' (undefined). 'coach' is
+  // FORCA-only (see lib/auth.ts's isCoachOrAdmin) — restricted view-only
+  // staff access plus one write action (markActualAttendance.ts).
+  // identity.groupId — a FORCA trainee's assigned Group (GroupItem, see
+  // adminSaveGroup.ts) — the unit createTrainingSession.ts auto-registers.
+  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number; accountType?: 'member' | 'parent_only'; brand?: 'incore' | 'forca'; groupId?: string };
   phone?: string;
   birthday?: string | number;
   // S3 object key (incore_uploads is fully private, see s3.tf) for the

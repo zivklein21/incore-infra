@@ -2,7 +2,8 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { computeComplianceFlags, deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from '../lib/entities';
@@ -24,15 +25,20 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
 
+  const resolved = await resolveMemberProfile(callerUid);
+  if (!resolved) return json(200, { children: [] });
+  const { table } = resolved;
+
   const linksRes = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
+    TableName: table,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${callerUid}`, ':prefix': 'FAMILY#' },
   }));
   const links = (linksRes.Items ?? []) as FamilyLinkItem[];
 
   const children = await Promise.all(links.map(async (link) => {
-    const childRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${link.childUid}`, SK: 'PROFILE' } }));
+    // Same table as the parent — createFamilyLink() only allows same-table links.
+    const childRes = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${link.childUid}`, SK: 'PROFILE' } }));
     const profile = childRes.Item as MemberProfileItem | undefined;
     if (!profile) return null;
 

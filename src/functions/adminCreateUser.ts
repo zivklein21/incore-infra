@@ -6,7 +6,7 @@ import {
 } from '@aws-sdk/client-cognito-identity-provider';
 import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import * as nodemailer from 'nodemailer';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
@@ -28,7 +28,10 @@ import type { MemberProfileItem } from '../lib/entities';
 // !== 'parent_only') requires parentFirstName/parentPhone/parentEmail, and
 // this handler creates-or-reuses a 'parent_only' account for that email and
 // links it to the trainee via createFamilyLink — see the FORCA Member
-// Creation & Parental Onboarding plan. requireHealthForm/requireRegistrationForm
+// Creation & Parental Onboarding plan. FORCA's data lives in its own
+// DynamoDB table (see lib/dynamo.ts's tableForBrand()) — both the trainee
+// and her parent are written there, never to the incore table.
+// requireHealthForm/requireRegistrationForm
 // are forced true for FORCA trainees regardless of what the caller sent:
 // these are mandatory for minors, not an admin-optional toggle. The parent's
 // own compliance flags (getProfile.ts) are computed from her own forms/admin
@@ -68,6 +71,7 @@ export async function handler(
     birthday?: unknown; age?: unknown; requireHealthForm?: unknown;
     requireRegistrationForm?: unknown; membershipId?: unknown; accountType?: unknown;
     brand?: unknown; parentFirstName?: unknown; parentLastName?: unknown; parentPhone?: unknown; parentEmail?: unknown;
+    role?: unknown; groupId?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -86,7 +90,16 @@ export async function handler(
   // incore-app). Anything other than the literal 'forca' defaults to 'incore',
   // same permissive style as accountType above.
   const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
-  const isForcaTrainee = brand === 'forca' && accountType !== 'parent_only';
+  // Coach (מדריכה): FORCA-only restricted staff role — view-only across
+  // sessions/rosters/tracking, one write action (markActualAttendance.ts).
+  // She's staff, not a trainee, so isForcaTrainee below excludes her —
+  // no parent-linking, no health/registration-form requirements.
+  const isCoach = brand === 'forca' && body.role === 'coach';
+  const isForcaTrainee = brand === 'forca' && accountType !== 'parent_only' && !isCoach;
+  // A FORCA trainee's persistent training cohort (GroupItem, adminSaveGroup.ts)
+  // — meaningless for a coach or a parent_only account.
+  const groupId = isForcaTrainee && typeof body.groupId === 'string' && body.groupId
+    ? body.groupId : undefined;
 
   let parentFirstName = '';
   let parentLastName = '';
@@ -115,7 +128,7 @@ export async function handler(
   let parentUid: string | undefined;
   if (isForcaTrainee) {
     const existingRes = await ddb.send(new QueryCommand({
-      TableName: TABLE_NAME,
+      TableName: tableForBrand('forca'),
       IndexName: 'GSI3',
       KeyConditionExpression: 'GSI3PK = :pk',
       ExpressionAttributeValues: { ':pk': `EMAIL#${parentEmail}` },
@@ -123,8 +136,11 @@ export async function handler(
     }));
     const existingParent = existingRes.Items?.[0] as MemberProfileItem | undefined;
     if (existingParent) {
-      const identity = existingParent.identity;
-      if (identity?.accountType === 'parent_only' && identity?.brand === 'forca') {
+      // Already scoped to the FORCA table by the query above, so brand is
+      // guaranteed — only accountType still needs checking (Cognito
+      // enforces email uniqueness pool-wide, so a hit here means this email
+      // belongs to some FORCA member; just not necessarily a parent_only one).
+      if (existingParent.identity?.accountType === 'parent_only') {
         parentUid = (existingParent.PK as string).replace('MEMBER#', '');
       } else {
         return json(409, { error: 'parent_email_conflict' });
@@ -137,6 +153,7 @@ export async function handler(
         phone: parentPhone,
         accountType: 'parent_only',
         brand: 'forca',
+        role: 'member',
         requireHealthForm: false,
         requireRegistrationForm: false,
       }, callerUid, cognito, userPoolId);
@@ -155,6 +172,8 @@ export async function handler(
     phone,
     accountType,
     brand,
+    role: isCoach ? 'coach' : 'member',
+    groupId,
     requireHealthForm,
     requireRegistrationForm,
     birthday: typeof body.birthday === 'string' ? body.birthday : undefined,
@@ -197,6 +216,8 @@ interface CreateMemberInput {
   phone: string;
   accountType: 'member' | 'parent_only';
   brand: 'incore' | 'forca';
+  role: 'member' | 'coach';
+  groupId?: string;
   requireHealthForm: boolean;
   requireRegistrationForm: boolean;
   birthday?: string;
@@ -250,9 +271,10 @@ async function createMemberAccount(
       last_name: input.lastName,
       email: input.email,
       phone: input.phone,
-      role: 'member',
+      role: input.role,
       accountType: input.accountType,
       brand: input.brand,
+      ...(input.groupId ? { groupId: input.groupId } : {}),
       ...(input.birthday ? { birthday: input.birthday } : {}),
       ...(input.age != null ? { age: input.age } : {}),
     },
@@ -268,7 +290,7 @@ async function createMemberAccount(
   }
 
   try {
-    await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: profileItem }));
+    await ddb.send(new PutCommand({ TableName: tableForBrand(input.brand), Item: profileItem }));
   } catch (err: any) {
     // Roll back the Cognito user if the profile write fails, so Cognito and
     // DynamoDB never end up out of sync (same rationale as the old Firebase
