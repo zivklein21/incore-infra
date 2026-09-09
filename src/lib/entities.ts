@@ -177,7 +177,12 @@ export interface MemberProfileItem {
   // 'parent_only' — created solely to hold Family Accounts links (adminCreateUser.ts's
   // accountType field), no membership/booking of their own. Undefined/'member' is
   // the default, ordinary trainee account. See listMyFamily.ts/switchProfile.ts.
-  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number; accountType?: 'member' | 'parent_only' };
+  // brand — which framework (INCORE studio vs FORCA military prep) this member
+  // belongs to, set once at creation from the admin's active Backoffice toggle
+  // (adminCreateUser.ts). Lives only here, never denormalized onto memberships/
+  // registrations/orders — those are filtered by joining back to this field via
+  // the member id. Undefined ⇒ treat as 'incore' (pre-FORCA legacy members).
+  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number; accountType?: 'member' | 'parent_only'; brand?: 'incore' | 'forca' };
   phone?: string;
   birthday?: string | number;
   // S3 object key (incore_uploads is fully private, see s3.tf) for the
@@ -264,6 +269,35 @@ export function deriveMemberName(profile: MemberProfileItem): string {
   const last = id?.last_name ?? '';
   if (first || last) return `${first} ${last}`.trim();
   return profile.name ?? '';
+}
+
+export interface ComplianceFlags {
+  requiresRegistrationForm: boolean;
+  requiresHealthDeclaration: boolean;
+  requiresPoliciesAgreement: boolean;
+}
+
+// Shared by getProfile.ts (self/admin lookup) and listMyFamily.ts (a
+// parent's own linked-children listing) — same logic, computed once so a
+// FORCA parent can see which of her linked daughters still need forms
+// without an extra getProfile round-trip per child.
+export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFlags {
+  const role = profile.identity?.role ?? profile.role ?? 'member';
+  const forms = profile.forms ?? {};
+  const admin = profile.admin ?? {};
+
+  const registrationFormFilled = forms.registration_form === true;
+  const requiresRegistrationForm = admin.require_registration_form === true && !registrationFormFilled;
+
+  const hdSubmittedAt = forms.health_declaration?.submitted_at;
+  const twoYearsAgo = new Date();
+  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
+  const requiresHealthDeclaration = role !== 'admin' && admin.require_health_form === true
+    && (!hdSubmittedAt || new Date(hdSubmittedAt) < twoYearsAgo);
+
+  const requiresPoliciesAgreement = role !== 'admin' && forms.agreedToPolicies !== true;
+
+  return { requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement };
 }
 
 // PK=ALERT#<id>  SK=METADATA

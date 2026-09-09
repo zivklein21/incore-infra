@@ -83,6 +83,7 @@ export async function handler(
           && Object.keys(forms.registration_answers).length > 0,
         agreedToPolicies: forms.agreedToPolicies === true,
         role: p.identity?.role ?? p.role ?? 'member',
+        brand: p.identity?.brand ?? 'incore',
         age: computeAge(birthday ?? undefined),
         birthday,
         photoUrl,

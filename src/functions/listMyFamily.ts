@@ -5,7 +5,7 @@ import { QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { s3, BUCKET_NAME } from '../lib/s3';
-import { deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from '../lib/entities';
+import { computeComplianceFlags, deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from '../lib/entities';
 
 const PHOTO_URL_EXPIRY_SECONDS = 900;
 
@@ -48,6 +48,8 @@ export async function handler(
       name: deriveMemberName(profile),
       photoUrl,
       membershipStatus: deriveStatus(profile.membership?.status),
+      brand: profile.identity?.brand ?? 'incore',
+      ...computeComplianceFlags(profile),
     };
   }));
 

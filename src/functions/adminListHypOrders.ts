@@ -28,11 +28,13 @@ export async function handler(
     const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${o.userId}`, SK: 'PROFILE' } }));
     const member = memberRes.Item as MemberProfileItem | undefined;
     const memberName = member?.identity?.name || member?.name || 'Unknown';
+    const brand = member?.identity?.brand ?? 'incore';
 
     return {
       id: o.orderId,
       memberId: o.userId,
       memberName,
+      brand,
       productName: o.productName,
       productType: o.productType,
       paymentMethod: o.paymentMethod,

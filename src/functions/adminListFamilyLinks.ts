@@ -58,6 +58,10 @@ export async function handler(
       childUid: link.childUid,
       childName: childProfile ? deriveMemberName(childProfile) : (link.childName ?? link.childUid),
       createdAt: link.createdAt,
+      // INCORE and FORCA households are kept fully separate (see
+      // lib/familyLinks.ts's brand_mismatch check) — both sides always
+      // agree, so either profile's brand works here.
+      brand: childProfile?.identity?.brand ?? parentProfile?.identity?.brand ?? 'incore',
     };
   }));
 

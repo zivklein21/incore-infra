@@ -6,7 +6,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { MemberProfileItem, MembershipItem } from '../lib/entities';
+import { computeComplianceFlags, type MemberProfileItem, type MembershipItem } from '../lib/entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -32,11 +32,13 @@ function computeAge(birthday: string | number | undefined): number | null {
 // getWallet.ts).
 //
 // requiresRegistrationForm / requiresHealthDeclaration / requiresPoliciesAgreement
-// are now computed for real from forms.* (see submitRegistrationForm.ts /
-// submitHealthDeclaration.ts / acceptPolicies.ts, which write those fields)
-// and admin.require_health_form / admin.require_registration_form (set at
-// account-creation time by adminCreateUser.ts) — same logic the old
-// Firebase useAuth.ts's buildAuthUser used.
+// are computed by computeComplianceFlags() (lib/entities.ts) from forms.*
+// (see submitRegistrationForm.ts / submitHealthDeclaration.ts /
+// acceptPolicies.ts, which write those fields) and admin.require_health_form
+// / admin.require_registration_form (set at account-creation time by
+// adminCreateUser.ts) — same logic the old Firebase useAuth.ts's
+// buildAuthUser used. Also reused by listMyFamily.ts so a FORCA parent can
+// see which linked daughter still needs forms.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -75,7 +77,6 @@ export async function handler(
     || '';
 
   const forms = profile.forms ?? {};
-  const admin = profile.admin ?? {};
 
   const registrationAnswers = forms.registration_answers;
   // forms.registration_form is the atomic "member completed this step" flag
@@ -84,15 +85,7 @@ export async function handler(
   // configured form has zero questions (submits as {}), leaving members
   // stuck being routed back to a form that already succeeded.
   const registrationFormFilled = forms.registration_form === true;
-  const requiresRegistrationForm = admin.require_registration_form === true && !registrationFormFilled;
-
-  const hdSubmittedAt = forms.health_declaration?.submitted_at;
-  const twoYearsAgo = new Date();
-  twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-  const requiresHealthDeclaration = role !== 'admin' && admin.require_health_form === true
-    && (!hdSubmittedAt || new Date(hdSubmittedAt) < twoYearsAgo);
-
-  const requiresPoliciesAgreement = role !== 'admin' && forms.agreedToPolicies !== true;
+  const { requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement } = computeComplianceFlags(profile);
 
   const birthday = profile.identity?.birthday ?? profile.birthday ?? null;
   const age = computeAge(birthday ?? undefined);
@@ -142,6 +135,7 @@ export async function handler(
     // no membership/booking of their own (adminCreateUser.ts). Undefined/
     // 'member' is a normal trainee account.
     accountType: profile.identity?.accountType ?? 'member',
+    brand: profile.identity?.brand ?? 'incore',
     hasMembership: !!activeMembership,
     membershipType: activeMembership?.type ?? null,
     membershipStatus: activeMembership?.status ?? null,
