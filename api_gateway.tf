@@ -77,14 +77,20 @@ resource "aws_lambda_permission" "apigw" {
 }
 
 # ── Dedicated OPTIONS routes for browser CORS preflight ─────────────────────
-# See corsPreflight.ts for the full "why": most functions above are
-# registered with method="ANY", which also matches OPTIONS and forwards
-# preflight requests into that route's JWT authorizer — which rejects them
-# (no browser preflight carries an Authorization header), and a non-2xx
-# preflight response makes the browser abort the real request as a network
-# error. An explicit, more-specific "OPTIONS /<path>" route (no authorizer)
-# wins routing precedence over the paired "ANY" route for OPTIONS
-# specifically, without touching how GET/POST/etc. on that same path work.
+# See corsPreflight.ts for the full "why": functions registered with
+# method="ANY" also match OPTIONS and forward preflight requests into that
+# route's JWT authorizer — which rejects them (no browser preflight carries
+# an Authorization header), and a non-2xx preflight response makes the
+# browser abort the real request as a network error. An explicit, more-
+# specific "OPTIONS /<path>" route (no authorizer) wins routing precedence
+# over the paired "ANY" route for OPTIONS specifically, without touching how
+# GET/POST/etc. on that same path work.
+#
+# Scoped to cors_preflight_functions (method="ANY" only, see locals.tf) —
+# a GET/POST-only route never matches OPTIONS in the first place, so it's
+# already served by the API's own cors_configuration block with no route of
+# its own needed. Creating one for every function anyway is what previously
+# pushed this API over its 300-routes-per-API quota.
 
 resource "aws_apigatewayv2_integration" "cors_preflight" {
   api_id                 = aws_apigatewayv2_api.incore_api.id
@@ -94,7 +100,7 @@ resource "aws_apigatewayv2_integration" "cors_preflight" {
 }
 
 resource "aws_apigatewayv2_route" "cors_preflight" {
-  for_each = local.all_http_functions
+  for_each = local.cors_preflight_functions
 
   api_id    = aws_apigatewayv2_api.incore_api.id
   route_key = "OPTIONS /${each.key}"

@@ -18,6 +18,36 @@ export interface ClassItem {
   // allowedMemberIds (and not already registered, and not an admin).
   isPrivate?: boolean;
   allowedMemberIds?: string[];
+  // FORCA training-session-only fields (see createTrainingSession.ts) —
+  // groupId is also FORCA-only but was already being set ad hoc without a
+  // typed field; these three are typed properly since new code reads them.
+  // trainingTypeId points at the TrainingTypeItem this session was created
+  // for (optional — a session can be untyped); equipmentTaken is what the
+  // coach has currently checked out for this specific session — each entry's
+  // quantity is the neededQuantity computed at check-out time (custom, or
+  // per_member resolved against this session's exact allowedMemberIds
+  // count), stored rather than re-derived so a later change to the group's
+  // size or the training type's mode doesn't silently change how much
+  // returnSessionEquipment.ts hands back. equipmentReturnedAt is set once
+  // she logs everything back — see toggleSessionEquipment.ts /
+  // returnSessionEquipment.ts, both of which nudge that EquipmentItem's
+  // outCount up/down by the stored quantity, not a flat 1.
+  trainingTypeId?: string;
+  equipmentTaken?: { equipmentId: string; quantity: number }[];
+  equipmentReturnedAt?: string;
+  // Stamped once checkUnreturnedEquipmentAlerts.ts has raised a SystemAlertItem
+  // for this session's still-outstanding equipment — prevents re-alerting on
+  // every hourly run for the same session.
+  equipmentAlertSentAt?: string;
+  location?: string;
+  // Denormalized at creation time (see createTrainingSession.ts /
+  // getCoachOptions.ts) rather than resolved by id on read — a coach lives
+  // in the FORCA table but an admin only exists in the INCORE table, so
+  // there's no single dual-table "resolve this uid's name" helper the way
+  // resolveMemberProfile() covers trainees; storing the name once at
+  // creation avoids needing one.
+  coachId?: string;
+  coachName?: string;
 }
 
 // Shared validation for the isPrivate/allowedMemberIds pair, used by
@@ -89,11 +119,13 @@ export interface RegistrationItem {
   // name from. See getClassMembers.ts.
   fullName?: string;
   // FORCA training-session attendance — createTrainingSession.ts sets both
-  // at auto-registration time (declaredAttendance always starts 'pending';
-  // trainee-side self-declaration isn't built yet). markActualAttendance.ts
-  // is a coach's (or admin's) only write action anywhere in the FORCA
-  // Coach feature. Undefined on every ordinary INCORE registration.
+  // at auto-registration time (declaredAttendance always starts 'pending').
+  // declareAttendance.ts is the trainee's own write path (self only, see its
+  // ownership check); markActualAttendance.ts is the coach's (or admin's)
+  // separate write action. Undefined on every ordinary INCORE registration.
   declaredAttendance?: 'pending' | 'yes' | 'no';
+  // Optional free-text reason, only meaningful when declaredAttendance === 'no'.
+  declineReason?: string;
   actualAttendance?: 'present' | 'absent' | null;
 }
 
@@ -110,6 +142,67 @@ export interface GroupItem {
   description?: string;
   price?: number;
   sessionsPerWeek?: number;
+  createdAt: string;
+  createdBy: string;
+}
+
+// A single equipment requirement on a TrainingTypeItem — 'custom' is a
+// fixed quantity the admin types in (e.g. "always 2 stopwatches, however
+// many trainees"); 'per_member' scales with how many members are actually
+// registered for a given session (createTrainingSession.ts auto-registers
+// every current Group member, so that count is known exactly per session —
+// see getCoachSessions.ts's neededQuantity calculation). customQuantity is
+// only read when mode is 'custom'.
+export interface TrainingTypeEquipmentRequirement {
+  equipmentId: string;
+  mode: 'custom' | 'per_member';
+  customQuantity?: number;
+}
+
+// PK=TRAININGTYPE#<id> SK=METADATA — FORCA's equivalent of INCORE's
+// ClassType (see adminSaveClassType.ts), extended with a duration and a set
+// of required-equipment entries (picked from the Manage > Equipment list).
+// FORCA-only, lives in the FORCA table exclusively.
+export interface TrainingTypeItem {
+  PK: string; SK: string;
+  name: string;
+  durationMinutes?: number;
+  equipmentRequirements?: TrainingTypeEquipmentRequirement[];
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=EQUIPMENT#<id> SK=METADATA — FORCA's gear inventory: admin tracks how
+// many of each item exist (quantity) and how many units are currently
+// checked out and not yet back (outCount, 0..quantity) — a partial return
+// (e.g. 3 of 5 ropes taken, only 2 back) shows as outCount=1, not a single
+// all-or-nothing flag. Not a per-session checkout log — one running count
+// per equipment item, adjusted manually. TrainingTypeItem.equipmentRequirements
+// references these. FORCA-only, lives in the FORCA table exclusively.
+export interface EquipmentItem {
+  PK: string; SK: string;
+  name: string;
+  quantity: number;
+  outCount: number;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=EXTRATRAINING#<id> SK=METADATA — FORCA's admin-managed "Extra Training"
+// content library: out-of-class videos/PDFs trainees can browse on their
+// own time (distinct from a scheduled Training Session — see
+// createTrainingSession.ts). fileKey is an S3 object key under
+// forca-extra-training/ (see ADMIN_UPLOAD_PREFIXES in lib/adminConfig.ts),
+// resolved to a short-lived signed URL on read by getExtraTraining.ts, never
+// stored/returned as a raw fetchable URL. FORCA-only, lives in the FORCA
+// table exclusively.
+export interface ExtraTrainingItem {
+  PK: string; SK: string;
+  title: string;
+  description?: string;
+  category?: string;
+  contentType: 'video' | 'pdf';
+  fileKey: string;
   createdAt: string;
   createdBy: string;
 }

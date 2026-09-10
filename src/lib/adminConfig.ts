@@ -68,4 +68,4 @@ export const EDITABLE_APPCONFIG_KEYS = [
 // allowlist from getUploadUrl.ts's ALLOWED_PREFIXES because those are
 // member-owned-path prefixes gated by "path contains caller's own uid",
 // which doesn't apply to admin-authored assets like product photos.
-export const ADMIN_UPLOAD_PREFIXES = ['product-images/', 'class-images/', 'documents/'];
+export const ADMIN_UPLOAD_PREFIXES = ['product-images/', 'class-images/', 'documents/', 'forca-extra-training/'];

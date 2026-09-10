@@ -30,10 +30,13 @@ export async function handler(
   if (!resolved) return json(404, { error: 'member_not_found' });
   if (resolved.table !== FORCA_TABLE_NAME) return json(400, { error: 'not_a_forca_member' });
 
+  // identity is a DynamoDB reserved keyword — bare here it fails every call
+  // (see adminUpdateMemberPersonal.ts's #identity alias for the same issue).
   await ddb.send(new UpdateCommand({
     TableName: FORCA_TABLE_NAME,
     Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' },
-    UpdateExpression: groupId ? 'SET identity.groupId = :groupId' : 'REMOVE identity.groupId',
+    UpdateExpression: groupId ? 'SET #identity.groupId = :groupId' : 'REMOVE #identity.groupId',
+    ExpressionAttributeNames: { '#identity': 'identity' },
     ...(groupId ? { ExpressionAttributeValues: { ':groupId': groupId } } : {}),
   }));
 

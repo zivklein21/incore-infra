@@ -21,12 +21,15 @@ locals {
     adminCreateUser                    = { method = "POST" } # IAM-privileged (AdminCreateUser) — see handler comment
     adminDeleteClassType               = { method = "POST" }
     adminDeleteCoach                   = { method = "POST" } # FORCA Coach feature
+    adminDeleteEquipment               = { method = "POST" } # FORCA Coach feature
+    adminDeleteExtraTraining           = { method = "POST" } # FORCA Extra Training feature
     adminDeleteGroup                   = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                  = { method = "POST" }
     adminDeleteMemberCredit            = { method = "POST" }
     adminDeleteNotificationTemplate    = { method = "POST" }
     adminDeleteProduct                 = { method = "POST" }
     adminDeleteS3Object                = { method = "POST" } # Admin Portal: Assets Manager
+    adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
     adminEvictFutureRegistrations      = { method = "POST" }
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
     adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
@@ -58,12 +61,15 @@ locals {
     adminRunHypBillingCycle            = { method = "POST" }
     adminSaveBirthdayCampaign          = { method = "POST" }
     adminSaveClassType                 = { method = "POST" }
+    adminSaveEquipment                 = { method = "POST" } # FORCA Coach feature
+    adminSaveExtraTraining             = { method = "POST" } # FORCA Extra Training feature
     adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
     adminSaveNotificationTemplate      = { method = "POST" }
     adminSaveProduct                   = { method = "POST" }
     adminSaveRegistrationFormConfig    = { method = "POST" }
     adminSaveSystemConfig              = { method = "POST" } # Admin Portal: Config screen
     adminSaveTermsOfServiceContent     = { method = "POST" }
+    adminSaveTrainingType              = { method = "POST" } # FORCA Coach feature
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
     adminSetForceShowPaymentButton     = { method = "POST" }
@@ -89,6 +95,7 @@ locals {
     createHypTokenPurchase             = { method = "POST" }
     createSupportInquiry               = { method = "POST" }
     createTrainingSession              = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
+    declareAttendance                  = { method = "POST" } # FORCA Coach feature: trainee's own declared attendance
     deleteClass                        = { method = "POST" }
     deleteClassSeries                  = { method = "POST" }
     deleteMemberMessage                = { method = "POST" }
@@ -107,7 +114,10 @@ locals {
     getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
     getClasses                         = { method = "ANY" }
     getClassTypes                      = { method = "ANY" }
+    getCoachOptions                    = { method = "GET" } # FORCA Coach feature: admin-only
     getCoachSessions                   = { method = "ANY" } # FORCA Coach feature: isCoachOrAdmin-gated
+    getEquipment                       = { method = "GET" } # FORCA Coach feature
+    getExtraTraining                   = { method = "GET" } # FORCA Extra Training feature
     getFileUrl                         = { method = "ANY" }
     getHypOrderStatus                  = { method = "ANY" }
     getInquiryMessages                 = { method = "ANY" }
@@ -118,6 +128,7 @@ locals {
     getMemberMessages                  = { method = "ANY" }
     getMyBillingAgreement              = { method = "ANY" }
     getMyInquiries                     = { method = "ANY" }
+    getMyTrainingSessions              = { method = "GET" } # FORCA Coach feature: trainee's own upcoming sessions
     getNotificationTemplates           = { method = "ANY" }
     getNotificationTimingSettings      = { method = "ANY" }
     getPaymentPolicySettings           = { method = "ANY" }
@@ -126,6 +137,7 @@ locals {
     getRegistrationFormConfig          = { method = "ANY" }
     getSupportSettings                 = { method = "ANY" }
     getTermsOfServiceContent           = { method = "ANY" }
+    getTrainingTypes                   = { method = "GET" } # FORCA Coach feature
     getUploadUrl                       = { method = "POST" }
     getWallet                          = { method = "ANY" }
     grantPunchCard                     = { method = "POST" }
@@ -136,6 +148,7 @@ locals {
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }
     resizeProfilePhoto                 = { method = "POST" }
+    returnSessionEquipment             = { method = "POST" } # FORCA Coach feature
     saveClassSeries                    = { method = "POST" }
     saveScheduleAlertSettings          = { method = "POST" }
     saveSupportSettings                = { method = "POST" }
@@ -146,6 +159,7 @@ locals {
     submitRegistrationForm             = { method = "POST" }
     swapClass                          = { method = "POST" }
     switchProfile                      = { method = "POST" } # Family Accounts: parent -> linked child token swap
+    toggleSessionEquipment             = { method = "POST" } # FORCA Coach feature
     triggerTemplateAlert               = { method = "POST" }
     updateClass                        = { method = "POST" }
     updateProfile                      = { method = "POST" }
@@ -178,24 +192,33 @@ locals {
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
 
+  # Only method="ANY" routes actually swallow OPTIONS and need a dedicated
+  # preflight route (see api_gateway.tf's aws_apigatewayv2_route.cors_preflight)
+  # — a GET/POST-only route never matches OPTIONS, so it's already covered by
+  # the API's own cors_configuration block with no extra route required.
+  # Keeping this filtered (instead of covering every function) is what keeps
+  # total route count under API Gateway v2's per-API route quota.
+  cors_preflight_functions = { for k, v in local.all_http_functions : k => v if v.method == "ANY" }
+
   # EventBridge Scheduler — cron expressions in AWS's 6-field syntax,
   # evaluated in Asia/Jerusalem (schedule_expression_timezone), matching the
   # original Firebase onSchedule({ timeZone: 'Asia/Jerusalem' }) configs
   # exactly rather than requiring manual UTC/DST conversion.
   scheduled_functions = {
-    expireProducts             = "cron(0 2 * * ? *)"       # 02:00 daily
-    activatePendingMemberships = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
-    clearUsedPunchCards        = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
-    distributeBirthdayRewards  = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
-    weekendSessionsRoutine     = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend
-    monthEndRollover           = "cron(59 23 28-31 * ? *)" # 23:59 on days 28-31 (last-day guard inside)
-    subscriptionExpiryAlert    = "cron(0 20 28-31 * ? *)"  # 20:00 on days 28-31 (last-day guard inside)
-    classReminderEngine        = "cron(0 * * * ? *)"       # top of every hour
-    scheduleAlertRoutine       = "cron(0/10 * * * ? *)"    # every 10 minutes
-    sendMembershipReminders    = "cron(0 9 * * ? *)"       # 09:00 daily
-    cleanupExpiredMessages     = "cron(0 * * * ? *)"       # hourly (TTL handles most of this — see README.md)
-    processWaitlistTimeouts    = "cron(0/1 * * * ? *)"     # every minute
-    chargeHypBillingAgreements = "cron(0 3 * * ? *)"       # 03:00 daily
+    expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
+    activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
+    clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
+    distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
+    weekendSessionsRoutine         = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend
+    monthEndRollover               = "cron(59 23 28-31 * ? *)" # 23:59 on days 28-31 (last-day guard inside)
+    subscriptionExpiryAlert        = "cron(0 20 28-31 * ? *)"  # 20:00 on days 28-31 (last-day guard inside)
+    classReminderEngine            = "cron(0 * * * ? *)"       # top of every hour
+    scheduleAlertRoutine           = "cron(0/10 * * * ? *)"    # every 10 minutes
+    sendMembershipReminders        = "cron(0 9 * * ? *)"       # 09:00 daily
+    cleanupExpiredMessages         = "cron(0 * * * ? *)"       # hourly (TTL handles most of this — see README.md)
+    processWaitlistTimeouts        = "cron(0/1 * * * ? *)"     # every minute
+    chargeHypBillingAgreements     = "cron(0 3 * * ? *)"       # 03:00 daily
+    checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
   }
 
   # DynamoDB Streams consumers — every one of these must filter internally
