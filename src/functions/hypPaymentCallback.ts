@@ -9,6 +9,7 @@ import { getPolicySettings, getMemberFullName } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from '../lib/adminNotify';
+import { handleMerchOrderCallback } from '../lib/merchPayments';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
@@ -28,6 +29,17 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (!orderId) {
     console.error('[hypPaymentCallback] missing Order param in redirect');
     return redirectTo('error');
+  }
+
+  // HYP's success-redirect URL is one fixed merchant-portal setting shared
+  // by both brands' orders (there's no per-transaction callback param — see
+  // hypClient.ts's createHypSignedPaymentUrl), so a merch order's redirect
+  // lands here too. Dispatch it to its own fully self-contained handler
+  // (FORCA table, MerchOrderItem) before any of the INCORE-specific
+  // subscription/installment/billing-agreement logic below even runs — see
+  // entities.ts's MerchOrderItem comment for the full reasoning.
+  if (orderId.startsWith('merch-')) {
+    return handleMerchOrderCallback(orderId, event);
   }
 
   const orderKey = { PK: `ORDER#${orderId}`, SK: 'METADATA' };

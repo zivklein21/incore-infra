@@ -26,8 +26,10 @@ locals {
     adminDeleteGroup                   = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                  = { method = "POST" }
     adminDeleteMemberCredit            = { method = "POST" }
+    adminDeleteMerchProduct            = { method = "POST" } # FORCA Merch Store feature
     adminDeleteNotificationTemplate    = { method = "POST" }
     adminDeleteProduct                 = { method = "POST" }
+    adminDeleteRecurringSession        = { method = "POST" } # FORCA Coach feature
     adminDeleteS3Object                = { method = "POST" } # Admin Portal: Assets Manager
     adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
     adminEvictFutureRegistrations      = { method = "POST" }
@@ -49,9 +51,12 @@ locals {
     adminListHypBillingAgreements      = { method = "ANY" }
     adminListHypOrders                 = { method = "ANY" }
     adminListLogGroups                 = { method = "ANY" } # Admin Portal: Logs Viewer
+    adminListMerchProducts             = { method = "GET" } # FORCA Merch Store feature
+    adminListRecurringSessions         = { method = "GET" } # FORCA Coach feature
     adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
     adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
     adminRefundMemberLastPayment       = { method = "POST" }
+    adminRefundMerchOrder              = { method = "POST" } # FORCA Merch Store feature
     adminRefundOrder                   = { method = "POST" }
     adminRejectWaitlist                = { method = "POST" }
     adminRemoveLegalCancellation       = { method = "POST" }
@@ -64,8 +69,10 @@ locals {
     adminSaveEquipment                 = { method = "POST" } # FORCA Coach feature
     adminSaveExtraTraining             = { method = "POST" } # FORCA Extra Training feature
     adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
+    adminSaveMerchProduct              = { method = "POST" } # FORCA Merch Store feature
     adminSaveNotificationTemplate      = { method = "POST" }
     adminSaveProduct                   = { method = "POST" }
+    adminSaveRecurringSession          = { method = "POST" } # FORCA Coach feature
     adminSaveRegistrationFormConfig    = { method = "POST" }
     adminSaveSystemConfig              = { method = "POST" } # Admin Portal: Config screen
     adminSaveTermsOfServiceContent     = { method = "POST" }
@@ -88,11 +95,13 @@ locals {
     bookClass                          = { method = "POST" }
     cancelBooking                      = { method = "POST" }
     cancelPolicyPreview                = { method = "POST" }
+    closeSession                       = { method = "POST" } # FORCA Coach feature
     closeSupportInquiry                = { method = "POST" }
     createClass                        = { method = "POST" }
     createHypCardUpdatePage            = { method = "POST" }
     createHypPaymentPage               = { method = "POST" }
     createHypTokenPurchase             = { method = "POST" }
+    createMerchPaymentPage             = { method = "POST" } # FORCA Merch Store feature
     createSupportInquiry               = { method = "POST" }
     createTrainingSession              = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
     declareAttendance                  = { method = "POST" } # FORCA Coach feature: trainee's own declared attendance
@@ -119,6 +128,7 @@ locals {
     getEquipment                       = { method = "GET" } # FORCA Coach feature
     getExtraTraining                   = { method = "GET" } # FORCA Extra Training feature
     getFileUrl                         = { method = "ANY" }
+    getForcaMerchProducts              = { method = "GET" } # FORCA Merch Store feature
     getHypOrderStatus                  = { method = "ANY" }
     getInquiryMessages                 = { method = "ANY" }
     getMemberBookingSources            = { method = "ANY" }
@@ -137,6 +147,7 @@ locals {
     getRegistrationFormConfig          = { method = "ANY" }
     getSupportSettings                 = { method = "ANY" }
     getTermsOfServiceContent           = { method = "ANY" }
+    getTrainingHistory                 = { method = "GET" } # FORCA Coach feature: admin-only
     getTrainingTypes                   = { method = "GET" } # FORCA Coach feature
     getUploadUrl                       = { method = "POST" }
     getWallet                          = { method = "ANY" }

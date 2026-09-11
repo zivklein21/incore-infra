@@ -9,6 +9,7 @@ import * as nodemailer from 'nodemailer';
 import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { DEFAULT_COACH_PERMISSIONS, parseCoachPermissions, type CoachPermissions } from '../lib/coachAccess';
 import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
 import { createFamilyLink } from '../lib/familyLinks';
 import { recordSystemAlert } from '../lib/alerts';
@@ -71,7 +72,7 @@ export async function handler(
     birthday?: unknown; age?: unknown; requireHealthForm?: unknown;
     requireRegistrationForm?: unknown; membershipId?: unknown; accountType?: unknown;
     brand?: unknown; parentFirstName?: unknown; parentLastName?: unknown; parentPhone?: unknown; parentEmail?: unknown;
-    role?: unknown; groupId?: unknown;
+    role?: unknown; groupId?: unknown; groupIds?: unknown; coachPermissions?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -100,6 +101,14 @@ export async function handler(
   // — meaningless for a coach or a parent_only account.
   const groupId = isForcaTrainee && typeof body.groupId === 'string' && body.groupId
     ? body.groupId : undefined;
+  // A coach's assigned Groups (plural) — see lib/coachAccess.ts's
+  // getCoachAccess()/entities.ts's identity.groupIds comment. Defaults
+  // applied in createMemberAccount() when a coach is created without these
+  // (e.g. via the older AddCoachScreen flow before this UI existed).
+  const groupIds = isCoach && Array.isArray(body.groupIds)
+    ? body.groupIds.filter((g): g is string => typeof g === 'string')
+    : undefined;
+  const coachPermissions = isCoach ? parseCoachPermissions(body.coachPermissions) : undefined;
 
   let parentFirstName = '';
   let parentLastName = '';
@@ -174,6 +183,8 @@ export async function handler(
     brand,
     role: isCoach ? 'coach' : 'member',
     groupId,
+    groupIds,
+    coachPermissions,
     requireHealthForm,
     requireRegistrationForm,
     birthday: typeof body.birthday === 'string' ? body.birthday : undefined,
@@ -218,6 +229,8 @@ interface CreateMemberInput {
   brand: 'incore' | 'forca';
   role: 'member' | 'coach';
   groupId?: string;
+  groupIds?: string[];
+  coachPermissions?: CoachPermissions;
   requireHealthForm: boolean;
   requireRegistrationForm: boolean;
   birthday?: string;
@@ -275,6 +288,10 @@ async function createMemberAccount(
       accountType: input.accountType,
       brand: input.brand,
       ...(input.groupId ? { groupId: input.groupId } : {}),
+      ...(input.role === 'coach' ? {
+        groupIds: input.groupIds ?? [],
+        coachPermissions: input.coachPermissions ?? DEFAULT_COACH_PERMISSIONS,
+      } : {}),
       ...(input.birthday ? { birthday: input.birthday } : {}),
       ...(input.age != null ? { age: input.age } : {}),
     },

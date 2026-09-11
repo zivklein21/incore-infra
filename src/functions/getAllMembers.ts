@@ -92,6 +92,8 @@ export async function handler(
         role: p.identity?.role ?? p.role ?? 'member',
         brand: p.identity?.brand ?? 'incore',
         groupId: p.identity?.groupId ?? null,
+        groupIds: p.identity?.groupIds ?? [],
+        coachPermissions: p.identity?.coachPermissions ?? null,
         age: computeAge(birthday ?? undefined),
         birthday,
         photoUrl,

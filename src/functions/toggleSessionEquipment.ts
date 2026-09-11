@@ -2,12 +2,14 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { isCoachOrAdmin } from '../lib/auth';
+import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
 import type { ClassItem, EquipmentItem, TrainingTypeItem } from '../lib/entities';
 
 // POST /toggleSessionEquipment
 // Body: { classId: string, equipmentId: string, taken: boolean }
-// Auth: Cognito JWT, caller must be a coach or admin (isCoachOrAdmin)
+// Auth: Cognito JWT, caller must have attendance:'write' (see
+// getCoachAccess.ts) and the session's group must be one of hers — this is
+// part of the same "running a session" workflow as marking attendance.
 //
 // The coach's "pack list" check at the start of a training session — taken:
 // true adds { equipmentId, quantity } to the session's equipmentTaken list
@@ -22,7 +24,8 @@ export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
-  if (!(await isCoachOrAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const access = await getCoachAccess(callerUid);
+  if (!access || access.permissions.attendance !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { classId?: unknown; equipmentId?: unknown; taken?: unknown };
   try {
@@ -39,6 +42,8 @@ export async function handler(
   const classRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: classKey }));
   const session = classRes.Item as ClassItem | undefined;
   if (!session) return json(404, { error: 'session_not_found' });
+  if (!sessionInAccess(access, session, callerUid)) return json(403, { error: 'forbidden' });
+  if (session.closedAt && !access.isAdmin) return json(403, { error: 'session_closed' });
 
   const current = session.equipmentTaken ?? [];
   const existingEntry = current.find((t) => t.equipmentId === equipmentId);

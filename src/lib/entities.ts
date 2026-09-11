@@ -18,9 +18,10 @@ export interface ClassItem {
   // allowedMemberIds (and not already registered, and not an admin).
   isPrivate?: boolean;
   allowedMemberIds?: string[];
+  groupId?: string;
   // FORCA training-session-only fields (see createTrainingSession.ts) —
-  // groupId is also FORCA-only but was already being set ad hoc without a
-  // typed field; these three are typed properly since new code reads them.
+  // groupId is the FORCA Group this session was created for; getCoachAccess()
+  // (lib/coachAccess.ts) scopes every coach-gated endpoint against it.
   // trainingTypeId points at the TrainingTypeItem this session was created
   // for (optional — a session can be untyped); equipmentTaken is what the
   // coach has currently checked out for this specific session — each entry's
@@ -48,6 +49,47 @@ export interface ClassItem {
   // creation avoids needing one.
   coachId?: string;
   coachName?: string;
+  // Set only on instances generated from a RecurringSessionItem template
+  // (see adminSaveRecurringSession.ts) — instances from the older one-off/
+  // repeat_weekly flow (repeat_weekly/series_id above) have no template and
+  // leave this unset; both kinds coexist and behave identically everywhere
+  // except the templates list, which only shows the former.
+  recurringSessionId?: string;
+  // Set once the assigned coach (or admin) marks the session done — see
+  // closeSession.ts. Requires every roster entry to have actualAttendance
+  // recorded and equipmentTaken to be empty (everything returned) first.
+  // After this is set, markActualAttendance.ts/toggleSessionEquipment.ts/
+  // returnSessionEquipment.ts all refuse further coach edits — only admin
+  // can still change anything (same unrestricted override she already has
+  // everywhere else, e.g. getTrainingHistory.ts's corrections).
+  closedAt?: string;
+  closedBy?: string;
+}
+
+// PK=RECURRINGSESSION#<id>  SK=METADATA
+// FORCA-only, persistent "this is our recurring Tuesday 18:00 session"
+// definition an admin sets up in Settings (see adminSaveRecurringSession.ts)
+// — deliberately date-less; concrete dated ClassItem instances are a derived
+// byproduct, generated through the end of the current calendar month (same
+// cap createTrainingSession.ts's client-side repeat-weekly loop already
+// accepted) and tagged with this item's id via ClassItem.recurringSessionId.
+// Editing dayOfWeek/time/groupId (the pattern itself) deletes and regenerates
+// every not-yet-occurred instance; editing trainingTypeId/coachId/coachName/
+// location patches them in place — see lib/sessionInstance.ts's
+// deleteFutureInstances(). Past instances are never touched either way;
+// they're the historical record getTrainingHistory.ts reads.
+export interface RecurringSessionItem {
+  PK: string; SK: string;
+  groupId: string;
+  trainingTypeId: string;
+  coachId?: string;
+  coachName?: string;
+  dayOfWeek: number; // 0=Sunday..6=Saturday
+  time: string; // "HH:mm", 24h, Asia/Jerusalem — same convention as israelDateStr()
+  location?: string;
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
 }
 
 // Shared validation for the isPrivate/allowedMemberIds pair, used by
@@ -207,6 +249,99 @@ export interface ExtraTrainingItem {
   createdBy: string;
 }
 
+// A single purchasable variant (size/color/etc) on a MerchProductItem — the
+// admin free-types the label ("S", "Red / M", ...) rather than picking from
+// a rigid size×color matrix, same flexibility as
+// TrainingTypeItem.equipmentRequirements. stock is decremented at payment
+// time by lib/merchStock.ts, never client-writable directly.
+export interface MerchVariant {
+  id: string;
+  label: string;
+  stock: number;
+}
+
+// PK=MERCHPRODUCT#<id>  SK=METADATA — FORCA's sellable physical merchandise
+// (shirts, hoodies, water bottles), a deliberately separate entity from
+// ProductItem (INCORE's subscription/punch-card Store) rather than an
+// extension of it — ProductItem has no variant/stock concept and is already
+// overloaded across two view shapes (Product vs Membership); adding a third,
+// very different one (images/variants/inventory) would only make that
+// worse. imageKeys are S3 object keys under product-images/<id>/... —
+// resolved to short-lived signed URLs on every read (adminListMerchProducts.ts /
+// getForcaMerchProducts.ts), never stored/returned as raw/public URLs, same
+// convention as ExtraTrainingItem.fileKey above. active gates the
+// client-facing list only — draft (false) products stay admin-only, e.g.
+// while composing/previewing before publishing. FORCA-only, lives in the
+// FORCA table exclusively.
+export interface MerchProductItem {
+  PK: string; SK: string;
+  name: string;
+  description?: string;
+  price: number;
+  imageKeys: string[];
+  variants: MerchVariant[];
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=MERCHORDER#<orderId>  SK=METADATA
+// GSI1PK=MEMBER#<uid> GSI1SK=MERCHORDER#<createdAtIso>#<orderId> — a
+// member's own purchase history.
+// GSI2PK='MERCHORDER' GSI2SK=<createdAtIso>#<orderId> — global chronological
+// listing, ready for a future admin transactions view; same convention as
+// HypOrderItem's own GSI2, not itself built out in this pass.
+//
+// Deliberately NOT a HypOrderItem — that entity/table (TABLE_NAME, the
+// INCORE table) backs 100% of INCORE's live payment processing, and HYP's
+// success-redirect URL is one fixed merchant-portal setting shared by both
+// brands (confirmed: createHypSignedPaymentUrl's SIGN request has no
+// per-transaction callback param), so hypPaymentCallback.ts is unavoidably
+// still the single entry point every HYP redirect lands on. Keeping merch
+// orders in their own FORCA-table entity, created by createMerchPaymentPage.ts
+// and completed by lib/merchPayments.ts's handleMerchOrderCallback()
+// (dispatched from a single early orderId-prefix branch in
+// hypPaymentCallback.ts — see its own comment), means every line of
+// merch-specific logic lives in new code that live INCORE checkout never
+// executes, rather than threading brand-awareness through the existing
+// subscription/installment/billing-agreement machinery in hypOrders.ts.
+// orderId is always generated as `merch-<uuid>` — see newMerchOrderKey() —
+// precisely so that dispatch branch can tell orders apart without a DB
+// lookup first.
+//
+// items is a list, not a single product/variant, so "Buy Now" (a one-entry
+// list) and a cart checkout (an N-entry list) are the same order shape —
+// see createMerchPaymentPage.ts. quantity/unitPrice are denormalized at
+// order-creation time and never recomputed from live catalog prices later,
+// same reasoning as every other denormalized name/price field in this file.
+export interface MerchOrderLineItem {
+  merchProductId: string;
+  merchProductName: string;
+  merchVariantId: string;
+  merchVariantLabel: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface MerchOrderItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  orderId: string;
+  userId: string;
+  status: 'pending' | 'completed' | 'failed' | 'refunded';
+  items: MerchOrderLineItem[];
+  amount: number;
+  hypTransactionId?: string;
+  hypCCode?: number;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt?: string;
+  refundedAmount?: number;
+  refundedAt?: string;
+  refundedBy?: string;
+}
+
 export interface MembershipItem {
   PK: string; SK: string;
   membershipId: string;
@@ -300,11 +435,32 @@ export interface MemberProfileItem {
   // registrations/orders — those are filtered by joining back to this field via
   // the member id. Undefined ⇒ treat as 'incore' (pre-FORCA legacy members).
   // identity.role — 'admin' | 'coach' | 'member' (undefined). 'coach' is
-  // FORCA-only (see lib/auth.ts's isCoachOrAdmin) — restricted view-only
-  // staff access plus one write action (markActualAttendance.ts).
+  // FORCA-only — access is now granular (see lib/coachAccess.ts's
+  // getCoachAccess()) rather than the old single on/off isCoachOrAdmin gate.
   // identity.groupId — a FORCA trainee's assigned Group (GroupItem, see
   // adminSaveGroup.ts) — the unit createTrainingSession.ts auto-registers.
-  identity?: { role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string; email?: string; phone?: string; birthday?: string | number; accountType?: 'member' | 'parent_only'; brand?: 'incore' | 'forca'; groupId?: string };
+  // identity.groupIds — a COACH's assigned Groups (plural, distinct field
+  // from a trainee's singular groupId) — getCoachAccess() scopes every
+  // coach-gated endpoint to only these groups' sessions/rosters. Deny-by-
+  // default: undefined/empty means the coach sees nothing until an admin
+  // assigns at least one group.
+  // identity.coachPermissions — per-action read/write, deny-by-default when
+  // unset. Only 'attendance' has a real write action (marking actual
+  // attendance) — 'performance'/'healthDeclarations' are read-only concepts
+  // today (no performance data/UI exists yet; a coach never edits a
+  // trainee's health declaration), so they don't have a 'write' state.
+  identity?: {
+    role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;
+    email?: string; phone?: string; birthday?: string | number;
+    accountType?: 'member' | 'parent_only'; brand?: 'incore' | 'forca';
+    groupId?: string;
+    groupIds?: string[];
+    coachPermissions?: {
+      attendance: 'none' | 'read' | 'write';
+      performance: 'none' | 'read';
+      healthDeclarations: 'none' | 'read';
+    };
+  };
   phone?: string;
   birthday?: string | number;
   // S3 object key (incore_uploads is fully private, see s3.tf) for the
@@ -683,6 +839,42 @@ export function computeWeekKey(date: Date): string {
 
 export function israelDateStr(date: Date): string {
   return date.toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' });
+}
+
+/**
+ * How far Asia/Jerusalem's wall clock is ahead of UTC, in minutes, at the
+ * given instant (+120 in winter, +180 during DST) — computed via Intl
+ * rather than hardcoded so it stays correct across Israel's DST transitions.
+ */
+function israelOffsetMinutes(atUtc: Date): number {
+  const parts: Record<string, string> = {};
+  for (const p of new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Jerusalem', hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(atUtc)) parts[p.type] = p.value;
+  // Some ICU implementations render midnight as "24" with hour12: false.
+  const asIfUtcMs = Date.UTC(
+    Number(parts.year), Number(parts.month) - 1, Number(parts.day),
+    Number(parts.hour) % 24, Number(parts.minute), Number(parts.second),
+  );
+  return (asIfUtcMs - atUtc.getTime()) / 60000;
+}
+
+/**
+ * The inverse of israelDateStr(): given a calendar date + time-of-day
+ * expressed as Israel wall-clock (year, 0-indexed month, day, hour, minute),
+ * returns the real UTC instant it represents. Needed because AWS Lambda's
+ * runtime clock is UTC (no TZ env var configured — see eventbridge.tf's
+ * cron jobs, which set schedule_expression_timezone explicitly instead of
+ * relying on process TZ) — the plain `new Date(y, m, d, h, min)`
+ * constructor silently interprets those numbers in the *server's* local
+ * timezone (UTC) rather than Israel's, off by Israel's UTC+2/+3 offset.
+ * See lib/sessionInstance.ts's upcomingOccurrences() for the bug this fixes.
+ */
+export function israelWallTimeToDate(year: number, month0: number, day: number, hour: number, minute: number): Date {
+  const guessUtcMs = Date.UTC(year, month0, day, hour, minute, 0, 0);
+  const offsetMin = israelOffsetMinutes(new Date(guessUtcMs));
+  return new Date(guessUtcMs - offsetMin * 60000);
 }
 
 /** Last millisecond of the last day of the month containing `date`. */

@@ -3,13 +3,18 @@ import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { parseCoachPermissions } from '../lib/coachAccess';
 import type { MemberProfileItem } from '../lib/entities';
 
 // POST /adminUpdateCoachPersonal
-// Body: { memberId, firstName, lastName, phone }
+// Body: { memberId, firstName, lastName, phone, groupIds?: string[], coachPermissions? }
 // Auth: Cognito JWT, caller must be admin
 // FORCA-only, coach-only — email is intentionally not editable here since
 // it's also the account's Cognito username; changing it would desync login.
+// groupIds/coachPermissions are optional on the request — omitted means
+// "leave as-is" (the identity spread below already preserves them);
+// present (even an empty groupIds array) means "replace with this". See
+// lib/coachAccess.ts's getCoachAccess() for how these are enforced.
 // See adminUpdateMemberPersonal.ts for the generic (INCORE) equivalent.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -17,7 +22,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { memberId?: unknown; firstName?: unknown; lastName?: unknown; phone?: unknown };
+  let body: { memberId?: unknown; firstName?: unknown; lastName?: unknown; phone?: unknown; groupIds?: unknown; coachPermissions?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -37,12 +42,21 @@ export async function handler(
   if (!profile) return json(404, { error: 'member_not_found' });
   if (profile.identity?.role !== 'coach') return json(403, { error: 'not_a_coach' });
 
+  const groupIds = Array.isArray(body.groupIds)
+    ? body.groupIds.filter((g): g is string => typeof g === 'string')
+    : profile.identity.groupIds ?? [];
+  const coachPermissions = body.coachPermissions !== undefined
+    ? parseCoachPermissions(body.coachPermissions, profile.identity.coachPermissions)
+    : profile.identity.coachPermissions;
+
   const identity: Record<string, unknown> = {
     ...(profile.identity ?? {}),
     name: [firstName, lastName].filter(Boolean).join(' '),
     first_name: firstName,
     last_name: lastName,
     phone,
+    groupIds,
+    ...(coachPermissions ? { coachPermissions } : {}),
   };
 
   await ddb.send(new UpdateCommand({
