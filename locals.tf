@@ -123,6 +123,7 @@ locals {
     deleteSupportInquiry               = { method = "POST" }
     dismissMemberAlert                 = { method = "POST" }
     getActiveMembership                = { method = "ANY" }
+    getActiveTests                     = { method = "GET" } # FORCA Tracker feature — self-service Tests & Quizzes picker
     getActivityHistory                 = { method = "ANY" }
     getAdminNotifications              = { method = "ANY" }
     getAllInquiries                    = { method = "ANY" }
@@ -134,6 +135,7 @@ locals {
     getChildExerciseHistory            = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
     getChildOrders                     = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
     getChildProfile                    = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildTestResults                = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
     getChildUpcomingSessions           = { method = "GET" } # FORCA Child Switcher: Parent Home tab, read-only
     getChildUploadUrl                  = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     getClassDetail                     = { method = "ANY" }
