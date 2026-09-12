@@ -6,7 +6,7 @@ import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { MemberProfileItem } from '../lib/entities';
+import type { GroupItem, MemberProfileItem } from '../lib/entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -76,11 +76,21 @@ export async function handler(
   const hd = forms.health_declaration;
   const pc = forms.parental_consent;
 
-  const [pdfUrl, doctorApprovalUrl, signatureUrl] = await Promise.all([
+  const groupId = brand === 'forca' ? p.identity?.groupId : undefined;
+  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, groupRes] = await Promise.all([
     presign(hd?.pdf_key),
     presign(hd?.doctor_approval_key),
     presign(pc?.signatureKey),
+    presign(forms.medical_clearance_key),
+    groupId ? ddb.send(new GetCommand({ TableName: tableForBrand(brand), Key: { PK: `GROUP#${groupId}`, SK: 'METADATA' } })) : Promise.resolve(null),
   ]);
+  const groupName = (groupRes?.Item as GroupItem | undefined)?.name ?? null;
+  const medicalClearance = {
+    requested: forms.medical_clearance_requested === true,
+    requestedAt: forms.medical_clearance_requested_at ?? null,
+    uploadedAt: forms.medical_clearance_uploaded_at ?? null,
+    url: medicalClearanceUrl,
+  };
 
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
@@ -136,6 +146,17 @@ export async function handler(
     policiesAcceptedAt: forms.policiesAcceptedAt ?? null,
     parentalConsent,
     photoConsent,
+    groupName,
+    groupId: groupId ?? null,
+    medicalClearance,
+    parentalAuthorization: forms.parental_authorization?.submitted_at
+      ? {
+          submittedAt: forms.parental_authorization.submitted_at,
+          parentName: forms.parental_authorization.parentName ?? '',
+          parentPhone: forms.parental_authorization.parentPhone ?? '',
+          parentEmail: forms.parental_authorization.parentEmail ?? '',
+        }
+      : null,
     // The product a member is assigned to move onto (e.g. after a manually-
     // created CUSTOM_MIGRATION bridge membership expires) — that bridge
     // record itself carries no price, so MemberDetailsScreen needs this to

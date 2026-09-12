@@ -17,7 +17,8 @@ import type { MemberProfileItem } from '../lib/entities';
 
 // POST /adminCreateUser
 // Auth: Cognito JWT, caller must be admin
-// Body: { email, firstName, lastName, phone, birthday?, age?, requireHealthForm?, requireRegistrationForm?, membershipId?, accountType?, brand?, parentFirstName?, parentLastName?, parentPhone?, parentEmail? }
+// Body: { email, firstName, lastName, phone, birthday?, age?, requireHealthForm?, requireRegistrationForm?, membershipId?, accountType?, brand?, parentFirstName?, parentLastName?, parentPhone?, parentEmail?, linkParentLater? }
+// FORCA trainees also always get require_parental_authorization: true (see requireParentalAuthorization below) — not an admin-optional body field, same as requireHealthForm/requireRegistrationForm for them.
 //
 // accountType: 'parent_only' (Family Accounts) marks a member created solely
 // to hold family links — no membership/booking of their own; the client
@@ -26,12 +27,16 @@ import type { MemberProfileItem } from '../lib/entities';
 // normal trainee account.
 //
 // FORCA (brand: 'forca') trainees are minors: creating one (accountType
-// !== 'parent_only') requires parentFirstName/parentPhone/parentEmail, and
-// this handler creates-or-reuses a 'parent_only' account for that email and
-// links it to the trainee via createFamilyLink — see the FORCA Member
-// Creation & Parental Onboarding plan. FORCA's data lives in its own
-// DynamoDB table (see lib/dynamo.ts's tableForBrand()) — both the trainee
-// and her parent are written there, never to the incore table.
+// !== 'parent_only') normally requires parentFirstName/parentPhone/
+// parentEmail, and this handler creates-or-reuses a 'parent_only' account
+// for that email and links it to the trainee via createFamilyLink — see the
+// FORCA Member Creation & Parental Onboarding plan. FORCA's data lives in
+// its own DynamoDB table (see lib/dynamo.ts's tableForBrand()) — both the
+// trainee and her parent are written there, never to the incore table.
+// Passing linkParentLater:true skips all of that — the trainee is created
+// alone (e.g. her parent already has an account from an older sibling), and
+// an admin connects the two afterward via adminLinkFamilyMember.ts (Manage
+// > Family Links).
 // requireHealthForm/requireRegistrationForm
 // are forced true for FORCA trainees regardless of what the caller sent:
 // these are mandatory for minors, not an admin-optional toggle. The parent's
@@ -72,6 +77,7 @@ export async function handler(
     birthday?: unknown; age?: unknown; requireHealthForm?: unknown;
     requireRegistrationForm?: unknown; membershipId?: unknown; accountType?: unknown;
     brand?: unknown; parentFirstName?: unknown; parentLastName?: unknown; parentPhone?: unknown; parentEmail?: unknown;
+    linkParentLater?: unknown;
     role?: unknown; groupId?: unknown; groupIds?: unknown; coachPermissions?: unknown;
   };
   try {
@@ -110,11 +116,17 @@ export async function handler(
     : undefined;
   const coachPermissions = isCoach ? parseCoachPermissions(body.coachPermissions) : undefined;
 
+  // Lets the admin create a trainee alone when her parent already has an
+  // account (e.g. from an older sibling created earlier) — the two get
+  // connected afterward via adminLinkFamilyMember.ts (Manage > Family
+  // Links) instead of this handler creating-or-reusing a parent here.
+  const linkParentLater = isForcaTrainee && body.linkParentLater === true;
+
   let parentFirstName = '';
   let parentLastName = '';
   let parentPhone = '';
   let parentEmail = '';
-  if (isForcaTrainee) {
+  if (isForcaTrainee && !linkParentLater) {
     parentFirstName = typeof body.parentFirstName === 'string' ? body.parentFirstName.trim() : '';
     parentLastName = typeof body.parentLastName === 'string' ? body.parentLastName.trim() : '';
     parentPhone = typeof body.parentPhone === 'string' ? body.parentPhone.trim() : '';
@@ -127,6 +139,9 @@ export async function handler(
 
   const requireHealthForm = isForcaTrainee ? true : body.requireHealthForm === true;
   const requireRegistrationForm = isForcaTrainee ? true : body.requireRegistrationForm === true;
+  // Mandatory for every FORCA trainee, same as the two above — no
+  // admin-optional toggle (see computeComplianceFlags in entities.ts).
+  const requireParentalAuthorization = isForcaTrainee;
 
   const userPoolId = process.env.COGNITO_USER_POOL_ID as string;
   const cognito = new CognitoIdentityProviderClient({});
@@ -135,7 +150,7 @@ export async function handler(
   // conflicting parentEmail fails fast without leaving an orphaned trainee
   // Cognito user behind.
   let parentUid: string | undefined;
-  if (isForcaTrainee) {
+  if (isForcaTrainee && !linkParentLater) {
     const existingRes = await ddb.send(new QueryCommand({
       TableName: tableForBrand('forca'),
       IndexName: 'GSI3',
@@ -165,6 +180,7 @@ export async function handler(
         role: 'member',
         requireHealthForm: false,
         requireRegistrationForm: false,
+        requireParentalAuthorization: false,
       }, callerUid, cognito, userPoolId);
       if ('error' in parentCreate) return json(parentCreate.status, { error: parentCreate.error });
       parentUid = parentCreate.uid;
@@ -187,6 +203,7 @@ export async function handler(
     coachPermissions,
     requireHealthForm,
     requireRegistrationForm,
+    requireParentalAuthorization,
     birthday: typeof body.birthday === 'string' ? body.birthday : undefined,
     age: typeof body.age === 'number' ? body.age : undefined,
     membershipId: typeof body.membershipId === 'string' && body.membershipId ? body.membershipId : undefined,
@@ -233,6 +250,7 @@ interface CreateMemberInput {
   coachPermissions?: CoachPermissions;
   requireHealthForm: boolean;
   requireRegistrationForm: boolean;
+  requireParentalAuthorization: boolean;
   birthday?: string;
   age?: number;
   membershipId?: string;
@@ -298,6 +316,7 @@ async function createMemberAccount(
     admin: {
       require_health_form: input.requireHealthForm,
       require_registration_form: input.requireRegistrationForm,
+      require_parental_authorization: input.requireParentalAuthorization,
     },
     createdAt: new Date().toISOString(),
     createdBy: callerUid,

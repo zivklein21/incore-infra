@@ -59,6 +59,7 @@ locals {
     adminListRecurringSessions         = { method = "GET" } # FORCA Coach feature
     adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
     adminListTestDefinitions           = { method = "GET" } # FORCA Tracker feature
+    adminOverrideFormStatus            = { method = "POST" } # Backoffice Trainee Profile: mark a form submitted/pending on behalf of the member
     adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
     adminRecordTestResult              = { method = "POST" } # FORCA Tracker feature
     adminRefundMemberLastPayment       = { method = "POST" }
@@ -76,6 +77,7 @@ locals {
     adminSaveExercise                  = { method = "POST" } # FORCA Tracker feature
     adminSaveExtraTraining             = { method = "POST" } # FORCA Extra Training feature
     adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
+    adminSaveMedicalClearance          = { method = "POST" } # Backoffice Trainee Profile: upload a medical certificate on behalf of the member
     adminSaveMerchProduct              = { method = "POST" } # FORCA Merch Store feature
     adminSaveNotificationTemplate      = { method = "POST" }
     adminSaveProduct                   = { method = "POST" }
@@ -89,6 +91,7 @@ locals {
     adminSendClassMessage              = { method = "POST" }
     adminSetForceShowPaymentButton     = { method = "POST" }
     adminSetHypBillingAgreementStatus  = { method = "POST" }
+    adminSetMedicalClearanceRequested  = { method = "POST" } # FORCA Profile feature: flag a trainee's Medical Profile tab
     adminSetMemberAlert                = { method = "POST" }
     adminUnlinkFamilyMember            = { method = "POST" } # Family Accounts: remove a parent/child link
     adminUpdateCoachPersonal           = { method = "POST" } # FORCA Coach feature
@@ -126,6 +129,12 @@ locals {
     getAllMembers                      = { method = "ANY" }
     getBirthdayCampaign                = { method = "ANY" }
     getCancellationPolicySettings      = { method = "ANY" }
+    getChildAttendanceHistory          = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildExerciseHistory            = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildOrders                     = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildProfile                    = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildUpcomingSessions           = { method = "GET" } # FORCA Child Switcher: Parent Home tab, read-only
+    getChildUploadUrl                  = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     getClassDetail                     = { method = "ANY" }
     getClassMembers                    = { method = "ANY" }
     getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
@@ -147,9 +156,12 @@ locals {
     getMemberExerciseHistory           = { method = "GET" } # FORCA Tracker feature
     getMemberMembership                = { method = "ANY" }
     getMemberMessages                  = { method = "ANY" }
+    getMemberOrders                    = { method = "GET" } # Backoffice Trainee Profile: Purchase History tab
+    getMyAttendanceHistory             = { method = "GET" } # FORCA Profile feature: trainee's own attendance history
     getMyBillingAgreement              = { method = "ANY" }
     getMyExerciseHistory               = { method = "GET" } # FORCA Tracker feature
     getMyInquiries                     = { method = "ANY" }
+    getMyOrders                        = { method = "GET" } # FORCA Profile feature: trainee's own merch purchase history
     getMyTrainingSessions              = { method = "GET" } # FORCA Coach feature: trainee's own upcoming sessions
     getNotificationTemplates           = { method = "ANY" }
     getNotificationTimingSettings      = { method = "ANY" }
@@ -173,12 +185,15 @@ locals {
     renewSubscriptionWithToken         = { method = "POST" }
     resizeProfilePhoto                 = { method = "POST" }
     returnSessionEquipment             = { method = "POST" } # FORCA Coach feature
+    saveChildMedicalClearance          = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     saveClassSeries                    = { method = "POST" }
+    saveMedicalClearance               = { method = "POST" } # FORCA Profile feature: upload/replace a medical clearance certificate
     saveScheduleAlertSettings          = { method = "POST" }
     saveSupportSettings                = { method = "POST" }
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }
     submitHealthDeclaration            = { method = "POST" }
+    submitParentalAuthorization        = { method = "POST" } # FORCA mandatory onboarding: parent's signed program-participation authorization
     submitParentalConsent              = { method = "POST" }
     submitRegistrationForm             = { method = "POST" }
     swapClass                          = { method = "POST" }

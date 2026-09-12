@@ -70,3 +70,27 @@ export async function createFamilyLink(
 
   return { ok: true, linkId };
 }
+
+export type VerifyFamilyLinkResult =
+  | { ok: true; table: string }
+  | { ok: false };
+
+// Authorization check for the parent-session (no ActiveProfileContext
+// switch) FORCA Child Switcher endpoints — getChildProfile.ts,
+// getChildAttendanceHistory.ts, getChildOrders.ts, getChildUploadUrl.ts,
+// saveChildMedicalClearance.ts. A caller only gets to read/write childUid's
+// data through these if the exact FAMILY# link item exists (same PK/SK
+// createFamilyLink writes), i.e. she really is childUid's linked parent —
+// not just anyone who knows a uid. Deliberately doesn't accept an
+// isAdmin() bypass: admins have their own already-existing endpoints
+// (getMemberDetail.ts etc.) for this.
+export async function verifyFamilyLink(parentUid: string, childUid: string): Promise<VerifyFamilyLinkResult> {
+  const resolvedParent = await resolveMemberProfile(parentUid);
+  if (!resolvedParent) return { ok: false };
+  const res = await ddb.send(new GetCommand({
+    TableName: resolvedParent.table,
+    Key: { PK: `MEMBER#${parentUid}`, SK: `FAMILY#${childUid}` },
+  }));
+  if (!res.Item) return { ok: false };
+  return { ok: true, table: resolvedParent.table };
+}

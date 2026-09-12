@@ -5,16 +5,25 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getMemberFirstLastName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
+import { verifyFamilyLink } from '../lib/familyLinks';
 import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProductItem } from '../lib/entities';
 
 // POST /createMerchPaymentPage
 // Auth: Cognito JWT (any signed-in FORCA member)
-// Body: { items: { merchProductId: string, merchVariantId: string, quantity: number }[] }
+// Body: { items: { merchProductId: string, merchVariantId: string, quantity: number }[], childUid?: string }
 // Response: { paymentUrl: string, orderId: string }
 //
 // One or more line items — "Buy Now" sends a single-entry list (quantity 1),
 // a cart checkout sends the whole cart; both are the same order shape (see
 // entities.ts's MerchOrderItem) and the same endpoint, not two code paths.
+//
+// childUid (FORCA Child Switcher): a parent shopping on behalf of a linked
+// daughter, from her own session — no ActiveProfileContext.switchToChild.
+// Family-link authorized (verifyFamilyLink), same as getChildProfile.ts and
+// friends. The order is attributed to the child (GSI1PK/userId/HYP client
+// info all resolve off her profile, not the calling parent's) so it shows
+// up correctly in her own Purchase History — omit childUid for a normal
+// self-checkout, same as before this existed.
 //
 // Deliberately separate from createHypPaymentPage.ts/buildOrderFromProduct
 // (which is wired to ProductItem's subscription/installment/mid-month
@@ -25,14 +34,21 @@ import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProduc
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
-  const uid = getUid(event);
+  const callerUid = getUid(event);
 
-  let body: { items?: unknown };
+  let body: { items?: unknown; childUid?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
     return json(400, { error: 'invalid_json' });
   }
+
+  const childUid = typeof body.childUid === 'string' ? body.childUid.trim() : '';
+  if (childUid) {
+    const link = await verifyFamilyLink(callerUid, childUid);
+    if (!link.ok) return json(403, { error: 'forbidden' });
+  }
+  const uid = childUid || callerUid;
 
   const rawItems = Array.isArray(body.items) ? body.items : [];
   const requested = rawItems

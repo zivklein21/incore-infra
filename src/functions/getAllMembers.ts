@@ -1,10 +1,11 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { getAllMemberProfiles } from '../lib/memberScan';
-import { tableForBrand } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import type { MemberProfileItem } from '../lib/entities';
 
@@ -67,14 +68,36 @@ export async function handler(
           return await getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET_NAME, Key: key }), { expiresIn: PHOTO_URL_EXPIRY_SECONDS });
         } catch { return null; }
       };
-      const [photoUrl, pdfUrl, doctorApprovalUrl] = await Promise.all([
+      // FORCA trainee (not parent_only, not a coach) — surfaces whether she
+      // still needs connecting to a parent via Manage > Family Links
+      // (adminLinkFamilyMember.ts), the case adminCreateUser.ts's
+      // linkParentLater option deliberately leaves unlinked. Checked the
+      // same way createFamilyLink.ts already checks "is this child already
+      // linked" — GSI1PK=MEMBER#<id>, GSI1SK begins_with FAMILYOF#.
+      const accountType = p.identity?.accountType ?? 'member';
+      const role = p.identity?.role ?? p.role ?? 'member';
+      const isForcaTraineeRow = brand === 'forca' && accountType !== 'parent_only' && role !== 'coach';
+
+      const [photoUrl, pdfUrl, doctorApprovalUrl, familyLinkRes] = await Promise.all([
         presign(p.photoKey),
         presign(hd?.pdf_key),
         presign(hd?.doctor_approval_key),
+        isForcaTraineeRow
+          ? ddb.send(new QueryCommand({
+              TableName: tableForBrand(brand),
+              IndexName: 'GSI1',
+              KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+              ExpressionAttributeValues: { ':pk': `MEMBER#${id}`, ':prefix': 'FAMILYOF#' },
+              Limit: 1,
+            }))
+          : Promise.resolve(null),
       ]);
+      const hasParentLinked = isForcaTraineeRow ? (familyLinkRes?.Items?.length ?? 0) > 0 : null;
 
       return {
         id,
+        accountType,
+        hasParentLinked,
         name: deriveName(p),
         email: p.identity?.email ?? p.email ?? '',
         phone: p.identity?.phone ?? p.phone ?? '',

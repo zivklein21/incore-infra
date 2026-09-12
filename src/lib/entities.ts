@@ -593,6 +593,32 @@ export interface MemberProfileItem {
       signedAt?: string;
       expiresAt?: string;
     };
+    // FORCA Medical Profile tab (self-service, distinct from
+    // health_declaration.doctor_approval_key which is tied to the one-time
+    // onboarding flow) — see saveMedicalClearance.ts /
+    // adminSetMedicalClearanceRequested.ts / getProfile.ts's medicalClearance.
+    medical_clearance_key?: string; // S3 object key — see health_declaration comment above
+    medical_clearance_uploaded_at?: string;
+    medical_clearance_requested?: boolean;
+    medical_clearance_requested_at?: string;
+    // FORCA mandatory pre-login onboarding — legal authorization for a
+    // trainee's participation in the program, signed by her parent (while
+    // switched into the trainee via switchToChild, same as Registration/
+    // Health) — see submitParentalAuthorization.ts. Deliberately a
+    // different field from parental_consent above: that one is INCORE's
+    // own self-service under-18 guardian info + photo consent (gated at
+    // class-booking time, 2-year expiry, filled by the minor herself), not
+    // part of compliance gating at all. This one IS gated (see
+    // computeComplianceFlags) and has no expiry — a one-time program
+    // enrollment authorization, not a renewable consent.
+    parental_authorization?: {
+      submitted_at?: string;
+      parentName?: string;
+      parentPhone?: string;
+      parentEmail?: string;
+      signatureKey?: string; // S3 object key — see health_declaration comment above
+      signaturePaths?: string[];
+    };
   };
   payment?: {
     hypToken?: string;
@@ -610,6 +636,11 @@ export interface MemberProfileItem {
     hasUnreadAlert?: boolean;
     require_health_form?: boolean;
     require_registration_form?: boolean;
+    // FORCA-only, set true for every FORCA trainee at creation (see
+    // adminCreateUser.ts) — mirrors require_health_form/
+    // require_registration_form's pattern for the Parental Authorization
+    // step. See computeComplianceFlags/forms.parental_authorization above.
+    require_parental_authorization?: boolean;
     forceShowPaymentButton?: boolean;
   };
   subscriptionStatus?: string;
@@ -636,6 +667,7 @@ export interface ComplianceFlags {
   requiresRegistrationForm: boolean;
   requiresHealthDeclaration: boolean;
   requiresPoliciesAgreement: boolean;
+  requiresParentalAuthorization: boolean;
 }
 
 // Shared by getProfile.ts (self/admin lookup) and listMyFamily.ts (a
@@ -647,18 +679,36 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   const forms = profile.forms ?? {};
   const admin = profile.admin ?? {};
 
+  // A parent_only account (Family Accounts) has no Registration Form or
+  // Health Declaration of her own — those are her linked trainee's, filled
+  // by switching into the child (ActiveProfileContext.switchToChild). This
+  // was already true via admin.require_* being set false at creation for a
+  // FORCA parent (adminCreateUser.ts), but checked directly off accountType
+  // here too so it holds regardless of how/when the account was created.
+  // Policies Agreement is NOT exempted, though — a parent DOES sign her own
+  // (see the FORCA onboarding flow: parent signs Policies + fills the
+  // trainee's Registration/Health; the trainee then signs her own Policies
+  // separately on first login — see resolvePostLoginRoute.ts).
+  const isParentOnly = profile.identity?.accountType === 'parent_only';
+
   const registrationFormFilled = forms.registration_form === true;
-  const requiresRegistrationForm = admin.require_registration_form === true && !registrationFormFilled;
+  const requiresRegistrationForm = !isParentOnly && admin.require_registration_form === true && !registrationFormFilled;
 
   const hdSubmittedAt = forms.health_declaration?.submitted_at;
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-  const requiresHealthDeclaration = role !== 'admin' && admin.require_health_form === true
+  const requiresHealthDeclaration = !isParentOnly && role !== 'admin' && admin.require_health_form === true
     && (!hdSubmittedAt || new Date(hdSubmittedAt) < twoYearsAgo);
 
   const requiresPoliciesAgreement = role !== 'admin' && forms.agreedToPolicies !== true;
 
-  return { requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement };
+  // Same parent-fills-it-for-her pattern as Registration/Health — see the
+  // forms.parental_authorization comment above for why this is a distinct
+  // field from parental_consent.
+  const requiresParentalAuthorization = !isParentOnly && admin.require_parental_authorization === true
+    && !forms.parental_authorization?.submitted_at;
+
+  return { requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement, requiresParentalAuthorization };
 }
 
 // PK=ALERT#<id>  SK=METADATA
