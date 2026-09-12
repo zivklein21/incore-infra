@@ -49,3 +49,19 @@ export async function queryMembershipForMonth(uid: string, targetMonth: string):
   }));
   return ((res.Items ?? [])[0] as MembershipItem | undefined) ?? null;
 }
+
+// Every membership item under one specific month, regardless of status —
+// unlike queryMembershipForMonth (Limit: 1), this doesn't assume there's
+// only one. A member can legitimately hold both a CUSTOM_MIGRATION bridge
+// and a real paid membership for the same targetMonth at once (the bridge
+// started the month, the real purchase lands mid-month), so callers that
+// need to tell those apart — e.g. handlePaymentSuccess's idempotency check —
+// must see every item, not whichever one happens to sort first.
+export async function queryMembershipsForMonth(uid: string, targetMonth: string): Promise<MembershipItem[]> {
+  const res = await ddb.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': `MEMBERSHIP#${targetMonth}#` },
+  }));
+  return (res.Items ?? []) as MembershipItem[];
+}

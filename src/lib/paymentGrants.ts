@@ -3,7 +3,7 @@ import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { ProductItem, RegistrationItem } from './entities';
 import { putPunchCardItem } from './punchCards';
-import { queryFutureSubscriptionRegistrations, queryAllActiveMemberships, queryMembershipForMonth } from './membershipQueries';
+import { queryFutureSubscriptionRegistrations, queryAllActiveMemberships, queryMembershipForMonth, queryMembershipsForMonth } from './membershipQueries';
 
 // Shared payment-success/payment-failure business logic, called by the
 // HYP-driven flow (hypPayments.ts) and adminEvictFutureRegistrations.ts.
@@ -66,9 +66,14 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
 
   const isAutoRenew = productType === 'subscription';
 
-  // ── Idempotency: skip if membership already active for this month ─────────
-  const existing = await queryMembershipForMonth(userId, targetMonth);
-  if (existing?.status === 'ACTIVE') {
+  // ── Idempotency: skip if a real membership already active for this month ──
+  // CUSTOM_MIGRATION bridges don't count here — a member can hold one of
+  // those alongside a genuine purchase for the same targetMonth (that's
+  // exactly the case this guards against), so only an existing non-bridge
+  // ACTIVE item means this purchase was already granted.
+  const existingForMonth = await queryMembershipsForMonth(userId, targetMonth);
+  const existingReal = existingForMonth.find((m) => m.status === 'ACTIVE' && m.type !== 'CUSTOM_MIGRATION');
+  if (existingReal) {
     console.log(`[paymentGrants] Membership for ${userId} in ${targetMonth} already active — skipping create.`);
     return;
   }
