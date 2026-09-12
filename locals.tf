@@ -47,6 +47,7 @@ locals {
     adminGetTableShape                 = { method = "ANY" }  # Admin Portal: Data Viewer filter discovery
     adminGetTestResults                = { method = "GET" } # FORCA Tracker feature
     adminGrantCustomMigration          = { method = "POST" }
+    adminGrantForcaMembership          = { method = "POST" } # FORCA admin-manual membership feature
     adminGrantMembership               = { method = "POST" }
     adminLinkFamilyMember              = { method = "POST" } # Family Accounts: link a parent/child pair
     adminListExercises                 = { method = "GET" } # FORCA Tracker feature

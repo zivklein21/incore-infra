@@ -132,6 +132,11 @@ export async function handler(
     membershipTypeId: typeof membership.type === 'string' ? membership.type : null,
     membershipStart: typeof membership.start === 'string' ? membership.start : null,
     membershipEnd: typeof membership.end === 'string' ? membership.end : null,
+    // FORCA-only: the admin-manual membership grant's own label (see
+    // adminGrantForcaMembership.ts) — INCORE's real MembershipItem-backed
+    // membershipTypeId already carries its own plan name, this is FORCA's
+    // equivalent for the simple start/end/title record on the profile item.
+    membershipTitle: brand === 'forca' && typeof membership.title === 'string' ? membership.title : null,
     age, birthday,
     photoUrl: await presign(p.photoKey),
     phone: p.identity?.phone ?? p.phone ?? '',

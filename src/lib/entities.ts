@@ -556,6 +556,12 @@ export interface MemberProfileItem {
   // below — kept in sync because the client (StoreScreen) still reads it
   // directly. See functions/src/products.ts grantPunchCard/autoGrantProduct.
   extra?: { punch_cards: unknown[] };
+  // For FORCA specifically (no separate MembershipItem collection — see
+  // GroupItem's doc comment), an admin-granted { title, start, end,
+  // grantedBy, grantedAt } window lives right here — see
+  // adminGrantForcaMembership.ts (the write) and sessionInstance.ts's
+  // createSessionInstance (the read/gate: no active window here means she's
+  // skipped when her group's next session auto-registers everyone).
   membership?: Record<string, unknown>;
   preferredLanguage?: string;
   forms?: {

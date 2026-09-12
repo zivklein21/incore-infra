@@ -48,7 +48,21 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
     ExpressionAttributeValues: { ':prefix': 'MEMBER#', ':profile': 'PROFILE', ':groupId': params.groupId },
   }));
   const members = (membersRes.Items ?? []) as MemberProfileItem[];
-  const memberIds = members.map((m) => (m.PK as string).replace('MEMBER#', ''));
+  // A group member with no admin-granted active membership window (see
+  // adminGrantForcaMembership.ts — start/end dates on her own PROFILE item,
+  // the same field the Overview tab's "Activity Validity" line already
+  // reads) is skipped here rather than auto-registered. This only affects
+  // sessions materialized from this point on — it never touches a
+  // registration that already exists, same "new registrations only" scope
+  // as INCORE's own bookClass.ts membership gate.
+  const now = Date.now();
+  const memberIds = members
+    .filter((m) => {
+      const start = typeof m.membership?.start === 'string' ? new Date(m.membership.start).getTime() : NaN;
+      const end = typeof m.membership?.end === 'string' ? new Date(m.membership.end).getTime() : NaN;
+      return !Number.isNaN(start) && !Number.isNaN(end) && now >= start && now <= end;
+    })
+    .map((m) => (m.PK as string).replace('MEMBER#', ''));
   if (memberIds.length === 0) return { ok: false, error: 'group_has_no_members' };
 
   const classId = randomUUID();
