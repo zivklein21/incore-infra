@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
@@ -35,8 +35,16 @@ function deriveFirstLastName(p: MemberProfileItem): { firstName: string; lastNam
   return { firstName: parts[0] ?? '', lastName: parts.slice(1).join(' ') };
 }
 
-// GET or POST /getMemberDetail?memberId=xxx
+// GET or POST /getMemberDetail?memberId=xxx&brand=incore|forca
 // Auth: Cognito JWT, caller must be admin
+//
+// brand picks which table to read (see getAllMembers.ts) — FORCA member
+// profiles live in FORCA_TABLE_NAME, not the INCORE table, so omitting this
+// silently returned `null` (item not found) for every FORCA member instead
+// of an error, which left MemberDetailsScreen's loading guard spinning
+// forever (its `!member` check never distinguishes "still loading" from
+// "query succeeded with nothing"). Defaults to 'incore' for callers that
+// don't pass it yet, matching getAllMembers.ts.
 //
 // membershipStatus/membershipTypeId/membershipStart/membershipEnd/
 // monthlyLateCancellations/monthlyValidCancellations mirror the legacy V1
@@ -53,12 +61,13 @@ export async function handler(
 
   const memberId = event.queryStringParameters?.memberId;
   if (!memberId) return json(400, { error: 'missing_member_id' });
+  const brand = event.queryStringParameters?.brand === 'forca' ? 'forca' as const : 'incore' as const;
 
   // Strongly consistent: an admin re-opening this screen right after
   // flipping a toggle here (e.g. forceShowPaymentButton) must never see a
   // stale pre-write value — the default eventually-consistent read can
   // occasionally still return the old item for a brief window after a write.
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' }, ConsistentRead: true }));
+  const res = await ddb.send(new GetCommand({ TableName: tableForBrand(brand), Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' }, ConsistentRead: true }));
   const p = res.Item as MemberProfileItem | undefined;
   if (!p) return json(200, null);
 
