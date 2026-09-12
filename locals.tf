@@ -22,6 +22,7 @@ locals {
     adminDeleteClassType               = { method = "POST" }
     adminDeleteCoach                   = { method = "POST" } # FORCA Coach feature
     adminDeleteEquipment               = { method = "POST" } # FORCA Coach feature
+    adminDeleteExercise                = { method = "POST" } # FORCA Tracker feature
     adminDeleteExtraTraining           = { method = "POST" } # FORCA Extra Training feature
     adminDeleteGroup                   = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                  = { method = "POST" }
@@ -31,6 +32,7 @@ locals {
     adminDeleteProduct                 = { method = "POST" }
     adminDeleteRecurringSession        = { method = "POST" } # FORCA Coach feature
     adminDeleteS3Object                = { method = "POST" } # Admin Portal: Assets Manager
+    adminDeleteTestDefinition          = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
     adminEvictFutureRegistrations      = { method = "POST" }
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
@@ -43,9 +45,11 @@ locals {
     adminGetSystemConfig               = { method = "ANY" }  # Admin Portal: Config screen
     adminGetTableItem                  = { method = "ANY" }  # Admin Portal: Data Viewer
     adminGetTableShape                 = { method = "ANY" }  # Admin Portal: Data Viewer filter discovery
+    adminGetTestResults                = { method = "GET" } # FORCA Tracker feature
     adminGrantCustomMigration          = { method = "POST" }
     adminGrantMembership               = { method = "POST" }
     adminLinkFamilyMember              = { method = "POST" } # Family Accounts: link a parent/child pair
+    adminListExercises                 = { method = "GET" } # FORCA Tracker feature
     adminListFamilyLinks               = { method = "ANY" }  # Family Accounts: Admin Portal household list
     adminListGroups                    = { method = "ANY" }  # FORCA Coach feature
     adminListHypBillingAgreements      = { method = "ANY" }
@@ -54,7 +58,9 @@ locals {
     adminListMerchProducts             = { method = "GET" } # FORCA Merch Store feature
     adminListRecurringSessions         = { method = "GET" } # FORCA Coach feature
     adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
+    adminListTestDefinitions           = { method = "GET" } # FORCA Tracker feature
     adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
+    adminRecordTestResult              = { method = "POST" } # FORCA Tracker feature
     adminRefundMemberLastPayment       = { method = "POST" }
     adminRefundMerchOrder              = { method = "POST" } # FORCA Merch Store feature
     adminRefundOrder                   = { method = "POST" }
@@ -67,6 +73,7 @@ locals {
     adminSaveBirthdayCampaign          = { method = "POST" }
     adminSaveClassType                 = { method = "POST" }
     adminSaveEquipment                 = { method = "POST" } # FORCA Coach feature
+    adminSaveExercise                  = { method = "POST" } # FORCA Tracker feature
     adminSaveExtraTraining             = { method = "POST" } # FORCA Extra Training feature
     adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
     adminSaveMerchProduct              = { method = "POST" } # FORCA Merch Store feature
@@ -76,6 +83,7 @@ locals {
     adminSaveRegistrationFormConfig    = { method = "POST" }
     adminSaveSystemConfig              = { method = "POST" } # Admin Portal: Config screen
     adminSaveTermsOfServiceContent     = { method = "POST" }
+    adminSaveTestDefinition            = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType              = { method = "POST" } # FORCA Coach feature
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
@@ -125,7 +133,9 @@ locals {
     getClassTypes                      = { method = "ANY" }
     getCoachOptions                    = { method = "GET" } # FORCA Coach feature: admin-only
     getCoachSessions                   = { method = "ANY" } # FORCA Coach feature: isCoachOrAdmin-gated
+    getCoachTrainees                   = { method = "GET" } # FORCA Tracker feature: coach's own trainee roster
     getEquipment                       = { method = "GET" } # FORCA Coach feature
+    getExercises                       = { method = "GET" } # FORCA Tracker feature
     getExtraTraining                   = { method = "GET" } # FORCA Extra Training feature
     getFileUrl                         = { method = "ANY" }
     getForcaMerchProducts              = { method = "GET" } # FORCA Merch Store feature
@@ -134,9 +144,11 @@ locals {
     getMemberBookingSources            = { method = "ANY" }
     getMemberCancellations             = { method = "ANY" }
     getMemberDetail                    = { method = "ANY" }
+    getMemberExerciseHistory           = { method = "GET" } # FORCA Tracker feature
     getMemberMembership                = { method = "ANY" }
     getMemberMessages                  = { method = "ANY" }
     getMyBillingAgreement              = { method = "ANY" }
+    getMyExerciseHistory               = { method = "GET" } # FORCA Tracker feature
     getMyInquiries                     = { method = "ANY" }
     getMyTrainingSessions              = { method = "GET" } # FORCA Coach feature: trainee's own upcoming sessions
     getNotificationTemplates           = { method = "ANY" }
@@ -155,6 +167,7 @@ locals {
     joinWaitlist                       = { method = "POST" }
     leaveWaitlist                      = { method = "POST" }
     listMyFamily                       = { method = "ANY" }  # Family Accounts: a member's own linked children
+    logExercise                        = { method = "POST" } # FORCA Tracker feature
     markActualAttendance               = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }

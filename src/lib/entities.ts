@@ -342,6 +342,89 @@ export interface MerchOrderItem {
   refundedBy?: string;
 }
 
+// ─── FORCA Tracker (exercises + tests/quizzes) ─────────────────────────────
+// FORCA-only, lives in the FORCA table exclusively. See adminSaveExercise.ts /
+// adminSaveTestDefinition.ts.
+
+export type ExerciseMeasurementType = 'weight_reps' | 'reps_only' | 'time' | 'band_level' | 'bodyweight_reps';
+
+// PK=EXERCISE#<id>  SK=METADATA
+// Admin-defined exercise catalog — mirrors TrainingTypeItem's shape.
+// measurementType drives which fields of ExerciseLogEntryItem.value a
+// trainee's log entry actually fills in; bandLevels is only meaningful
+// when measurementType === 'band_level' (admin-typed labels, e.g.
+// "Light"/"Medium"/"Heavy" — no fixed universal scale).
+export interface ExerciseDefinitionItem {
+  PK: string; SK: string;
+  name: string;
+  measurementType: ExerciseMeasurementType;
+  bandLevels?: string[];
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=EXERCISELOG#<id>  SK=METADATA
+// GSI1PK=MEMBER#<uid> GSI1SK=EXERCISELOG#<exerciseId>#<loggedAt>#<id> — a
+// member's own logged history for one exercise, sorted by date (a
+// begins_with query on `EXERCISELOG#<exerciseId>#` scopes to just that
+// exercise; the bare GSI1PK alone gets everything she's ever logged).
+// measurementType is denormalized from the definition at log time so a
+// later change to the exercise's own measurementType never reinterprets
+// old entries.
+export interface ExerciseLogEntryItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  userId: string;
+  exerciseId: string;
+  exerciseName: string;
+  measurementType: ExerciseMeasurementType;
+  value: {
+    weight?: number;
+    reps?: number;
+    timeSeconds?: number;
+    bandLevel?: string;
+  };
+  loggedAt: string;
+  createdAt: string;
+}
+
+// PK=TESTDEF#<id>  SK=METADATA
+// Admin-defined recurring test/quiz (בחנים) series — e.g. a fitness test
+// scored in seconds (lower is better) or in reps (higher is better).
+// higherIsBetter is what lets adminGetTestResults.ts's per-entry
+// changeVsPrevious comparison work correctly for either direction.
+export interface TestDefinitionItem {
+  PK: string; SK: string;
+  name: string;
+  unit?: string;
+  higherIsBetter: boolean;
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=TESTRESULT#<id>  SK=METADATA
+// GSI1PK=MEMBER#<uid> GSI1SK=TESTRESULT#<testDefId>#<instanceNumber padded>#<id>
+// — a member's results for one test, in instance order. Admin-recorded only
+// (see adminRecordTestResult.ts) — "Only the admin views the test results"
+// means this is an evaluation record, not a trainee self-log, unlike
+// ExerciseLogEntryItem above. instanceNumber and the up/down comparison are
+// both computed per (member, testDef) pair, not globally — "improvement or
+// decline" is about this trainee's own trend, not a squad-wide ranking.
+export interface TestResultItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  userId: string;
+  testDefId: string;
+  testDefName: string;
+  instanceNumber: number;
+  score: number;
+  date: string;
+  createdAt: string;
+  createdBy: string;
+}
+
 export interface MembershipItem {
   PK: string; SK: string;
   membershipId: string;

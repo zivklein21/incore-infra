@@ -11,9 +11,10 @@ import type { ClassItem } from '../lib/entities';
 // see getCoachAccess.ts) AND the session's group must be one of her assigned
 // groups.
 //
-// This is deliberately the only write action a coach account can have
-// anywhere in the FORCA Coach feature — every other coach-accessible
-// endpoint (getCoachSessions.ts) is read-only. Updates the RegistrationItem
+// This and adminRecordTestResult.ts are the only two write actions a coach
+// account can have anywhere in the FORCA Coach feature — every other
+// coach-accessible endpoint (getCoachSessions.ts, getMemberExerciseHistory.ts,
+// adminGetTestResults.ts) is read-only. Updates the RegistrationItem
 // createTrainingSession.ts auto-created; never touches declaredAttendance
 // (that's the trainee's own field — see declareAttendance.ts).
 export async function handler(
