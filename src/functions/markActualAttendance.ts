@@ -22,8 +22,9 @@ import type { ClassItem } from '../lib/entities';
 // canRecordAttendance()) used to be UI-only — nothing here stopped an early
 // write, so a future session could end up showing actual attendance before
 // it had even started. Enforced here too now, symmetrically with the
-// client's own lower bound; the upper bound stays governed by closedAt
-// (admins can still correct a closed session's attendance after the fact).
+// client's own lower bound — except for an admin, who can correct
+// attendance any time, same as the closedAt bypass just below already
+// grants her for the other end of the window.
 const FIVE_MIN_MS = 5 * 60 * 1000;
 
 export async function handler(
@@ -51,7 +52,7 @@ export async function handler(
   if (!session) return json(404, { error: 'session_not_found' });
   if (!sessionInAccess(access, session, callerUid)) return json(403, { error: 'forbidden' });
   if (session.closedAt && !access.isAdmin) return json(403, { error: 'session_closed' });
-  if (Date.now() < new Date(session.date).getTime() - FIVE_MIN_MS) return json(403, { error: 'too_early' });
+  if (!access.isAdmin && Date.now() < new Date(session.date).getTime() - FIVE_MIN_MS) return json(403, { error: 'too_early' });
 
   await ddb.send(new UpdateCommand({
     TableName: FORCA_TABLE_NAME,
