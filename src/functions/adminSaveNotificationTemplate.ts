@@ -1,13 +1,17 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { randomUUID } from 'crypto';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 
 // POST /adminSaveNotificationTemplate
-// Body: { id?: string, type, titleHe, titleEn, bodyHe, bodyEn, bgColor, textColor }
+// Body: { id?: string, type, titleHe, titleEn, bodyHe, bodyEn, bgColor,
+//         textColor, brand?: 'incore' | 'forca' }
 // Auth: Cognito JWT, caller must be admin
+// brand comes from the admin's Backoffice toggle (AdminBrandModeContext),
+// same pattern as adminSaveProduct.ts — picks which table this template is
+// written to (see the FORCA data separation plan).
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -25,9 +29,10 @@ export async function handler(
   if (!type) return json(400, { error: 'missing_type' });
   const id = typeof body.id === 'string' && body.id ? body.id : randomUUID();
   const nowIso = new Date().toISOString();
+  const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
 
   await ddb.send(new PutCommand({
-    TableName: TABLE_NAME,
+    TableName: tableForBrand(brand),
     Item: {
       PK: `TEMPLATE#${id}`,
       SK: 'METADATA',

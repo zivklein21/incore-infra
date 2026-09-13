@@ -1,13 +1,18 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { NotificationTemplateItem } from '../lib/entities';
 
-// GET or POST /getNotificationTemplates
+// GET or POST /getNotificationTemplates?brand=incore|forca (or { brand } in
+// a POST body)
 // Auth: Cognito JWT, caller must be admin
 //
+// brand picks which table to scan (see the FORCA data separation plan) —
+// an admin has no member profile brand to fall back on the way
+// getProducts.ts does, so this defaults to 'incore' when omitted, same as
+// adminSaveNotificationTemplate.ts/adminDeleteNotificationTemplate.ts.
 // Small, admin-managed table (a handful of bilingual per-event templates) —
 // a full Scan is fine, same as other small-config-table reads in this repo.
 export async function handler(
@@ -16,8 +21,14 @@ export async function handler(
   const uid = getUid(event);
   if (!(await isAdmin(uid))) return json(403, { error: 'forbidden' });
 
+  let bodyBrand: unknown;
+  if (event.body) {
+    try { bodyBrand = (JSON.parse(event.body) as { brand?: unknown }).brand; } catch { /* ignore */ }
+  }
+  const brand = event.queryStringParameters?.brand === 'forca' || bodyBrand === 'forca' ? 'forca' as const : 'incore' as const;
+
   const res = await ddb.send(new ScanCommand({
-    TableName: TABLE_NAME,
+    TableName: tableForBrand(brand),
     FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
     ExpressionAttributeValues: { ':prefix': 'TEMPLATE#', ':metadata': 'METADATA' },
   }));

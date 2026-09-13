@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from './dynamo';
+import { ddb, tableForBrand } from './dynamo';
 import { deriveMemberName, type NotificationTemplateItem, type MemberProfileItem } from './entities';
 import { getExpoPushToken } from './push';
 import { getAllMemberProfiles } from './memberScan';
@@ -30,9 +30,9 @@ function chunk<T>(arr: T[], size: number): T[][] {
   return result;
 }
 
-async function writeBroadcastLog(adminUserId: string, templateId: string, rawTitle: string, rawBody: string, dispatchedCount: number): Promise<void> {
+async function writeBroadcastLog(tableName: string, adminUserId: string, templateId: string, rawTitle: string, rawBody: string, dispatchedCount: number): Promise<void> {
   await ddb.send(new PutCommand({
-    TableName: TABLE_NAME,
+    TableName: tableName,
     Item: {
       PK: `BROADCASTLOG#${randomUUID()}`,
       SK: 'METADATA',
@@ -50,13 +50,22 @@ async function writeBroadcastLog(adminUserId: string, templateId: string, rawTit
 // (triggerTemplateAlert.ts) and, eventually, the automated
 // scheduleAlertRoutine cron (functions/src/notificationTiming.ts, deferred
 // pending its EventBridge migration) — one send path so the two can't drift.
+// brand picks which table the template lives in, whose members get
+// broadcast to, and which table their MESSAGE#/BROADCASTLOG# rows are
+// written to — absolute separation, not a filter (see the FORCA data
+// separation plan and dynamo.ts's tableForBrand()). Defaults to 'incore'
+// since scheduleAlertRoutine's stored settings.templateId predates this and
+// was only ever configured from the (INCORE-only) Notification Timing
+// screen's Schedule Alert card.
 export async function sendTemplateBroadcast(
   templateId: string,
   dynamicVariables: Record<string, string>,
   triggeredBy: string,
+  brand: 'incore' | 'forca' = 'incore',
 ): Promise<{ success: boolean; dispatchedCount: number; error?: string }> {
+  const tableName = tableForBrand(brand);
   const templateRes = await ddb.send(new GetCommand({
-    TableName: TABLE_NAME,
+    TableName: tableName,
     Key: { PK: `TEMPLATE#${templateId}`, SK: 'METADATA' },
   }));
   const tpl = templateRes.Item as NotificationTemplateItem | undefined;
@@ -67,11 +76,11 @@ export async function sendTemplateBroadcast(
   const bgColor = tpl.bgColor || '#5C3A8F';
   const textColor = tpl.textColor || '#FFFFFF';
 
-  const allProfiles = await getAllMemberProfiles();
+  const allProfiles = await getAllMemberProfiles(tableName);
   const traineeProfiles = allProfiles.filter((p) => !isMemberAdmin(p));
 
   if (traineeProfiles.length === 0) {
-    await writeBroadcastLog(triggeredBy, templateId, rawTitle, rawBody, 0);
+    await writeBroadcastLog(tableName, triggeredBy, templateId, rawTitle, rawBody, 0);
     return { success: true, dispatchedCount: 0 };
   }
 
@@ -97,7 +106,7 @@ export async function sendTemplateBroadcast(
     // suppressPush=true: the message-created notification path (deferred —
     // see notifications.ts) is expected to skip push since it's handled here.
     await ddb.send(new PutCommand({
-      TableName: TABLE_NAME,
+      TableName: tableName,
       Item: {
         PK: `MEMBER#${memberId}`,
         SK: `MESSAGE#${broadcastId}`,
@@ -135,7 +144,7 @@ export async function sendTemplateBroadcast(
     }
   }
 
-  await writeBroadcastLog(triggeredBy, templateId, rawTitle, rawBody, dispatchedCount);
+  await writeBroadcastLog(tableName, triggeredBy, templateId, rawTitle, rawBody, dispatchedCount);
 
   console.log(`[sendTemplateBroadcast] by=${triggeredBy} template=${templateId} trainees=${traineeProfiles.length} pushed=${dispatchedCount}`);
   return { success: true, dispatchedCount };
