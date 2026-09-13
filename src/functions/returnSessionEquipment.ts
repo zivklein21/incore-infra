@@ -7,8 +7,8 @@ import type { ClassItem, EquipmentItem } from '../lib/entities';
 
 // POST /returnSessionEquipment
 // Body: { classId: string }
-// Auth: Cognito JWT, caller must have attendance:'write' (see
-// getCoachAccess.ts) and the session's group must be one of hers.
+// Auth: Cognito JWT, caller must have equipment:'write' (see
+// coachAccess.ts) and the session's group must be one of hers.
 //
 // The coach's end-of-session "returned everything" log — decrements every
 // EquipmentItem currently in this session's equipmentTaken by the exact
@@ -20,7 +20,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const access = await getCoachAccess(callerUid);
-  if (!access || access.permissions.attendance !== 'write') return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.equipment !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { classId?: unknown };
   try {

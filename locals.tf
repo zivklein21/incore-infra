@@ -36,6 +36,8 @@ locals {
     adminDeleteTestComponent           = { method = "POST" } # FORCA Tracker feature
     adminDeleteTestGroup               = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
+    adminDeleteWorkoutPlan             = { method = "POST" } # FORCA Workout Plan builder
+    adminDeleteWorkoutPlanExercise     = { method = "POST" } # FORCA Workout Plan builder
     adminEvictFutureRegistrations      = { method = "POST" }
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
     adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
@@ -62,6 +64,7 @@ locals {
     adminListRecurringSessions         = { method = "GET" } # FORCA Coach feature
     adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
     adminListTestGroups                = { method = "GET" } # FORCA Tracker feature
+    adminListWorkoutPlans              = { method = "GET" } # FORCA Workout Plan builder: admin or coach with workoutPlans access
     adminOverrideFormStatus            = { method = "POST" } # Backoffice Trainee Profile: mark a form submitted/pending on behalf of the member
     adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
     adminRecordTestAttempt             = { method = "POST" } # FORCA Tracker feature
@@ -91,6 +94,8 @@ locals {
     adminSaveTestComponent             = { method = "POST" } # FORCA Tracker feature
     adminSaveTestGroup                 = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType              = { method = "POST" } # FORCA Coach feature
+    adminSaveWorkoutPlan               = { method = "POST" } # FORCA Workout Plan builder: admin-only
+    adminSaveWorkoutPlanExercise       = { method = "POST" } # FORCA Workout Plan builder: admin-only
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
     adminSetForceShowPaymentButton     = { method = "POST" }
@@ -107,6 +112,7 @@ locals {
     adminUpdatePendingMembership       = { method = "POST" }
     adminUpdateTableItem               = { method = "POST" } # Admin Portal: Data Viewer
     adminWhoAmI                        = { method = "ANY" }  # Admin Portal: auth-gate check
+    assignSessionWorkoutPlan           = { method = "POST" } # FORCA Workout Plan builder: coach with workoutPlans:'write', or admin
     bookClass                          = { method = "POST" }
     cancelBooking                      = { method = "POST" }
     cancelPolicyPreview                = { method = "POST" }

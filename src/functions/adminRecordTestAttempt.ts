@@ -37,13 +37,12 @@ function parseComponentValues(raw: unknown): ComponentValueInput[] | null {
 // POST /adminRecordTestAttempt
 // Body: { memberId: string, groupId: string, date?: string,
 //         componentValues: { componentId, rawValue, overrideScore?, overridePassed? }[] }
-// Auth: Cognito JWT, admin or a coach with performance:'read' — this is an
+// Auth: Cognito JWT, admin or a coach with testsGrading:'write' — this is an
 // evaluation record, not a trainee self-log (see entities.ts's
 // TestAttemptItem comment). A coach may record an attempt for any trainee
-// in one of her assigned groups; the rest of the Tracker module stays
-// view-only for her — this is deliberately the second write action a coach
-// account has anywhere in the FORCA Coach feature, alongside
-// markActualAttendance.ts.
+// in one of her assigned groups; a coach with only testsGrading:'read' can
+// view attempt history (adminGetTestAttempts.ts) but not record or delete
+// one.
 //
 // Every active component of the group must have a matching componentValues
 // entry (the frontend's TestAttemptRecorder always submits all of them).
@@ -63,7 +62,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const access = await getCoachAccess(callerUid);
-  if (!access || access.permissions.performance === 'none') return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.testsGrading !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { memberId?: unknown; groupId?: unknown; date?: unknown; componentValues?: unknown };
   try {

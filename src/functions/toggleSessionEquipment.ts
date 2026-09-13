@@ -7,9 +7,10 @@ import type { ClassItem, EquipmentItem, TrainingTypeItem } from '../lib/entities
 
 // POST /toggleSessionEquipment
 // Body: { classId: string, equipmentId: string, taken: boolean }
-// Auth: Cognito JWT, caller must have attendance:'write' (see
-// getCoachAccess.ts) and the session's group must be one of hers — this is
-// part of the same "running a session" workflow as marking attendance.
+// Auth: Cognito JWT, caller must have equipment:'write' (see
+// coachAccess.ts) and the session's group must be one of hers — split off
+// from attendance:'write' so a coach can be allowed to run a session
+// (mark attendance) without necessarily being trusted with the pack-list.
 //
 // The coach's "pack list" check at the start of a training session — taken:
 // true adds { equipmentId, quantity } to the session's equipmentTaken list
@@ -25,7 +26,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const access = await getCoachAccess(callerUid);
-  if (!access || access.permissions.attendance !== 'write') return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.equipment !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { classId?: unknown; equipmentId?: unknown; taken?: unknown };
   try {

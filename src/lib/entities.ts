@@ -55,6 +55,12 @@ export interface ClassItem {
   // leave this unset; both kinds coexist and behave identically everywhere
   // except the templates list, which only shows the former.
   recurringSessionId?: string;
+  // Set when a specific Workout Plan (see WorkoutPlanItem below) is linked
+  // to this exact dated session instance — see assignSessionWorkoutPlan.ts.
+  // Independent of trainingTypeId; denormalized name so a later plan
+  // rename/delete never breaks this session's own historical display.
+  workoutPlanId?: string;
+  workoutPlanName?: string;
   // Set once the assigned coach (or admin) marks the session done — see
   // closeSession.ts. Requires every roster entry to have actualAttendance
   // recorded and equipmentTaken to be empty (everything returned) first.
@@ -493,6 +499,49 @@ export interface TestAttemptItem {
   createdBy: string;
 }
 
+// ─── FORCA Workout Plan builder ─────────────────────────────────────────────
+// FORCA-only, lives in the FORCA table exclusively. A named, ordered
+// training program built from the existing Exercise catalog
+// (ExerciseDefinitionItem above) — distinct from ExtraTrainingContentItem
+// (video/PDF content trainees browse on their own) and from a session's own
+// trainingTypeId (a session can carry both a Training Type AND a specific
+// Workout Plan, or neither). See adminSaveWorkoutPlan.ts /
+// adminSaveWorkoutPlanExercise.ts / assignSessionWorkoutPlan.ts.
+
+// PK=WORKOUTPLAN#<id>  SK=METADATA
+export interface WorkoutPlanItem {
+  PK: string; SK: string;
+  name: string;
+  description?: string;
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=WORKOUTPLAN#<planId>  SK=EXERCISE#<id>
+// Same partition as its plan's METADATA item (one Query returns both, same
+// pattern as TestComponentItem). `order` is a plain mutable attribute rather
+// than being baked into the sort key — unlike TestComponentItem (unordered),
+// a plan's exercises are inherently sequenced, but keeping the id-based SK
+// stable means reordering is just two ordinary attribute updates (swap two
+// rows' `order`) instead of a delete+recreate to change a key. exerciseName
+// is denormalized from ExerciseDefinitionItem at add-time (same rationale as
+// ExerciseLogEntryItem.exerciseName) so a later rename/delete of the catalog
+// entry never breaks an existing plan's display.
+export interface WorkoutPlanExerciseItem {
+  PK: string; SK: string;
+  planId: string;
+  exerciseId: string;
+  exerciseName: string;
+  order: number;
+  sets?: number;
+  /** Free text ("8-12", "AMRAP", "30 sec") — not always a plain integer. */
+  reps?: string;
+  restSeconds?: number;
+  notes?: string;
+  createdAt: string;
+}
+
 export interface MembershipItem {
   PK: string; SK: string;
   membershipId: string;
@@ -596,10 +645,13 @@ export interface MemberProfileItem {
   // default: undefined/empty means the coach sees nothing until an admin
   // assigns at least one group.
   // identity.coachPermissions — per-action read/write, deny-by-default when
-  // unset. Only 'attendance' has a real write action (marking actual
-  // attendance) — 'performance'/'healthDeclarations' are read-only concepts
-  // today (no performance data/UI exists yet; a coach never edits a
-  // trainee's health declaration), so they don't have a 'write' state.
+  // unset. See lib/coachAccess.ts's CoachPermissions for the authoritative
+  // shape/comments (testsGrading/equipment/workoutPlans were added after
+  // this field first shipped — getCoachAccess()/parseCoachPermissions()
+  // backfill those three from DEFAULT_COACH_PERMISSIONS for any profile
+  // stored under the older 3-field shape). 'performance'/'healthDeclarations'
+  // stay read-only concepts (no performance-editing UI exists; a coach
+  // never edits a trainee's health declaration).
   identity?: {
     role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;
     email?: string; phone?: string; birthday?: string | number;
@@ -610,6 +662,9 @@ export interface MemberProfileItem {
       attendance: 'none' | 'read' | 'write';
       performance: 'none' | 'read';
       healthDeclarations: 'none' | 'read';
+      testsGrading?: 'none' | 'read' | 'write';
+      equipment?: 'none' | 'write';
+      workoutPlans?: 'none' | 'read' | 'write';
     };
   };
   phone?: string;

@@ -5,6 +5,12 @@ export interface CoachPermissions {
   attendance: 'none' | 'read' | 'write';
   performance: 'none' | 'read';
   healthDeclarations: 'none' | 'read';
+  /** Recording/deleting FORCA test attempts (write) vs. only viewing a trainee's attempt history (read) — split off from `performance` since that only ever gated viewing before. */
+  testsGrading: 'none' | 'read' | 'write';
+  /** The session pack-list check-out/return actions — split off from `attendance` so a coach can run a session without necessarily managing equipment. No 'read' tier: there's no equipment view separate from the session screen itself. */
+  equipment: 'none' | 'write';
+  /** Reserved for the workout-plan builder — not enforced by any endpoint yet. */
+  workoutPlans: 'none' | 'read' | 'write';
 }
 
 export interface CoachAccess {
@@ -14,26 +20,46 @@ export interface CoachAccess {
   permissions: CoachPermissions;
 }
 
-const ADMIN_PERMISSIONS: CoachPermissions = { attendance: 'write', performance: 'read', healthDeclarations: 'read' };
-const DENIED_PERMISSIONS: CoachPermissions = { attendance: 'none', performance: 'none', healthDeclarations: 'none' };
+const ADMIN_PERMISSIONS: CoachPermissions = {
+  attendance: 'write', performance: 'read', healthDeclarations: 'read',
+  testsGrading: 'write', equipment: 'write', workoutPlans: 'write',
+};
+const DENIED_PERMISSIONS: CoachPermissions = {
+  attendance: 'none', performance: 'none', healthDeclarations: 'none',
+  testsGrading: 'none', equipment: 'none', workoutPlans: 'none',
+};
 
 // De facto pre-permission-matrix behavior — a coach created/edited without
 // ever touching the new permissions UI still works exactly as coaches
-// always have (view everything, mark attendance).
-export const DEFAULT_COACH_PERMISSIONS: CoachPermissions = { attendance: 'write', performance: 'read', healthDeclarations: 'read' };
+// always have (view everything, mark attendance, grade tests, manage
+// equipment).
+export const DEFAULT_COACH_PERMISSIONS: CoachPermissions = {
+  attendance: 'write', performance: 'read', healthDeclarations: 'read',
+  testsGrading: 'write', equipment: 'write', workoutPlans: 'read',
+};
 
 // Shared body-parsing validator — adminCreateUser.ts and
 // adminUpdateCoachPersonal.ts both accept a client-supplied coachPermissions
-// object and need the same tolerant-but-safe shape check.
-export function parseCoachPermissions(raw: unknown, fallback: CoachPermissions = DEFAULT_COACH_PERMISSIONS): CoachPermissions {
+// object and need the same tolerant-but-safe shape check. Also used by
+// getCoachAccess() below to backfill testsGrading/equipment/workoutPlans on
+// profiles stored before those fields existed, so a coach who's never
+// touched the (now expanded) permissions UI keeps her old effective access
+// instead of silently losing it because the new keys read as undefined.
+export function parseCoachPermissions(raw: unknown, fallback: Partial<CoachPermissions> = DEFAULT_COACH_PERMISSIONS): CoachPermissions {
   const r = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
   const attendance = r.attendance === 'read' || r.attendance === 'write' || r.attendance === 'none'
-    ? r.attendance : fallback.attendance;
+    ? r.attendance : (fallback.attendance ?? DEFAULT_COACH_PERMISSIONS.attendance);
   const performance = r.performance === 'read' || r.performance === 'none'
-    ? r.performance : fallback.performance;
+    ? r.performance : (fallback.performance ?? DEFAULT_COACH_PERMISSIONS.performance);
   const healthDeclarations = r.healthDeclarations === 'read' || r.healthDeclarations === 'none'
-    ? r.healthDeclarations : fallback.healthDeclarations;
-  return { attendance, performance, healthDeclarations };
+    ? r.healthDeclarations : (fallback.healthDeclarations ?? DEFAULT_COACH_PERMISSIONS.healthDeclarations);
+  const testsGrading = r.testsGrading === 'read' || r.testsGrading === 'write' || r.testsGrading === 'none'
+    ? r.testsGrading : (fallback.testsGrading ?? DEFAULT_COACH_PERMISSIONS.testsGrading);
+  const equipment = r.equipment === 'write' || r.equipment === 'none'
+    ? r.equipment : (fallback.equipment ?? DEFAULT_COACH_PERMISSIONS.equipment);
+  const workoutPlans = r.workoutPlans === 'read' || r.workoutPlans === 'write' || r.workoutPlans === 'none'
+    ? r.workoutPlans : (fallback.workoutPlans ?? DEFAULT_COACH_PERMISSIONS.workoutPlans);
+  return { attendance, performance, healthDeclarations, testsGrading, equipment, workoutPlans };
 }
 
 export function groupInAccess(access: CoachAccess, groupId: string | undefined): boolean {
@@ -67,9 +93,14 @@ export async function getCoachAccess(uid: string): Promise<CoachAccess | null> {
   }
   const resolved = await resolveMemberProfile(uid);
   if (resolved?.profile.identity?.role !== 'coach') return null;
+  const stored = resolved.profile.identity.coachPermissions;
   return {
     isAdmin: false,
     groupIds: resolved.profile.identity.groupIds ?? [],
-    permissions: resolved.profile.identity.coachPermissions ?? DENIED_PERMISSIONS,
+    // A coach never configured at all stays deny-by-default; one stored
+    // under the pre-expansion 3-field shape gets testsGrading/equipment/
+    // workoutPlans backfilled from DEFAULT_COACH_PERMISSIONS (see
+    // parseCoachPermissions above) rather than reading as undefined→denied.
+    permissions: stored ? parseCoachPermissions(stored, DEFAULT_COACH_PERMISSIONS) : DENIED_PERMISSIONS,
   };
 }

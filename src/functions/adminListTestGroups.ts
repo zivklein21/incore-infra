@@ -6,8 +6,8 @@ import { getCoachAccess } from '../lib/coachAccess';
 import type { TestGroupItem, TestComponentItem } from '../lib/entities';
 
 // GET or POST /adminListTestGroups
-// Auth: Cognito JWT, admin or a coach with performance:'read' — no
-// trainee-facing equivalent (unlike Exercises). Admin sees draft groups
+// Auth: Cognito JWT, admin or a coach with testsGrading:'read' or 'write' —
+// no trainee-facing equivalent (unlike Exercises). Admin sees draft groups
 // too (the Manage > Tracker > Tests & Quizzes catalog editor); a coach only
 // sees active ones, matching what she's allowed to record an attempt
 // against.
@@ -20,7 +20,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = event.requestContext.authorizer.jwt.claims.sub as string;
   const access = await getCoachAccess(callerUid);
-  if (!access || access.permissions.performance === 'none') return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.testsGrading === 'none') return json(403, { error: 'forbidden' });
 
   const res = await ddb.send(new ScanCommand({
     TableName: FORCA_TABLE_NAME,

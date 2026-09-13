@@ -93,6 +93,8 @@ export interface SessionDetail {
   equipmentTaken: string[];
   equipmentReturnedAt: string | null;
   closedAt: string | null;
+  workoutPlanId: string | null;
+  workoutPlanName: string | null;
   roster: RosterEntryDetail[];
 }
 
@@ -153,6 +155,11 @@ export async function resolveSessionDetail(
     equipmentTaken: (session.equipmentTaken ?? []).map((t) => t.equipmentId),
     equipmentReturnedAt: session.equipmentReturnedAt ?? null,
     closedAt: session.closedAt ?? null,
+    // Stripped for a coach with no workoutPlans access at all, same
+    // "hide rather than 403 the whole session" convention medicalFlag above
+    // uses for healthDeclarations:'none'.
+    workoutPlanId: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanId ?? null),
+    workoutPlanName: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanName ?? null),
     roster,
   };
 }

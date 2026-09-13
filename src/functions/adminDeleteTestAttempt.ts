@@ -8,9 +8,10 @@ import type { TestAttemptItem } from '../lib/entities';
 
 // POST /adminDeleteTestAttempt
 // Body: { id: string }
-// Auth: Cognito JWT, admin or a coach with performance:'read' — same access
-// level as recording one (adminRecordTestAttempt.ts); a coach may only
-// delete an attempt belonging to a trainee in one of her assigned groups.
+// Auth: Cognito JWT, admin or a coach with testsGrading:'write' — same
+// access level as recording one (adminRecordTestAttempt.ts); a coach may
+// only delete an attempt belonging to a trainee in one of her assigned
+// groups.
 // Hard delete — the displayed instance rank and changeVsPrevious for the
 // remaining attempts are recomputed fresh on the next adminGetTestAttempts.ts
 // read (testAttemptOrdering.ts), so no renumbering happens here.
@@ -19,7 +20,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const access = await getCoachAccess(callerUid);
-  if (!access || access.permissions.performance === 'none') return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.testsGrading !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { id?: unknown };
   try {

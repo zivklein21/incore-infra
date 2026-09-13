@@ -9,9 +9,9 @@ import type { TestAttemptItem } from '../lib/entities';
 
 // GET or POST /adminGetTestAttempts
 // Query/body: { memberId: string, groupId: string }
-// Auth: Cognito JWT, admin or a coach with performance:'read' (view-only —
-// see adminRecordTestAttempt.ts for the coach's one write action here). A
-// coach only sees trainees in one of her assigned groups.
+// Auth: Cognito JWT, admin or a coach with testsGrading:'read' (or
+// 'write' — see adminRecordTestAttempt.ts for the coach's write actions
+// here). A coach only sees trainees in one of her assigned groups.
 // One member's full attempt history for one test group, ranked by date (see
 // testAttemptOrdering.ts) — each component result annotated with
 // changeVsPrevious (comparing chronologically-consecutive attempts' rawValue
@@ -22,7 +22,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const access = await getCoachAccess(callerUid);
-  if (!access || access.permissions.performance === 'none') return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.testsGrading === 'none') return json(403, { error: 'forbidden' });
 
   let memberId = event.queryStringParameters?.memberId ?? '';
   let groupId = event.queryStringParameters?.groupId ?? '';
