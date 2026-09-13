@@ -32,7 +32,9 @@ locals {
     adminDeleteProduct                 = { method = "POST" }
     adminDeleteRecurringSession        = { method = "POST" } # FORCA Coach feature
     adminDeleteS3Object                = { method = "POST" } # Admin Portal: Assets Manager
-    adminDeleteTestDefinition          = { method = "POST" } # FORCA Tracker feature
+    adminDeleteTestAttempt             = { method = "POST" } # FORCA Tracker feature
+    adminDeleteTestComponent           = { method = "POST" } # FORCA Tracker feature
+    adminDeleteTestGroup               = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
     adminEvictFutureRegistrations      = { method = "POST" }
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
@@ -45,7 +47,7 @@ locals {
     adminGetSystemConfig               = { method = "ANY" }  # Admin Portal: Config screen
     adminGetTableItem                  = { method = "ANY" }  # Admin Portal: Data Viewer
     adminGetTableShape                 = { method = "ANY" }  # Admin Portal: Data Viewer filter discovery
-    adminGetTestResults                = { method = "GET" } # FORCA Tracker feature
+    adminGetTestAttempts               = { method = "GET" } # FORCA Tracker feature
     adminGrantCustomMigration          = { method = "POST" }
     adminGrantForcaMembership          = { method = "POST" } # FORCA admin-manual membership feature
     adminGrantMembership               = { method = "POST" }
@@ -59,10 +61,10 @@ locals {
     adminListMerchProducts             = { method = "GET" } # FORCA Merch Store feature
     adminListRecurringSessions         = { method = "GET" } # FORCA Coach feature
     adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
-    adminListTestDefinitions           = { method = "GET" } # FORCA Tracker feature
+    adminListTestGroups                = { method = "GET" } # FORCA Tracker feature
     adminOverrideFormStatus            = { method = "POST" } # Backoffice Trainee Profile: mark a form submitted/pending on behalf of the member
     adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
-    adminRecordTestResult              = { method = "POST" } # FORCA Tracker feature
+    adminRecordTestAttempt             = { method = "POST" } # FORCA Tracker feature
     adminRefundMemberLastPayment       = { method = "POST" }
     adminRefundMerchOrder              = { method = "POST" } # FORCA Merch Store feature
     adminRefundOrder                   = { method = "POST" }
@@ -86,7 +88,8 @@ locals {
     adminSaveRegistrationFormConfig    = { method = "POST" }
     adminSaveSystemConfig              = { method = "POST" } # Admin Portal: Config screen
     adminSaveTermsOfServiceContent     = { method = "POST" }
-    adminSaveTestDefinition            = { method = "POST" } # FORCA Tracker feature
+    adminSaveTestComponent             = { method = "POST" } # FORCA Tracker feature
+    adminSaveTestGroup                 = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType              = { method = "POST" } # FORCA Coach feature
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
@@ -123,7 +126,7 @@ locals {
     deleteSupportInquiry               = { method = "POST" }
     dismissMemberAlert                 = { method = "POST" }
     getActiveMembership                = { method = "ANY" }
-    getActiveTests                     = { method = "GET" } # FORCA Tracker feature — self-service Tests & Quizzes picker
+    getActiveTestGroups                = { method = "GET" } # FORCA Tracker feature — self-service Tests & Quizzes picker
     getActivityHistory                 = { method = "ANY" }
     getAdminNotifications              = { method = "ANY" }
     getAllInquiries                    = { method = "ANY" }
@@ -135,7 +138,7 @@ locals {
     getChildExerciseHistory            = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
     getChildOrders                     = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
     getChildProfile                    = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
-    getChildTestResults                = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildTestAttempts               = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
     getChildUpcomingSessions           = { method = "GET" } # FORCA Child Switcher: Parent Home tab, read-only
     getChildUploadUrl                  = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     getClassDetail                     = { method = "ANY" }

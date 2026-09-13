@@ -389,38 +389,106 @@ export interface ExerciseLogEntryItem {
   createdAt: string;
 }
 
-// PK=TESTDEF#<id>  SK=METADATA
-// Admin-defined recurring test/quiz (בחנים) series — e.g. a fitness test
-// scored in seconds (lower is better) or in reps (higher is better).
-// higherIsBetter is what lets adminGetTestResults.ts's per-entry
-// changeVsPrevious comparison work correctly for either direction.
-export interface TestDefinitionItem {
+// A test's raw grading/attempt value is always a plain number underneath —
+// 'time' stores total seconds, 'reps' a count, 'band_level' the 0-based
+// index into the component's own bandLevels list (mirrors
+// ExerciseMeasurementType's band_level convention above). Keep this in sync
+// with incore-app's src/shared/hooks/useTestGroupsManage.ts.
+export type TestMetricType = 'time' | 'reps' | 'band_level';
+
+// Inclusive [min,max] range — either bound null means unbounded on that
+// side. Two independent bands (e.g. under X and over Y) can both score 100
+// with a worse range in between; keep in sync with incore-app's
+// src/shared/hooks/useTestGroupsManage.ts.
+export interface TestGradingBand { id: string; min: number | null; max: number | null; score: number; passing: boolean }
+
+export interface TestComponentGrading {
+  mode: 'simple' | 'matrix';
+  // 'simple' mode
+  passingThreshold?: number;
+  excellenceThreshold?: number;
+  // 'matrix' mode
+  bands?: TestGradingBand[];
+}
+
+// PK=TESTGROUP#<id>  SK=METADATA
+// Admin-defined recurring test (בחן) — a "Simple" test is just a group with
+// exactly one component (created together by the frontend's SimpleTestForm);
+// a "Complex" test has several, each independently graded (see
+// TestComponentItem below). overallPassRule/passingAverageScore only matter
+// when the group has 2+ components — a Simple test's group always carries
+// overallPassRule='all_components', which is moot with one component.
+export interface TestGroupItem {
   PK: string; SK: string;
   name: string;
-  unit?: string;
-  higherIsBetter: boolean;
   active: boolean;
+  overallPassRule: 'all_components' | 'average_score' | 'none';
+  passingAverageScore?: number;
   createdAt: string;
   createdBy: string;
 }
 
-// PK=TESTRESULT#<id>  SK=METADATA
-// GSI1PK=MEMBER#<uid> GSI1SK=TESTRESULT#<testDefId>#<instanceNumber padded>#<id>
-// — a member's results for one test, in instance order. Admin-recorded only
-// (see adminRecordTestResult.ts) — "Only the admin views the test results"
-// means this is an evaluation record, not a trainee self-log, unlike
-// ExerciseLogEntryItem above. instanceNumber and the up/down comparison are
-// both computed per (member, testDef) pair, not globally — "improvement or
-// decline" is about this trainee's own trend, not a squad-wide ranking.
-export interface TestResultItem {
+// PK=TESTGROUP#<groupId>  SK=COMPONENT#<id>
+// Same partition as its group's METADATA item, so one Query/Scan on
+// PK=TESTGROUP#<groupId> returns the group and every one of its components
+// together. mandatory ("חובה למעבר") is read by adminRecordTestAttempt.ts:
+// failing a mandatory component forces the whole attempt's overallPassed to
+// false regardless of overallPassRule or the other components' results.
+export interface TestComponentItem {
+  PK: string; SK: string;
+  groupId: string;
+  name: string;
+  metricType: TestMetricType;
+  bandLevels?: string[];
+  higherIsBetter: boolean;
+  active: boolean;
+  mandatory: boolean;
+  grading: TestComponentGrading;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=TESTATTEMPT#<id>  SK=METADATA
+// GSI1PK=MEMBER#<uid> GSI1SK=TESTATTEMPT#<groupId>#<instanceNumber padded>#<id>
+// — a member's attempts for one test group, in instance order. Admin/coach-
+// recorded only (see adminRecordTestAttempt.ts), same "evaluation record,
+// not a trainee self-log" rationale as the old TestResultItem this replaces.
+// Each componentResults entry denormalizes componentName/metricType/
+// bandLevels at attempt time (like ExerciseLogEntryItem denormalizes
+// measurementType) so a later edit to the component's own config never
+// reinterprets a past attempt's display. finalScore/finalPassed are
+// overrideScore/overridePassed when set, else computedScore/computedPassed —
+// adminGetTestAttempts.ts computes changeVsPrevious per component by
+// comparing consecutive attempts' rawValue, same higherIsBetter-aware logic
+// the old adminGetTestResults.ts used.
+export interface TestAttemptItem {
   PK: string; SK: string;
   GSI1PK: string; GSI1SK: string;
   userId: string;
-  testDefId: string;
-  testDefName: string;
+  groupId: string;
+  groupName: string;
   instanceNumber: number;
-  score: number;
   date: string;
+  componentResults: {
+    componentId: string;
+    componentName: string;
+    metricType: TestMetricType;
+    bandLevels?: string[];
+    /** Denormalized from the component at attempt time — same rationale as
+     * ExerciseLogEntryItem.measurementType — so adminGetTestAttempts.ts's
+     * changeVsPrevious comparison stays correct even if the component's own
+     * higherIsBetter changes (or the component is deleted) later. */
+    higherIsBetter: boolean;
+    rawValue: number;
+    computedScore: number;
+    computedPassed: boolean;
+    overrideScore: number | null;
+    overridePassed: boolean | null;
+    finalScore: number;
+    finalPassed: boolean;
+  }[];
+  overallScore: number | null;
+  overallPassed: boolean | null;
   createdAt: string;
   createdBy: string;
 }
