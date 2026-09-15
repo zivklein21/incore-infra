@@ -3,26 +3,40 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { isAdmin } from '../lib/auth';
-import type { WorkoutPlanItem } from '../lib/entities';
+import { getCoachAccess } from '../lib/coachAccess';
+import {
+  MANDATORY_CLOSING_SECTION_GUIDELINES,
+  MANDATORY_CLOSING_SECTION_LABEL,
+  MANDATORY_CLOSING_SECTION_TIME_METHOD,
+  type WorkoutPlanBlockItem,
+  type WorkoutPlanItem,
+} from '../lib/entities';
+
+const TEXT_FIELDS = ['workoutNumber', 'workoutType', 'package', 'workingMethod', 'workoutGoal', 'timingStructure'] as const;
 
 // POST /adminSaveWorkoutPlan
-// Body: { id?: string, name: string, description?: string, active?: boolean }
-//   — omit id to create
-// Auth: Cognito JWT, caller must be admin — building/editing plans is
-// admin-only (same as the Tests & Quizzes catalog); a coach's only write
-// action against a plan is assigning an already-published one to her own
-// session (see assignSessionWorkoutPlan.ts).
-// Plan metadata only — exercises are saved separately via
-// adminSaveWorkoutPlanExercise.ts, same split as adminSaveTestGroup.ts /
-// adminSaveTestComponent.ts.
+// Body: { id?: string, name: string, active?: boolean, workoutNumber?: string,
+//         workoutType?: string, package?: string, workingMethod?: string,
+//         workoutGoal?: string, timingStructure?: string } — omit id to create
+// Auth: Cognito JWT, admin or a coach with workoutPlans:'write' — building
+// plans is the same permission tier as assigning an already-published one
+// to a session (see assignSessionWorkoutPlan.ts).
+// Plan metadata only — sections are saved separately via
+// adminSaveWorkoutPlanBlock.ts, same split as adminSaveTestGroup.ts/
+// adminSaveTestComponent.ts. On CREATE only, also writes the mandatory
+// "סיכום ותחקיר" closing section (see entities.ts) so every plan is
+// guaranteed to have it from the moment it exists, regardless of what the
+// client does next — the builder UI additionally shows it immediately in
+// its local draft before this call even happens, but this is the real
+// guarantee.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
-  if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const access = await getCoachAccess(callerUid);
+  if (!access || access.permissions.workoutPlans !== 'write') return json(403, { error: 'forbidden' });
 
-  let body: { id?: unknown; name?: unknown; description?: unknown; active?: unknown };
+  let body: Record<string, unknown>;
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -31,7 +45,6 @@ export async function handler(
 
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return json(400, { error: 'missing_name' });
-  const description = typeof body.description === 'string' ? body.description.trim() : undefined;
 
   const existingId = typeof body.id === 'string' && body.id ? body.id : null;
   const id = existingId ?? randomUUID();
@@ -51,13 +64,36 @@ export async function handler(
     PK: `WORKOUTPLAN#${id}`,
     SK: 'METADATA',
     name,
-    ...(description ? { description } : {}),
     active: body.active === true,
     createdAt,
     createdBy,
   };
+  for (const field of TEXT_FIELDS) {
+    const value = body[field];
+    if (typeof value === 'string' && value.trim()) item[field] = value.trim();
+  }
 
-  await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: item }));
+  const writes: Promise<unknown>[] = [
+    ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: item })),
+  ];
+
+  if (!existingId) {
+    const closingSection: WorkoutPlanBlockItem = {
+      PK: `WORKOUTPLAN#${id}`,
+      SK: `BLOCK#${randomUUID()}`,
+      planId: id,
+      label: MANDATORY_CLOSING_SECTION_LABEL,
+      order: 999999,
+      timeMethod: MANDATORY_CLOSING_SECTION_TIME_METHOD,
+      mode: 'freeText',
+      coachGuidelines: MANDATORY_CLOSING_SECTION_GUIDELINES,
+      locked: true,
+      createdAt: new Date().toISOString(),
+    };
+    writes.push(ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: closingSection })));
+  }
+
+  await Promise.all(writes);
 
   return json(200, { success: true, id });
 }

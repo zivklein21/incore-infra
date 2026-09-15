@@ -3,28 +3,48 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
+import { resolveMeasurableSessionWorkout } from '../lib/sessionWorkout';
 import type { ExerciseDefinitionItem, ExerciseLogEntryItem } from '../lib/entities';
 
-// POST /logExercise
-// Body: { exerciseId: string, value: { weight?, reps?, timeSeconds?, bandLevel? }, loggedAt?: string }
-// Auth: Cognito JWT, any signed-in FORCA member — always writes for herself
-// (no memberId param; see getMemberExerciseHistory.ts for the admin's
-// cross-member read path). loggedAt defaults to now; a trainee logging
-// "after the workout" a little later same-day can still backdate it.
+// POST /logSessionExercise
+// Body: { classId: string, exerciseId: string, value: { weight?, reps?, timeSeconds?, bandLevel? }, loggedAt?: string }
+// Auth: Cognito JWT, any signed-in FORCA member — always writes for herself.
+// Writes the same ExerciseLogEntryItem shape as logExercise.ts (so
+// getMyExerciseHistory.ts's "my Tracker history" stays one unified list
+// either way), but only accepts a (classId, exerciseId) pair that
+// resolveMeasurableSessionWorkout() would actually resolve — a session she
+// was marked actually present for, whose assigned Workout Plan has a
+// `measurable` section containing that exact exercise — and additionally
+// stamps classId/workoutPlanId/stationId so getSessionWorkoutPlan.ts can
+// show "already logged" per station on a repeat visit. Each save is a new
+// history entry (append-only, same convention as logExercise.ts), not an
+// overwrite of a prior log for that station.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
 
-  let body: { exerciseId?: unknown; value?: unknown; loggedAt?: unknown };
+  let body: { classId?: unknown; exerciseId?: unknown; value?: unknown; loggedAt?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
     return json(400, { error: 'invalid_json' });
   }
 
+  const classId = typeof body.classId === 'string' ? body.classId.trim() : '';
+  if (!classId) return json(400, { error: 'missing_class_id' });
   const exerciseId = typeof body.exerciseId === 'string' ? body.exerciseId.trim() : '';
   if (!exerciseId) return json(400, { error: 'missing_exercise_id' });
+
+  const resolved = await resolveMeasurableSessionWorkout(callerUid, classId);
+  if (!resolved.ok) return json(resolved.status, { error: resolved.error });
+
+  let stationId: string | undefined;
+  for (const section of resolved.measurableSections) {
+    const station = (section.stations ?? []).find((st) => st.exerciseIds.includes(exerciseId));
+    if (station) { stationId = station.id; break; }
+  }
+  if (!stationId) return json(403, { error: 'exercise_not_measurable_for_session' });
 
   const exerciseRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `EXERCISE#${exerciseId}`, SK: 'METADATA' } }));
   const exercise = exerciseRes.Item as ExerciseDefinitionItem | undefined;
@@ -38,9 +58,6 @@ export async function handler(
     ...(typeof raw.bandLevel === 'string' && raw.bandLevel ? { bandLevel: raw.bandLevel } : {}),
   };
 
-  // Require at least the field(s) this exercise's measurement type actually
-  // needs — a "weight_reps" entry with neither weight nor reps set isn't a
-  // real log, it's an empty submit.
   const hasRequiredField =
     (exercise.measurementType === 'weight_reps' && value.weight != null && value.reps != null) ||
     (exercise.measurementType === 'reps_only' && value.reps != null) ||
@@ -66,6 +83,9 @@ export async function handler(
     value,
     loggedAt,
     createdAt: nowIso,
+    classId,
+    workoutPlanId: resolved.planId,
+    stationId,
   };
 
   await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: item }));

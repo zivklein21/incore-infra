@@ -3,22 +3,27 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { isAdmin } from '../lib/auth';
+import { getCoachAccess } from '../lib/coachAccess';
 import type { EquipmentItem } from '../lib/entities';
 
 // POST /adminSaveEquipment
-// Body: { id?: string, name: string, quantity: number, outCount?: number }
+// Body: { id?: string, name: string, category?: string, quantity: number, outCount?: number }
 // Omit id to create (outCount defaults to 0 — nothing checked out yet).
 // Pass id to rename/change quantity, or just to move outCount (e.g. the
-// coach returns 2 of 3 ropes taken out — outCount goes from 3 to 1).
-// Auth: Cognito JWT, caller must be admin. FORCA-only.
+// coach returns 2 of 3 ropes taken out — outCount goes from 3 to 1, or an
+// admin correction — a recount, a broken item pulled from service).
+// Auth: Cognito JWT, admin or a coach with equipment:'write' (the same
+// permission that already gates toggleSessionEquipment.ts's per-session
+// pack-list actions) — managing the pool itself is the same trust level as
+// managing one session's checkout state. FORCA-only.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
-  if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const access = await getCoachAccess(callerUid);
+  if (!access || access.permissions.equipment !== 'write') return json(403, { error: 'forbidden' });
 
-  let body: { id?: unknown; name?: unknown; quantity?: unknown; outCount?: unknown };
+  let body: { id?: unknown; name?: unknown; category?: unknown; quantity?: unknown; outCount?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -27,6 +32,7 @@ export async function handler(
 
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return json(400, { error: 'missing_name' });
+  const category = typeof body.category === 'string' && body.category.trim() ? body.category.trim() : undefined;
   const quantity = typeof body.quantity === 'number' && body.quantity >= 0 ? Math.floor(body.quantity) : 0;
   const existingId = typeof body.id === 'string' && body.id ? body.id : null;
   const id = existingId ?? randomUUID();
@@ -55,6 +61,7 @@ export async function handler(
     PK: `EQUIPMENT#${id}`,
     SK: 'METADATA',
     name,
+    ...(category ? { category } : {}),
     quantity,
     outCount,
     createdAt,
@@ -63,5 +70,5 @@ export async function handler(
 
   await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: item }));
 
-  return json(200, { success: true, id, name, quantity, outCount });
+  return json(200, { success: true, id, name, category: category ?? '', quantity, outCount });
 }

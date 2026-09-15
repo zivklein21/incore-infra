@@ -6,6 +6,7 @@
 import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { CoachAccess } from './coachAccess';
+import { resolveWorkoutPlanEquipmentQuantitiesBatch } from './workoutPlanEquipment';
 import {
   deriveMemberName,
   type ClassItem,
@@ -20,6 +21,8 @@ export interface SessionLookups {
   trainingTypesById: Map<string, TrainingTypeItem>;
   groupNameById: Map<string, string>;
   equipmentById: Map<string, { name: string; availableQuantity: number }>;
+  /** Each referenced Workout Plan's own required equipment quantities — see resolveWorkoutPlanEquipmentQuantities(). */
+  planEquipmentByPlanId: Map<string, Map<string, number>>;
 }
 
 /**
@@ -48,11 +51,15 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
     ((groupsRes.Items ?? []) as GroupItem[]).map((g) => [g.PK.replace('GROUP#', ''), g.name ?? '']),
   );
 
+  const planIdsNeeded = [...new Set(sessionItems.map((s) => s.workoutPlanId).filter((id): id is string => !!id))];
+  const planEquipmentByPlanId = await resolveWorkoutPlanEquipmentQuantitiesBatch(planIdsNeeded);
+
   const equipmentIdsNeeded = new Set<string>();
   for (const session of sessionItems) {
     const tt = session.trainingTypeId ? trainingTypesById.get(session.trainingTypeId) : undefined;
     (tt?.equipmentRequirements ?? []).forEach((r) => equipmentIdsNeeded.add(r.equipmentId));
   }
+  for (const quantities of planEquipmentByPlanId.values()) for (const id of quantities.keys()) equipmentIdsNeeded.add(id);
   const equipmentById = new Map<string, { name: string; availableQuantity: number }>();
   if (equipmentIdsNeeded.size > 0) {
     const equipmentRes = await ddb.send(new ScanCommand({
@@ -68,7 +75,7 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
     }
   }
 
-  return { trainingTypesById, groupNameById, equipmentById };
+  return { trainingTypesById, groupNameById, equipmentById, planEquipmentByPlanId };
 }
 
 export interface RosterEntryDetail {
@@ -141,6 +148,29 @@ export async function resolveSessionDetail(
       availableQuantity: equipment?.availableQuantity ?? 0,
     };
   });
+
+  // The assigned Workout Plan's own required equipment, on top of whatever
+  // the Training Type already lists — same checkout-tracked pack list, not
+  // a separate one (see toggleSessionEquipment.ts). Quantity is the sum of
+  // each exercise's own ExerciseEquipmentRequirement across the plan's
+  // stations (see resolveWorkoutPlanEquipmentQuantities()) — there's no
+  // custom/per_member "mode" for a plan-derived item the way a Training
+  // Type requirement has, so this is the closest real equivalent. Skipped
+  // entirely for a coach with no workoutPlans access at all, and never
+  // duplicated for an equipmentId the Training Type already covers.
+  if (session.workoutPlanId && access.permissions.workoutPlans !== 'none') {
+    const existingIds = new Set(requiredEquipment.map((e) => e.id));
+    for (const [equipmentId, neededQuantity] of lookups.planEquipmentByPlanId.get(session.workoutPlanId) ?? []) {
+      if (existingIds.has(equipmentId)) continue;
+      const equipment = lookups.equipmentById.get(equipmentId);
+      requiredEquipment.push({
+        id: equipmentId,
+        name: equipment?.name ?? '',
+        neededQuantity,
+        availableQuantity: equipment?.availableQuantity ?? 0,
+      });
+    }
+  }
 
   return {
     classId,

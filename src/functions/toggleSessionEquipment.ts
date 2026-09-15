@@ -3,6 +3,7 @@ import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
+import { resolveWorkoutPlanEquipmentQuantities } from '../lib/workoutPlanEquipment';
 import type { ClassItem, EquipmentItem, TrainingTypeItem } from '../lib/entities';
 
 // POST /toggleSessionEquipment
@@ -15,12 +16,14 @@ import type { ClassItem, EquipmentItem, TrainingTypeItem } from '../lib/entities
 // The coach's "pack list" check at the start of a training session — taken:
 // true adds { equipmentId, quantity } to the session's equipmentTaken list
 // and bumps that EquipmentItem's outCount by quantity (computed server-side:
-// a 'custom' requirement's fixed customQuantity, or a 'per_member' one
-// resolved against this exact session's registered member count — see
-// getCoachSessions.ts's neededQuantity); taken: false (an un-check, before
+// a 'custom' requirement's fixed customQuantity, a 'per_member' one resolved
+// against this exact session's registered member count, or — for an
+// equipmentId that comes from the assigned Workout Plan's own required
+// equipment rather than the Training Type's — a flat 1, see
+// resolveWorkoutPlanEquipmentIds()); taken: false (an un-check, before
 // the item's been logged returned) reverses both by the quantity stored at
 // check-out time. See returnSessionEquipment.ts for logging everything back
-// at once, and getCoachSessions.ts for how this surfaces as a checklist.
+// at once, and lib/sessionDetail.ts for how this surfaces as a checklist.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -78,6 +81,14 @@ export async function handler(
         ExpressionAttributeValues: { ':pk': classKey.PK, ':prefix': 'REG#' },
       }));
       neededQuantity = regsRes.Items?.length ?? 0;
+    } else if (session.workoutPlanId) {
+      // Not a Training Type requirement — check whether it's on the
+      // assigned Workout Plan's own required-equipment list instead (see
+      // lib/sessionDetail.ts's resolveSessionDetail(), which is what
+      // surfaced this item to the client in the first place), summed the
+      // same way across the plan's stations.
+      const planEquipmentQuantities = await resolveWorkoutPlanEquipmentQuantities(session.workoutPlanId);
+      neededQuantity = planEquipmentQuantities.get(equipmentId) ?? 0;
     }
 
     next = [...current, { equipmentId, quantity: neededQuantity }];

@@ -7,9 +7,9 @@ export interface CoachPermissions {
   healthDeclarations: 'none' | 'read';
   /** Recording/deleting FORCA test attempts (write) vs. only viewing a trainee's attempt history (read) — split off from `performance` since that only ever gated viewing before. */
   testsGrading: 'none' | 'read' | 'write';
-  /** The session pack-list check-out/return actions — split off from `attendance` so a coach can run a session without necessarily managing equipment. No 'read' tier: there's no equipment view separate from the session screen itself. */
+  /** The session pack-list check-out/return actions AND managing the global Equipment Pool catalog itself (adminSaveEquipment.ts/adminDeleteEquipment.ts) — split off from `attendance` so a coach can run a session without necessarily managing equipment. No 'read' tier: there's no equipment view separate from the session screen/pool list itself. */
   equipment: 'none' | 'write';
-  /** Reserved for the workout-plan builder — not enforced by any endpoint yet. */
+  /** Governs the Exercise Pool catalog (adminSaveExercise.ts, since exercises are a workout plan's building blocks), the Workout Plan Builder itself (adminSaveWorkoutPlan/Block/Exercise.ts), AND assigning an already-built plan to a session (assignSessionWorkoutPlan.ts, 'write' only) — 'read' is view-only access to plans/their assignment. */
   workoutPlans: 'none' | 'read' | 'write';
 }
 

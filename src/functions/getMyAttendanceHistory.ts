@@ -45,6 +45,7 @@ export async function handler(
         declaredAttendance: r.declaredAttendance ?? 'pending',
         declineReason: r.declineReason || null,
         actualAttendance: r.actualAttendance ?? null,
+        workoutPlanId: session.workoutPlanId ?? null,
       };
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);

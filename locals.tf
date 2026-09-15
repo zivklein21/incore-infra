@@ -37,7 +37,7 @@ locals {
     adminDeleteTestGroup               = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
     adminDeleteWorkoutPlan             = { method = "POST" } # FORCA Workout Plan builder
-    adminDeleteWorkoutPlanExercise     = { method = "POST" } # FORCA Workout Plan builder
+    adminDeleteWorkoutPlanBlock        = { method = "POST" } # FORCA Workout Plan builder
     adminEvictFutureRegistrations      = { method = "POST" }
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
     adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
@@ -94,8 +94,8 @@ locals {
     adminSaveTestComponent             = { method = "POST" } # FORCA Tracker feature
     adminSaveTestGroup                 = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType              = { method = "POST" } # FORCA Coach feature
-    adminSaveWorkoutPlan               = { method = "POST" } # FORCA Workout Plan builder: admin-only
-    adminSaveWorkoutPlanExercise       = { method = "POST" } # FORCA Workout Plan builder: admin-only
+    adminSaveWorkoutPlan               = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
+    adminSaveWorkoutPlanBlock          = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
     adminSetForceShowPaymentButton     = { method = "POST" }
@@ -181,6 +181,7 @@ locals {
     getProducts                        = { method = "ANY" }
     getProfile                         = { method = "ANY" }
     getRegistrationFormConfig          = { method = "ANY" }
+    getSessionWorkoutPlan              = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                 = { method = "ANY" }
     getTermsOfServiceContent           = { method = "ANY" }
     getTrainingHistory                 = { method = "GET" } # FORCA Coach feature: admin-only
@@ -192,6 +193,7 @@ locals {
     leaveWaitlist                      = { method = "POST" }
     listMyFamily                       = { method = "ANY" }  # Family Accounts: a member's own linked children
     logExercise                        = { method = "POST" } # FORCA Tracker feature
+    logSessionExercise                 = { method = "POST" } # FORCA Tracker feature: trainee's own measurable session workout
     markActualAttendance               = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }

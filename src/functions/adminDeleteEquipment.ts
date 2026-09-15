@@ -2,16 +2,18 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { isAdmin } from '../lib/auth';
+import { getCoachAccess } from '../lib/coachAccess';
 
 // POST /adminDeleteEquipment
 // Body: { id: string }
-// Auth: Cognito JWT, caller must be admin. FORCA-only.
+// Auth: Cognito JWT, admin or a coach with equipment:'write' — see
+// adminSaveEquipment.ts. FORCA-only.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
-  if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const access = await getCoachAccess(callerUid);
+  if (!access || access.permissions.equipment !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { id?: unknown };
   try {

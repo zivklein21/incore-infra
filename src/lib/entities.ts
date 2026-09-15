@@ -230,6 +230,8 @@ export interface TrainingTypeItem {
 export interface EquipmentItem {
   PK: string; SK: string;
   name: string;
+  /** Free-text admin grouping (e.g. "Weights", "Bands") — filters the Equipment list, purely organizational. */
+  category?: string;
   quantity: number;
   outCount: number;
   createdAt: string;
@@ -352,19 +354,37 @@ export interface MerchOrderItem {
 // FORCA-only, lives in the FORCA table exclusively. See adminSaveExercise.ts /
 // adminSaveTestDefinition.ts.
 
-export type ExerciseMeasurementType = 'weight_reps' | 'reps_only' | 'time' | 'band_level' | 'bodyweight_reps';
+export type ExerciseMeasurementType = 'weight_reps' | 'reps_only' | 'time' | 'band_level' | 'bodyweight_reps' | 'reps_band_level';
 
 // PK=EXERCISE#<id>  SK=METADATA
 // Admin-defined exercise catalog — mirrors TrainingTypeItem's shape.
 // measurementType drives which fields of ExerciseLogEntryItem.value a
 // trainee's log entry actually fills in; bandLevels is only meaningful
-// when measurementType === 'band_level' (admin-typed labels, e.g.
-// "Light"/"Medium"/"Heavy" — no fixed universal scale).
+// when measurementType is 'band_level' or 'reps_band_level' (admin-typed
+// labels, e.g. "Light"/"Medium"/"Heavy" — no fixed universal scale).
+// 'reps_band_level' fills in both value.reps and value.bandLevel together
+// (resistance-band work logged as "12 reps @ Medium").
+// One equipment item this exercise needs, with how many — e.g. "2
+// dumbbells". equipmentId isn't existence-checked at write time (same
+// convention as TrainingTypeItem.equipmentRequirements, which also stores a
+// bare id without a lookup guard).
+export interface ExerciseEquipmentRequirement {
+  equipmentId: string;
+  quantity: number;
+}
+
 export interface ExerciseDefinitionItem {
   PK: string; SK: string;
   name: string;
+  /** Free-text admin grouping (e.g. "Strength", "Mobility") — filters the Exercises list, purely organizational. */
+  category?: string;
   measurementType: ExerciseMeasurementType;
   bandLevels?: string[];
+  /** Feeds Workout Plan Builder's automatic equipment aggregation (see
+   * adminListWorkoutPlans.ts / lib/workoutPlanEquipment.ts) — a station's
+   * needed quantity of each item is the sum of its chosen exercise(s)' own
+   * quantity here. */
+  equipment?: ExerciseEquipmentRequirement[];
   active: boolean;
   createdAt: string;
   createdBy: string;
@@ -393,6 +413,15 @@ export interface ExerciseLogEntryItem {
   };
   loggedAt: string;
   createdAt: string;
+  // Set only when this entry came from logSessionExercise.ts (logging a
+  // specific attended session's Workout Plan) rather than logExercise.ts's
+  // free-standing Tracker — see lib/sessionWorkout.ts. stationId lets
+  // getSessionWorkoutPlan.ts show "already logged" per station without
+  // guessing from exerciseId alone (a station can offer several
+  // interchangeable exercise alternatives).
+  classId?: string;
+  workoutPlanId?: string;
+  stationId?: string;
 }
 
 // A test's raw grading/attempt value is always a plain number underneath —
@@ -500,45 +529,125 @@ export interface TestAttemptItem {
 }
 
 // ─── FORCA Workout Plan builder ─────────────────────────────────────────────
-// FORCA-only, lives in the FORCA table exclusively. A named, ordered
-// training program built from the existing Exercise catalog
-// (ExerciseDefinitionItem above) — distinct from ExtraTrainingContentItem
-// (video/PDF content trainees browse on their own) and from a session's own
-// trainingTypeId (a session can carry both a Training Type AND a specific
-// Workout Plan, or neither). See adminSaveWorkoutPlan.ts /
-// adminSaveWorkoutPlanExercise.ts / assignSessionWorkoutPlan.ts.
+// FORCA-only, lives in the FORCA table exclusively. A named training program
+// with free-text "dry info" metadata, organized into ordered, freely-named
+// sections (Warm-up, Main Part A, Cool-down, ...) — distinct from
+// ExtraTrainingContentItem (video/PDF content trainees browse on their own)
+// and from a session's own trainingTypeId (a session can carry both a
+// Training Type AND a specific Workout Plan, or neither). See
+// adminSaveWorkoutPlan.ts / adminSaveWorkoutPlanBlock.ts /
+// assignSessionWorkoutPlan.ts.
+//
+// "Section" in every UI-facing label/comment below — kept as
+// WorkoutPlanBlockItem/"block" internally (type name, PK/SK prefix,
+// adminSaveWorkoutPlanBlock.ts's endpoint name) purely to avoid churning
+// already-deployed infra across a rename; there is no other concept called
+// a "block" anywhere in this feature.
+//
+// Required equipment is never entered directly on a plan — it's derived
+// automatically at read time (adminListWorkoutPlans.ts), per section, by
+// summing (every selected exercise's own
+// ExerciseDefinitionItem.equipment[].quantity) plus a flat 1 per that
+// section's own manualEquipmentIds entry. Read-only display here — but the
+// same sums also extend a session's checkout-tracked pack list
+// (ClassItem.equipmentTaken/outCount, normally driven by
+// TrainingTypeItem.equipmentRequirements) via
+// lib/workoutPlanEquipment.ts's resolveWorkoutPlanEquipmentQuantities(),
+// since a plan-derived item's "needed" is just that same sum — no
+// per_member/custom "mode" the way a whole training type has, but a real
+// quantity nonetheless.
 
 // PK=WORKOUTPLAN#<id>  SK=METADATA
 export interface WorkoutPlanItem {
   PK: string; SK: string;
   name: string;
-  description?: string;
   active: boolean;
+  // "Dry info" — general metadata, all free text (workoutNumber is
+  // digits-only by convention, kept as a string since it's a label a coach
+  // reads off a schedule, not a value anything computes with).
+  workoutNumber?: string;   // מספר אימון
+  workoutType?: string;     // סוג אימון
+  package?: string;         // מארז
+  workingMethod?: string;   // שיטת עבודה
+  workoutGoal?: string;     // מטרת אימון
+  timingStructure?: string; // זמני עבודה — e.g. "1 min work / 30s rest | 2-3 sets | 1 min between sets"
+  /** Superseded by the 6 fields above — kept only so any plan saved before this redesign still round-trips its old text instead of silently losing it. Not written or shown by the current builder UI. */
+  description?: string;
   createdAt: string;
   createdBy: string;
 }
 
-// PK=WORKOUTPLAN#<planId>  SK=EXERCISE#<id>
-// Same partition as its plan's METADATA item (one Query returns both, same
-// pattern as TestComponentItem). `order` is a plain mutable attribute rather
-// than being baked into the sort key — unlike TestComponentItem (unordered),
-// a plan's exercises are inherently sequenced, but keeping the id-based SK
-// stable means reordering is just two ordinary attribute updates (swap two
-// rows' `order`) instead of a delete+recreate to change a key. exerciseName
-// is denormalized from ExerciseDefinitionItem at add-time (same rationale as
-// ExerciseLogEntryItem.exerciseName) so a later rename/delete of the catalog
-// entry never breaks an existing plan's display.
-export interface WorkoutPlanExerciseItem {
+// The one section every plan is guaranteed to end with — see
+// adminSaveWorkoutPlan.ts's auto-creation on plan creation and
+// adminDeleteWorkoutPlanBlock.ts's delete guard. Title/timing are
+// re-assertable by the client (the admin is allowed to tweak them) but a
+// fresh plan always gets this exact one, so a section actually named this
+// and NOT locked should never occur in practice.
+export const MANDATORY_CLOSING_SECTION_LABEL = 'סיכום ותחקיר';
+export const MANDATORY_CLOSING_SECTION_TIME_METHOD = 'חלק קבוע בסיום כל אימון';
+export const MANDATORY_CLOSING_SECTION_GUIDELINES =
+  'לא לדלג. להסביר שכל אימון מסתיים בסיכום כדי לעבד וללמוד מהעשייה, אחת מהשנייה ומהמאמנת.\n\n' +
+  'שאלת סיום לכל מתאמנת: משהו אחד שהצלחת בו היום, משהו שהפתיע אותך או משהו חדש שלמדת.';
+
+export type WorkoutPlanSectionMode = 'stations' | 'freeText';
+
+// One station within a 'stations'-mode section — numbered by its position
+// (תחנה 1, תחנה 2, ...), each independently pulling one OR MORE exercises
+// from the catalog (interchangeable alternatives a coach can pick between
+// at the station — displayed joined by " / ", e.g. "Squat / Lunge") with
+// one shared optional note for the whole station. Embedded directly on the
+// section item (not a separate DynamoDB row per station, unlike the earlier
+// WorkoutPlanExerciseItem design this replaced) — simplest storage for what
+// is, at this app's scale, always a short list.
+export interface WorkoutPlanStation {
+  id: string;
+  order: number;
+  /** Optional admin-given label (e.g. "Push"), shown alongside/instead of the plain "תחנה N" numbering — purely cosmetic, never required. */
+  name?: string;
+  exerciseIds: string[];
+  /** Denormalized from ExerciseDefinitionItem at save time (see adminSaveWorkoutPlanBlock.ts), same order as exerciseIds, so a later catalog rename/delete never breaks an existing plan's display — same rationale as every other denormalized *Name field in this file. */
+  exerciseNames: string[];
+  notes?: string;
+}
+
+// PK=WORKOUTPLAN#<planId>  SK=BLOCK#<id>
+// Same partition as its plan's METADATA item (one Query returns the plan
+// and every section together). `order` is a plain mutable attribute rather
+// than baked into the sort key, so reordering is just two ordinary
+// attribute updates (swap two rows' `order`) instead of a delete+recreate
+// to change a key.
+//
+// Each non-locked section is in exactly one of two modes: 'stations' (an
+// ordered, numbered list of exercise-pool picks, each with its own note —
+// for structured circuits/strength stations) or 'freeText' (an ordered list
+// of plain text blocks — for warm-ups, stretches, or general drills that
+// don't map to catalog exercises 1:1). Only the fields for the active mode
+// are meaningful; the other mode's field is simply absent. The locked
+// closing section uses neither (no stations, no free-text items — just
+// label/timeMethod/coachGuidelines).
+export interface WorkoutPlanBlockItem {
   PK: string; SK: string;
   planId: string;
-  exerciseId: string;
-  exerciseName: string;
+  /** Section name — always present; free text chosen by the admin (e.g. "Warm-up", "Main Part A"), no fixed type/enum. */
+  label: string;
   order: number;
-  sets?: number;
-  /** Free text ("8-12", "AMRAP", "30 sec") — not always a plain integer. */
-  reps?: string;
-  restSeconds?: number;
-  notes?: string;
+  /** זמן/שיטה — free text timing or method instructions specific to this section. */
+  timeMethod?: string;
+  mode: WorkoutPlanSectionMode;
+  /** Station-Based Mode content — see WorkoutPlanStation. */
+  stations?: WorkoutPlanStation[];
+  /** Free-Text/Custom Mode content — each entry is one text block/item; order in the array is display order. */
+  freeTextItems?: string[];
+  /** Equipment manually added from the pool, on top of whatever the selected stations' exercises already imply — union of both (unless noEquipmentNeeded) is this section's computed requiredEquipment. */
+  manualEquipmentIds?: string[];
+  /** Explicit "this section needs no equipment" marker — when true, requiredEquipment is forced empty regardless of stations/manualEquipmentIds (distinguishes "genuinely none" from "not filled in yet"). */
+  noEquipmentNeeded?: boolean;
+  /** דגשים למאמנת — coach-facing guidance/notes for running this section. Pre-populated with MANDATORY_CLOSING_SECTION_GUIDELINES for the auto-created closing section. */
+  coachGuidelines?: string;
+  /** True only for the auto-created closing section — adminDeleteWorkoutPlanBlock.ts refuses to delete it. Editable otherwise (the admin may "slightly adjust" its text, per spec), just never removable. */
+  locked?: boolean;
+  /** מדידים — admin marks this section as one a trainee should log results for after the session. Only meaningful for a 'stations' section (a 'freeText' section has nothing measurable to log against). See lib/sessionWorkout.ts / logSessionExercise.ts / getSessionWorkoutPlan.ts for the trainee-facing read/write side this gates. */
+  measurable?: boolean;
   createdAt: string;
 }
 

@@ -20,6 +20,7 @@ export async function handler(
     .map((e) => ({
       id: e.PK.replace('EQUIPMENT#', ''),
       name: e.name ?? '',
+      category: e.category ?? '',
       quantity: e.quantity ?? 0,
       outCount: e.outCount ?? 0,
     }))

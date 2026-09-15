@@ -2,14 +2,16 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { DeleteCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { isAdmin } from '../lib/auth';
+import { getCoachAccess } from '../lib/coachAccess';
 
 // POST /adminDeleteWorkoutPlan
 // Body: { id: string }
-// Auth: Cognito JWT, caller must be admin
-// Cascades: a plan and every one of its exercises share PK=WORKOUTPLAN#<id>
-// (see entities.ts), so one Query finds them all to delete together — the
-// frontend only ever deletes a whole plan, never leaves orphaned exercises.
+// Auth: Cognito JWT, admin or a coach with workoutPlans:'write' — see
+// adminSaveWorkoutPlan.ts.
+// Cascades: a plan and every one of its blocks/exercises share
+// PK=WORKOUTPLAN#<id> (see entities.ts), so one Query finds them all to
+// delete together — the frontend only ever deletes a whole plan, never
+// leaves orphaned blocks/exercises.
 // Hard delete — any ClassItem still carrying this plan's workoutPlanId is
 // left untouched (denormalized workoutPlanName keeps that session's own
 // history meaningful), same convention as adminDeleteTestGroup.ts leaving
@@ -18,7 +20,8 @@ export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
-  if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const access = await getCoachAccess(callerUid);
+  if (!access || access.permissions.workoutPlans !== 'write') return json(403, { error: 'forbidden' });
 
   let body: { id?: unknown };
   try {
