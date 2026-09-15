@@ -59,6 +59,9 @@ function toGroupShape(g: TestGroupItem & { PK: string }) {
     active: g.active,
     overallPassRule: g.overallPassRule,
     passingAverageScore: g.passingAverageScore,
+    // Groups saved before this field existed have no level in DynamoDB —
+    // default to 1 here so every client-side TestGroup.level is always set.
+    level: g.level === 2 || g.level === 3 ? g.level : 1,
     components: [] as ReturnType<typeof toComponentShape>[],
   };
 }

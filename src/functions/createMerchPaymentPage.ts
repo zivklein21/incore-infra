@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { getMemberFirstLastName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
+import { getMemberFirstLastName, getMemberFullName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProductItem } from '../lib/entities';
@@ -20,10 +20,13 @@ import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProduc
 // childUid (FORCA Child Switcher): a parent shopping on behalf of a linked
 // daughter, from her own session — no ActiveProfileContext.switchToChild.
 // Family-link authorized (verifyFamilyLink), same as getChildProfile.ts and
-// friends. The order is attributed to the child (GSI1PK/userId/HYP client
-// info all resolve off her profile, not the calling parent's) so it shows
-// up correctly in her own Purchase History — omit childUid for a normal
-// self-checkout, same as before this existed.
+// friends. The order still belongs to the child (GSI1PK/userId resolve off
+// her profile, so it shows up correctly in her own Purchase History), but
+// the actual HYP charge (ClientName/ClientLName/email/cell/UserId) is always
+// billed to the PARENT's own profile — payment must go through her account,
+// never the child's — and the order record + HYP Info text both carry an
+// explicit childUid/childName so it's clear who the purchase was for. Omit
+// childUid for a normal self-checkout, same as before this existed.
 //
 // Deliberately separate from createHypPaymentPage.ts/buildOrderFromProduct
 // (which is wired to ProductItem's subscription/installment/mid-month
@@ -67,6 +70,18 @@ export async function handler(
   const member = memberRes.Item as MemberProfileItem | undefined;
   if (!member) return json(404, { error: 'member_not_found' });
 
+  // Payment must always be executed through the PARENT's own account — never
+  // the child's, even though the order/catalog-facing identity (uid/member
+  // above) stays hers so it keeps showing in her own purchase history. When
+  // childUid is set, callerUid (already family-link-verified above) IS the
+  // parent, so her profile is the one HYP should bill and receipt.
+  let payer: MemberProfileItem | undefined;
+  if (childUid) {
+    const payerRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${callerUid}`, SK: 'PROFILE' } }));
+    payer = payerRes.Item as MemberProfileItem | undefined;
+    if (!payer) return json(404, { error: 'payer_not_found' });
+  }
+
   // Distinct products only — dedupe before the lookup round-trip below (a
   // cart can have multiple lines for different variants of the same product).
   const productIds = Array.from(new Set(requested.map((r) => r.merchProductId)));
@@ -101,9 +116,14 @@ export async function handler(
   const totalAmount = lineItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
   if (totalAmount <= 0) return json(400, { error: 'invalid_price' });
 
-  const { firstName: clientFirstName, lastName: clientLastName } = getMemberFirstLastName(member);
-  const email = member.identity?.email || member.email || '';
-  const cell = member.identity?.phone || member.phone || '';
+  // clientName/clientLName/email/cell/userId are the identity HYP actually
+  // bills and receipts — the payer (parent) when childUid is set, otherwise
+  // the checking-out member herself, unchanged from before.
+  const billedMember = payer ?? member;
+  const { firstName: clientFirstName, lastName: clientLastName } = getMemberFirstLastName(billedMember);
+  const email = billedMember.identity?.email || billedMember.email || '';
+  const cell = billedMember.identity?.phone || billedMember.phone || '';
+  const childName = childUid ? getMemberFullName(member) : undefined;
 
   const orderId = `merch-${randomUUID()}`;
   const nowIso = new Date().toISOString();
@@ -121,6 +141,12 @@ export async function handler(
     amount: totalAmount,
     createdAt: nowIso,
     updatedAt: nowIso,
+    ...(childUid ? {
+      childUid,
+      childName,
+      payerUid: callerUid,
+      payerName: getMemberFullName(payer!),
+    } : {}),
   };
   await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: order }));
 
@@ -135,8 +161,8 @@ export async function handler(
       clientLName: clientLastName || undefined,
       email: email || undefined,
       cell: cell || undefined,
-      userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
-      info: buildHypInfo(infoLine),
+      userId: getMemberIdNumber(billedMember) || HYP_NO_ID_PLACEHOLDER,
+      info: childName ? buildHypInfo(infoLine, `שם הילדה: ${childName}`) : buildHypInfo(infoLine),
       pageLang: 'HEB',
       sendReceipt: true,
     });

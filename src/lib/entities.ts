@@ -348,6 +348,18 @@ export interface MerchOrderItem {
   refundedAmount?: number;
   refundedAt?: string;
   refundedBy?: string;
+  // Set only when a parent placed this order for a linked daughter
+  // (childUid on the request — see createMerchPaymentPage.ts). userId above
+  // stays the child's own uid (so the order keeps showing in her purchase
+  // history unchanged), while these denormalize WHO actually authorized and
+  // paid for it — payerUid/payerName always resolve to the parent's own
+  // profile, never the child's, per the "payment must go through the
+  // parent's account" requirement. childName mirrors userId's holder for
+  // admin readability without a second profile lookup.
+  childUid?: string;
+  childName?: string;
+  payerUid?: string;
+  payerName?: string;
 }
 
 // ─── FORCA Tracker (exercises + tests/quizzes) ─────────────────────────────
@@ -459,6 +471,11 @@ export interface TestGroupItem {
   active: boolean;
   overallPassRule: 'all_components' | 'average_score' | 'none';
   passingAverageScore?: number;
+  // רמה 1/2/3 — difficulty/age tier on the test itself. Optional here (not
+  // on the client's TestGroup type) since groups created before this field
+  // existed lack it in DynamoDB — adminListTestGroups.ts defaults those to
+  // level 1 so the client never has to handle "no level" itself.
+  level?: number;
   createdAt: string;
   createdBy: string;
 }
