@@ -61,6 +61,19 @@ export interface ClassItem {
   // rename/delete never breaks this session's own historical display.
   workoutPlanId?: string;
   workoutPlanName?: string;
+  // Marks this exact dated session instance as a "Test Session" (אימון מבחן)
+  // and links a specific Test Group (see TestGroupItem below) to it — see
+  // assignSessionTestGroup.ts. isTestSession is derived (true iff testGroupId
+  // is set), stored explicitly so a query can filter on it without reading
+  // the linked group. testComponentIds, when set, narrows grading to a
+  // subset of the group's components ("sub-tests") — omitted/undefined means
+  // every active component of the group applies. Denormalized testGroupName
+  // for the same reason workoutPlanName is: a later group rename/delete
+  // never breaks this session's historical display.
+  isTestSession?: boolean;
+  testGroupId?: string;
+  testGroupName?: string;
+  testComponentIds?: string[];
   // Set once the assigned coach (or admin) marks the session done — see
   // closeSession.ts. Requires every roster entry to have actualAttendance
   // recorded and equipmentTaken to be empty (everything returned) first.
@@ -541,6 +554,13 @@ export interface TestAttemptItem {
   }[];
   overallScore: number | null;
   overallPassed: boolean | null;
+  // Set when this attempt was recorded from a Test Session's post-session
+  // grading flow (see ClassItem.isTestSession / assignSessionTestGroup.ts /
+  // adminRecordTestAttempt.ts) rather than the generic member+group grading
+  // form — lets the grading panel show "already graded" per roster member
+  // for THIS session specifically, distinct from an attempt recorded at any
+  // other time. Undefined for every attempt recorded outside a session.
+  classId?: string;
   createdAt: string;
   createdBy: string;
 }
@@ -856,6 +876,14 @@ export interface MemberProfileItem {
     medical_clearance_uploaded_at?: string;
     medical_clearance_requested?: boolean;
     medical_clearance_requested_at?: string;
+    // FORCA Orthopedic Medical Form — admin-assigned per trainee (not a
+    // universal onboarding gate like registration_form above), same
+    // requested/submitted shape as medical_clearance_* — see
+    // adminSetOrthopedicFormRequested.ts / submitOrthopedicForm.ts.
+    orthopedic_form_requested?: boolean;
+    orthopedic_form_requested_at?: string;
+    orthopedic_form?: boolean;
+    orthopedic_answers?: Record<string, unknown>;
     // FORCA mandatory pre-login onboarding — legal authorization for a
     // trainee's participation in the program, signed by her parent (while
     // switched into the trainee via switchToChild, same as Registration/
@@ -896,6 +924,12 @@ export interface MemberProfileItem {
     // require_registration_form's pattern for the Parental Authorization
     // step. See computeComplianceFlags/forms.parental_authorization above.
     require_parental_authorization?: boolean;
+    // FORCA mandatory onboarding — same pattern as require_parental_authorization
+    // above, set true for every FORCA trainee at creation (adminCreateUser.ts).
+    // Distinct from forms.orthopedic_form_requested (adminSetOrthopedicFormRequested.ts),
+    // which is a separate, admin-optional "flag this trainee for a
+    // re-submission later" mechanism, not the initial onboarding gate.
+    require_orthopedic_form?: boolean;
     forceShowPaymentButton?: boolean;
   };
   subscriptionStatus?: string;
@@ -923,6 +957,7 @@ export interface ComplianceFlags {
   requiresHealthDeclaration: boolean;
   requiresPoliciesAgreement: boolean;
   requiresParentalAuthorization: boolean;
+  requiresOrthopedicForm: boolean;
 }
 
 // Shared by getProfile.ts (self/admin lookup) and listMyFamily.ts (a
@@ -963,7 +998,16 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   const requiresParentalAuthorization = !isParentOnly && admin.require_parental_authorization === true
     && !forms.parental_authorization?.submitted_at;
 
-  return { requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement, requiresParentalAuthorization };
+  // Mandatory onboarding, filled by the parent right after Health
+  // Declaration (see resolvePostLoginRoute.ts) — same parent-fills-it-for-her
+  // shape as Registration/Health/Parental Authorization above.
+  const requiresOrthopedicForm = !isParentOnly && admin.require_orthopedic_form === true
+    && forms.orthopedic_form !== true;
+
+  return {
+    requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement,
+    requiresParentalAuthorization, requiresOrthopedicForm,
+  };
 }
 
 // PK=ALERT#<id>  SK=METADATA

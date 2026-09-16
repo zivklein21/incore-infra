@@ -45,6 +45,7 @@ locals {
     adminGetMemberships                = { method = "ANY" }
     adminGetS3ObjectMetadata           = { method = "ANY" }  # Admin Portal: Assets Manager
     adminGetS3UploadUrl                = { method = "POST" } # Admin Portal: Assets Manager
+    adminGetSessionTestAttempts        = { method = "ANY" }  # FORCA Test Session: coach's post-session grading panel, roster-wide grading status
     adminGetSystemAlerts               = { method = "ANY" }  # Admin Portal: Dashboard
     adminGetSystemConfig               = { method = "ANY" }  # Admin Portal: Config screen
     adminGetTableItem                  = { method = "ANY" }  # Admin Portal: Data Viewer
@@ -86,6 +87,7 @@ locals {
     adminSaveMedicalClearance          = { method = "POST" } # Backoffice Trainee Profile: upload a medical certificate on behalf of the member
     adminSaveMerchProduct              = { method = "POST" } # FORCA Merch Store feature
     adminSaveNotificationTemplate      = { method = "POST" }
+    adminSaveOrthopedicFormConfig      = { method = "POST" } # FORCA Orthopedic Medical Form builder
     adminSaveProduct                   = { method = "POST" }
     adminSaveRecurringSession          = { method = "POST" } # FORCA Coach feature
     adminSaveRegistrationFormConfig    = { method = "POST" }
@@ -102,6 +104,7 @@ locals {
     adminSetHypBillingAgreementStatus  = { method = "POST" }
     adminSetMedicalClearanceRequested  = { method = "POST" } # FORCA Profile feature: flag a trainee's Medical Profile tab
     adminSetMemberAlert                = { method = "POST" }
+    adminSetOrthopedicFormRequested    = { method = "POST" } # FORCA Orthopedic Medical Form: flag a trainee as needing to fill it out
     adminUnlinkFamilyMember            = { method = "POST" } # Family Accounts: remove a parent/child link
     adminUpdateCoachPersonal           = { method = "POST" } # FORCA Coach feature
     adminUpdateMemberCredit            = { method = "POST" }
@@ -110,8 +113,10 @@ locals {
     adminUpdateMemberPersonal          = { method = "POST" }
     adminUpdateMemberWallet            = { method = "POST" }
     adminUpdatePendingMembership       = { method = "POST" }
+    adminUpdateSessionInstance         = { method = "POST" } # FORCA: edit one dated session instance independently of its recurring template
     adminUpdateTableItem               = { method = "POST" } # Admin Portal: Data Viewer
     adminWhoAmI                        = { method = "ANY" }  # Admin Portal: auth-gate check
+    assignSessionTestGroup             = { method = "POST" } # FORCA Test Session: link a Test Group (+ optional sub-tests) to one dated session, coach with testsGrading:'write' or admin
     assignSessionWorkoutPlan           = { method = "POST" } # FORCA Workout Plan builder: coach with workoutPlans:'write', or admin
     bookClass                          = { method = "POST" }
     cancelBooking                      = { method = "POST" }
@@ -174,9 +179,11 @@ locals {
     getMyExerciseHistory               = { method = "GET" } # FORCA Tracker feature
     getMyInquiries                     = { method = "ANY" }
     getMyOrders                        = { method = "GET" } # FORCA Profile feature: trainee's own merch purchase history
+    getMyTestAttempts                  = { method = "ANY" } # FORCA Tracker feature: trainee's own test/quiz results, self-service
     getMyTrainingSessions              = { method = "GET" } # FORCA Coach feature: trainee's own upcoming sessions
     getNotificationTemplates           = { method = "ANY" }
     getNotificationTimingSettings      = { method = "ANY" }
+    getOrthopedicFormConfig            = { method = "ANY" } # FORCA Orthopedic Medical Form builder
     getPaymentPolicySettings           = { method = "ANY" }
     getProducts                        = { method = "ANY" }
     getProfile                         = { method = "ANY" }
@@ -207,6 +214,7 @@ locals {
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }
     submitHealthDeclaration            = { method = "POST" }
+    submitOrthopedicForm               = { method = "POST" } # FORCA Orthopedic Medical Form: trainee/parent submission
     submitParentalAuthorization        = { method = "POST" } # FORCA mandatory onboarding: parent's signed program-participation authorization
     submitParentalConsent              = { method = "POST" }
     submitRegistrationForm             = { method = "POST" }

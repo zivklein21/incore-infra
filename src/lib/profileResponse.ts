@@ -61,7 +61,10 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   // configured form has zero questions (submits as {}), leaving members
   // stuck being routed back to a form that already succeeded.
   const registrationFormFilled = forms.registration_form === true;
-  const { requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement, requiresParentalAuthorization } = computeComplianceFlags(profile);
+  const {
+    requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement,
+    requiresParentalAuthorization, requiresOrthopedicForm,
+  } = computeComplianceFlags(profile);
 
   const birthday = profile.identity?.birthday ?? profile.birthday ?? null;
   const age = computeAge(birthday ?? undefined);
@@ -145,10 +148,13 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     membershipStart: typeof profile.membership?.start === 'string' ? profile.membership.start : null,
     membershipEnd: typeof profile.membership?.end === 'string' ? profile.membership.end : null,
     medicalClearance,
+    orthopedicFormRequested: forms.orthopedic_form_requested === true,
+    orthopedicForm: forms.orthopedic_form === true,
     requiresRegistrationForm,
     requiresHealthDeclaration,
     requiresPoliciesAgreement,
     requiresParentalAuthorization,
+    requiresOrthopedicForm,
     healthDeclaration,
     healthDeclarationValid,
     registrationForm: registrationFormFilled,

@@ -97,6 +97,15 @@ export async function handler(
   // incore-app). Anything other than the literal 'forca' defaults to 'incore',
   // same permissive style as accountType above.
   const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
+  // FORCA no longer allows creating a standalone parent_only account through
+  // this direct path — a FORCA parent account may only ever come into
+  // existence as a side effect of creating her trainee (see the
+  // linkParentLater block below, which always creates/reuses one with a
+  // hardcoded accountType regardless of this check). INCORE's own Family
+  // Accounts are unaffected.
+  if (brand === 'forca' && accountType === 'parent_only') {
+    return json(400, { error: 'forca_parent_only_not_supported' });
+  }
   // Coach (מדריכה): FORCA-only restricted staff role — view-only across
   // sessions/rosters/tracking, one write action (markActualAttendance.ts).
   // She's staff, not a trainee, so isForcaTrainee below excludes her —
@@ -142,6 +151,12 @@ export async function handler(
   // Mandatory for every FORCA trainee, same as the two above — no
   // admin-optional toggle (see computeComplianceFlags in entities.ts).
   const requireParentalAuthorization = isForcaTrainee;
+  // Mandatory onboarding step, filled by the parent right after Health
+  // Declaration (see resolvePostLoginRoute.ts) — required for every FORCA
+  // trainee to actually start using the app, not an admin-optional
+  // per-trainee flag like adminSetOrthopedicFormRequested.ts's separate
+  // "flag for a re-submission later" mechanism.
+  const requireOrthopedicForm = isForcaTrainee;
 
   const userPoolId = process.env.COGNITO_USER_POOL_ID as string;
   const cognito = new CognitoIdentityProviderClient({});
@@ -181,6 +196,7 @@ export async function handler(
         requireHealthForm: false,
         requireRegistrationForm: false,
         requireParentalAuthorization: false,
+        requireOrthopedicForm: false,
       }, callerUid, cognito, userPoolId);
       if ('error' in parentCreate) return json(parentCreate.status, { error: parentCreate.error });
       parentUid = parentCreate.uid;
@@ -204,6 +220,7 @@ export async function handler(
     requireHealthForm,
     requireRegistrationForm,
     requireParentalAuthorization,
+    requireOrthopedicForm,
     birthday: typeof body.birthday === 'string' ? body.birthday : undefined,
     age: typeof body.age === 'number' ? body.age : undefined,
     membershipId: typeof body.membershipId === 'string' && body.membershipId ? body.membershipId : undefined,
@@ -251,6 +268,7 @@ interface CreateMemberInput {
   requireHealthForm: boolean;
   requireRegistrationForm: boolean;
   requireParentalAuthorization: boolean;
+  requireOrthopedicForm: boolean;
   birthday?: string;
   age?: number;
   membershipId?: string;
@@ -317,6 +335,7 @@ async function createMemberAccount(
       require_health_form: input.requireHealthForm,
       require_registration_form: input.requireRegistrationForm,
       require_parental_authorization: input.requireParentalAuthorization,
+      require_orthopedic_form: input.requireOrthopedicForm,
     },
     createdAt: new Date().toISOString(),
     createdBy: callerUid,

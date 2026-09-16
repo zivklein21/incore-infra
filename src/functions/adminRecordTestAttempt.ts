@@ -64,7 +64,7 @@ export async function handler(
   const access = await getCoachAccess(callerUid);
   if (!access || access.permissions.testsGrading !== 'write') return json(403, { error: 'forbidden' });
 
-  let body: { memberId?: unknown; groupId?: unknown; date?: unknown; componentValues?: unknown };
+  let body: { memberId?: unknown; groupId?: unknown; date?: unknown; componentValues?: unknown; classId?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -78,6 +78,10 @@ export async function handler(
   const date = typeof body.date === 'string' && body.date ? body.date : new Date().toISOString();
   const componentValues = parseComponentValues(body.componentValues);
   if (!componentValues) return json(400, { error: 'invalid_component_values' });
+  // Set when this attempt is being recorded from a Test Session's
+  // post-session grading flow (see ClassItem.isTestSession) — lets the
+  // grading panel show "already graded" per roster member for THIS session.
+  const classId = typeof body.classId === 'string' && body.classId ? body.classId : undefined;
 
   if (!access.isAdmin) {
     const target = await resolveMemberProfile(memberId);
@@ -168,6 +172,7 @@ export async function handler(
     componentResults,
     overallScore,
     overallPassed,
+    ...(classId ? { classId } : {}),
     createdAt: nowIso,
     createdBy: callerUid,
   };

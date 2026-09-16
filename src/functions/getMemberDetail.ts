@@ -142,6 +142,7 @@ export async function handler(
     phone: p.identity?.phone ?? p.phone ?? '',
     email: p.identity?.email ?? p.email ?? '',
     role: p.identity?.role ?? p.role ?? 'member',
+    accountType: p.identity?.accountType ?? 'member',
     adminAlertMessage: p.admin?.alertMessage ?? '',
     healthDeclaration,
     healthDeclarationValid,
@@ -154,6 +155,10 @@ export async function handler(
     groupName,
     groupId: groupId ?? null,
     medicalClearance,
+    orthopedicFormRequested: forms.orthopedic_form_requested === true,
+    orthopedicFormRequestedAt: forms.orthopedic_form_requested_at ?? null,
+    orthopedicForm: forms.orthopedic_form === true,
+    orthopedicAnswers: forms.orthopedic_answers ?? null,
     parentalAuthorization: forms.parental_authorization?.submitted_at
       ? {
           submittedAt: forms.parental_authorization.submitted_at,

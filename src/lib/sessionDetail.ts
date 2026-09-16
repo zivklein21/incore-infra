@@ -102,6 +102,10 @@ export interface SessionDetail {
   closedAt: string | null;
   workoutPlanId: string | null;
   workoutPlanName: string | null;
+  isTestSession: boolean;
+  testGroupId: string | null;
+  testGroupName: string | null;
+  testComponentIds: string[] | null;
   roster: RosterEntryDetail[];
 }
 
@@ -190,6 +194,12 @@ export async function resolveSessionDetail(
     // uses for healthDeclarations:'none'.
     workoutPlanId: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanId ?? null),
     workoutPlanName: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanName ?? null),
+    // Stripped the same way for a coach with no testsGrading access at all —
+    // she has no reason to see a test-session flag she can't act on.
+    isTestSession: access.permissions.testsGrading === 'none' ? false : (session.isTestSession === true),
+    testGroupId: access.permissions.testsGrading === 'none' ? null : (session.testGroupId ?? null),
+    testGroupName: access.permissions.testsGrading === 'none' ? null : (session.testGroupName ?? null),
+    testComponentIds: access.permissions.testsGrading === 'none' ? null : (session.testComponentIds ?? null),
     roster,
   };
 }

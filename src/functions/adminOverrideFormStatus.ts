@@ -5,7 +5,7 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MemberProfileItem } from '../lib/entities';
 
-type FormType = 'registration' | 'health' | 'parentalAuthorization' | 'policies';
+type FormType = 'registration' | 'health' | 'parentalAuthorization' | 'policies' | 'orthopedic';
 
 // POST /adminOverrideFormStatus
 // Body: { memberId: string, brand?: 'incore' | 'forca', formType: FormType, submitted: boolean }
@@ -37,7 +37,7 @@ export async function handler(
   const memberId = typeof body.memberId === 'string' ? body.memberId.trim() : '';
   if (!memberId) return json(400, { error: 'missing_member_id' });
   const formType = body.formType as FormType;
-  if (!['registration', 'health', 'parentalAuthorization', 'policies'].includes(formType)) {
+  if (!['registration', 'health', 'parentalAuthorization', 'policies', 'orthopedic'].includes(formType)) {
     return json(400, { error: 'invalid_form_type' });
   }
   const submitted = body.submitted === true;
@@ -66,6 +66,9 @@ export async function handler(
     } else {
       delete forms.parental_authorization;
     }
+  } else if (formType === 'orthopedic') {
+    forms.orthopedic_form = submitted;
+    if (submitted && !forms.orthopedic_answers) forms.orthopedic_answers = {};
   } else {
     forms.agreedToPolicies = submitted;
     forms.policiesAcceptedAt = submitted ? nowIso : null;
