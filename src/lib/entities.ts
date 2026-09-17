@@ -482,7 +482,7 @@ export interface TestGroupItem {
   PK: string; SK: string;
   name: string;
   active: boolean;
-  overallPassRule: 'all_components' | 'average_score' | 'none';
+  overallPassRule: 'all_components' | 'average_score' | 'weighted_average' | 'none';
   passingAverageScore?: number;
   // רמה 1/2/3 — difficulty/age tier on the test itself. Optional here (not
   // on the client's TestGroup type) since groups created before this field
@@ -509,6 +509,12 @@ export interface TestComponentItem {
   active: boolean;
   mandatory: boolean;
   grading: TestComponentGrading;
+  // תמהיל ציון — this component's % weight toward its group's compound
+  // grade, only read by adminRecordTestAttempt.ts when the parent group's
+  // overallPassRule is 'weighted_average'. Absent/0 on any component means
+  // adminRecordTestAttempt.ts falls back to a plain average for that attempt
+  // rather than dividing by a zero total weight.
+  weight?: number;
   createdAt: string;
   createdBy: string;
 }

@@ -35,7 +35,10 @@ function parseGrading(raw: unknown): TestComponentGrading | null {
 // Body: { id?: string, groupId: string, name: string,
 //         metricType: 'time'|'reps'|'band_level', bandLevels?: string[],
 //         higherIsBetter: boolean, active?: boolean, mandatory?: boolean,
-//         grading: ComponentGrading } — omit id to create
+//         grading: ComponentGrading, weight?: number } — omit id to create
+// weight (תמהיל ציון) is only meaningful when the parent group's
+// overallPassRule is 'weighted_average' (see adminRecordTestAttempt.ts) —
+// not validated against the group here, just stored as given.
 // Auth: Cognito JWT, caller must be admin
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -45,7 +48,7 @@ export async function handler(
 
   let body: {
     id?: unknown; groupId?: unknown; name?: unknown; metricType?: unknown; bandLevels?: unknown;
-    higherIsBetter?: unknown; active?: unknown; mandatory?: unknown; grading?: unknown;
+    higherIsBetter?: unknown; active?: unknown; mandatory?: unknown; grading?: unknown; weight?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -64,6 +67,7 @@ export async function handler(
   if (typeof body.higherIsBetter !== 'boolean') return json(400, { error: 'missing_higher_is_better' });
   const grading = parseGrading(body.grading);
   if (!grading) return json(400, { error: 'invalid_grading' });
+  const weight = typeof body.weight === 'number' && Number.isFinite(body.weight) && body.weight > 0 ? body.weight : undefined;
 
   const groupRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `TESTGROUP#${groupId}`, SK: 'METADATA' } }));
   if (!groupRes.Item) return json(404, { error: 'test_group_not_found' });
@@ -93,6 +97,7 @@ export async function handler(
     active: body.active === true,
     mandatory: body.mandatory === true,
     grading,
+    ...(weight != null ? { weight } : {}),
     createdAt,
     createdBy,
   };

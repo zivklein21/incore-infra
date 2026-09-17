@@ -49,10 +49,17 @@ function parseComponentValues(raw: unknown): ComponentValueInput[] | null {
 // Each raw value is evaluated against its component's grading rule
 // (testGrading.ts); an override, if provided, replaces the computed
 // score/pass for that component. overallScore is the average finalScore
-// across submitted components; overallPassed follows group.overallPassRule,
-// EXCEPT that failing any component flagged `mandatory` always forces
-// overallPassed to false regardless of the rule (חובה למעבר) — unless
-// overallPassRule is 'none', which never produces a verdict at all.
+// across submitted components — except when overallPassRule is
+// 'weighted_average' (תמהיל ציון), where it's each component's finalScore
+// weighted by its own `weight` (normalized against the sum of submitted
+// components' weights, not assumed to already total exactly 100; falls back
+// to a plain average if no component carries a weight yet). overallPassed
+// follows group.overallPassRule ('average_score' and 'weighted_average' both
+// compare overallScore against passingAverageScore, defaulting to 0 — i.e.
+// always-passing — when that cutoff isn't set), EXCEPT that failing any
+// component flagged `mandatory` always forces overallPassed to false
+// regardless of the rule (חובה למעבר) — unless overallPassRule is 'none',
+// which never produces a verdict at all.
 // The stored instanceNumber is a write-time counter only; the *displayed*
 // rank and changeVsPrevious are recomputed by date (testAttemptOrdering.ts),
 // same as adminGetTestAttempts.ts, so a backdated attempt slots into its
@@ -134,8 +141,16 @@ export async function handler(
   let overallScore: number | null = null;
   let overallPassed: boolean | null = null;
   if (group.overallPassRule !== 'none') {
-    overallScore = Math.round(componentResults.reduce((sum, r) => sum + r.finalScore, 0) / componentResults.length);
-    const basePassed = group.overallPassRule === 'average_score'
+    if (group.overallPassRule === 'weighted_average') {
+      const weighted = componentResults.map((r) => ({ score: r.finalScore, weight: Math.max(0, componentsById.get(r.componentId)?.weight ?? 0) }));
+      const totalWeight = weighted.reduce((sum, w) => sum + w.weight, 0);
+      overallScore = totalWeight > 0
+        ? Math.round(weighted.reduce((sum, w) => sum + w.score * w.weight, 0) / totalWeight)
+        : Math.round(componentResults.reduce((sum, r) => sum + r.finalScore, 0) / componentResults.length);
+    } else {
+      overallScore = Math.round(componentResults.reduce((sum, r) => sum + r.finalScore, 0) / componentResults.length);
+    }
+    const basePassed = group.overallPassRule === 'average_score' || group.overallPassRule === 'weighted_average'
       ? overallScore >= (group.passingAverageScore ?? 0)
       : componentResults.every((r) => r.finalPassed);
     const mandatoryFailed = componentResults.some((r) => componentsById.get(r.componentId)?.mandatory && !r.finalPassed);

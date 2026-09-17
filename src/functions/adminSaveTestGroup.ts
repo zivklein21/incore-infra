@@ -8,8 +8,12 @@ import type { TestGroupItem } from '../lib/entities';
 
 // POST /adminSaveTestGroup
 // Body: { id?: string, name: string, active?: boolean,
-//         overallPassRule: 'all_components'|'average_score'|'none',
+//         overallPassRule: 'all_components'|'average_score'|'weighted_average'|'none',
 //         passingAverageScore?: number, level: 1|2|3 } — omit id to create
+// passingAverageScore is required for 'average_score' (its only pass/fail
+// signal) but optional for 'weighted_average' — the weighted grade itself is
+// always computed regardless; a cutoff on top of it is opt-in (see
+// adminRecordTestAttempt.ts).
 // Auth: Cognito JWT, caller must be admin
 // Group metadata only — components are saved separately via
 // adminSaveTestComponent.ts. A Simple test's frontend form chains one call
@@ -30,7 +34,8 @@ export async function handler(
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return json(400, { error: 'missing_name' });
 
-  const overallPassRule = body.overallPassRule === 'all_components' || body.overallPassRule === 'average_score' || body.overallPassRule === 'none'
+  const overallPassRule = body.overallPassRule === 'all_components' || body.overallPassRule === 'average_score'
+    || body.overallPassRule === 'weighted_average' || body.overallPassRule === 'none'
     ? body.overallPassRule : null;
   if (!overallPassRule) return json(400, { error: 'invalid_overall_pass_rule' });
 

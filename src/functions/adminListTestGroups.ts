@@ -77,5 +77,6 @@ function toComponentShape(c: TestComponentItem & { PK: string; SK: string }) {
     active: c.active,
     mandatory: c.mandatory,
     grading: c.grading,
+    weight: c.weight,
   };
 }
