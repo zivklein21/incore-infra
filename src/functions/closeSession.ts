@@ -3,7 +3,14 @@ import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
+import { resolveTemplate, fmtTime, fmtDate } from '../lib/templateResolver';
 import type { ClassItem, RegistrationItem } from '../lib/entities';
+
+// Built-in fallback for the "fill out the post-workout report now?" prompt
+// — used until an admin creates a POST_WORKOUT_REPORT_DUE template in
+// Backoffice > Notification Templates (FORCA brand), so the prompt itself
+// never silently disappears for lack of configuration.
+const DEFAULT_REPORT_PROMPT = { title: 'דוח ביצועים לאחר אימון', body: 'האם למלא כעת את דוח הביצועים לאימון זה?' };
 
 // POST /closeSession
 // Body: { classId: string }
@@ -67,5 +74,14 @@ export async function handler(
     ExpressionAttributeValues: { ':now': nowIso, ':uid': callerUid },
   }));
 
-  return json(200, { success: true, closedAt: nowIso });
+  const sessionDate = new Date(session.date);
+  const resolved = await resolveTemplate(
+    'POST_WORKOUT_REPORT_DUE',
+    'he',
+    { class_type: session.className ?? '', class_time: fmtTime(sessionDate), class_date: fmtDate(sessionDate, 'he') },
+    'forca',
+  );
+  const reportPrompt = resolved ? { title: resolved.title, body: resolved.body } : DEFAULT_REPORT_PROMPT;
+
+  return json(200, { success: true, closedAt: nowIso, reportPrompt });
 }

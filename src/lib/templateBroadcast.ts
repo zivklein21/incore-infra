@@ -4,6 +4,9 @@ import { ddb, tableForBrand } from './dynamo';
 import { deriveMemberName, type NotificationTemplateItem, type MemberProfileItem } from './entities';
 import { getExpoPushToken } from './push';
 import { getAllMemberProfiles } from './memberScan';
+import { getFamilyLinkSets } from './familyLinks';
+
+export type BroadcastAudience = 'children' | 'parents' | 'both';
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
 const EXPO_CHUNK_SIZE = 100;
@@ -57,11 +60,18 @@ async function writeBroadcastLog(tableName: string, adminUserId: string, templat
 // since scheduleAlertRoutine's stored settings.templateId predates this and
 // was only ever configured from the (INCORE-only) Notification Timing
 // screen's Schedule Alert card.
+//
+// audience narrows the broadcast for FORCA's Family Accounts (see
+// lib/familyLinks.ts): 'children' keeps only members linked as someone's
+// childUid, 'parents' keeps only members linked as someone's parentUid — a
+// solo member with no family link at all matches neither. 'both' (the
+// default) is the original unfiltered behavior and skips the extra scan.
 export async function sendTemplateBroadcast(
   templateId: string,
   dynamicVariables: Record<string, string>,
   triggeredBy: string,
   brand: 'incore' | 'forca' = 'incore',
+  audience: BroadcastAudience = 'both',
 ): Promise<{ success: boolean; dispatchedCount: number; error?: string }> {
   const tableName = tableForBrand(brand);
   const templateRes = await ddb.send(new GetCommand({
@@ -77,7 +87,13 @@ export async function sendTemplateBroadcast(
   const textColor = tpl.textColor || '#FFFFFF';
 
   const allProfiles = await getAllMemberProfiles(tableName);
-  const traineeProfiles = allProfiles.filter((p) => !isMemberAdmin(p));
+  let traineeProfiles = allProfiles.filter((p) => !isMemberAdmin(p));
+
+  if (audience !== 'both') {
+    const { parentUids, childUids } = await getFamilyLinkSets(tableName);
+    const targetUids = audience === 'children' ? childUids : parentUids;
+    traineeProfiles = traineeProfiles.filter((p) => targetUids.has(p.PK.replace('MEMBER#', '')));
+  }
 
   if (traineeProfiles.length === 0) {
     await writeBroadcastLog(tableName, triggeredBy, templateId, rawTitle, rawBody, 0);

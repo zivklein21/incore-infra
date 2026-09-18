@@ -84,6 +84,8 @@ export interface RosterEntryDetail {
   declaredAttendance: 'pending' | 'yes' | 'no';
   declineReason: string | null;
   actualAttendance: 'present' | 'absent' | null;
+  /** Who last recorded/corrected actualAttendance — see RegistrationItem.actualAttendanceBy. Null on any entry predating this field, or with no actualAttendance recorded yet. */
+  actualAttendanceBy: { uid: string; name: string; role: 'admin' | 'coach' } | null;
   medicalFlag: boolean;
 }
 
@@ -135,6 +137,7 @@ export async function resolveSessionDetail(
       declaredAttendance: r.declaredAttendance ?? 'pending',
       declineReason: r.declineReason || null,
       actualAttendance: r.actualAttendance ?? null,
+      actualAttendanceBy: r.actualAttendanceBy ?? null,
       medicalFlag: access.permissions.healthDeclarations === 'none'
         ? false
         : Object.values(healthAnswers).some((v) => v === 'yes'),

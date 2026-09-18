@@ -188,6 +188,7 @@ locals {
     getProducts                        = { method = "ANY" }
     getProfile                         = { method = "ANY" }
     getRegistrationFormConfig          = { method = "ANY" }
+    getSessionPostWorkoutReport        = { method = "GET" } # FORCA Coach feature: staff-only post-workout performance report, tailored to the session's assigned Workout Plan
     getSessionWorkoutPlan              = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                 = { method = "ANY" }
     getTermsOfServiceContent           = { method = "ANY" }
@@ -210,6 +211,7 @@ locals {
     saveClassSeries                    = { method = "POST" }
     saveMedicalClearance               = { method = "POST" } # FORCA Profile feature: upload/replace a medical clearance certificate
     saveScheduleAlertSettings          = { method = "POST" }
+    saveSessionPostWorkoutReport       = { method = "POST" } # FORCA Coach feature: staff-only post-workout performance report
     saveSupportSettings                = { method = "POST" }
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }

@@ -1,15 +1,20 @@
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from './dynamo';
+import { ddb, tableForBrand } from './dynamo';
 import type { NotificationTemplateItem } from './entities';
 
-export type TemplateType = 'CLASS_CANCEL' | 'CLASS_UPDATE' | 'BOOK_CANCEL' | 'REMINDER' | 'SPOT_IS_OPEN' | 'CUSTOM' | 'MEMBERSHIP_ALERT' | 'SUBSCRIPTION_EXPIRY';
+export type TemplateType =
+  | 'CLASS_CANCEL' | 'CLASS_UPDATE' | 'BOOK_CANCEL' | 'REMINDER' | 'SPOT_IS_OPEN'
+  | 'CUSTOM' | 'MEMBERSHIP_ALERT' | 'SUBSCRIPTION_EXPIRY'
+  // FORCA-only, staff-facing (not a member/trainee push) — see closeSession.ts.
+  | 'POST_WORKOUT_REPORT_DUE';
 export type Lang = 'he' | 'en';
 
 export interface TemplateVars {
   class_type: string;
   class_time: string;
   class_date: string;
-  member_name: string;
+  /** Optional — irrelevant for a staff-facing template like POST_WORKOUT_REPORT_DUE. */
+  member_name?: string;
   expiry_date?: string;
 }
 
@@ -25,7 +30,7 @@ function applyVars(text: string, vars: TemplateVars): string {
     .replace(/\{class_type\}/g, vars.class_type)
     .replace(/\{class_time\}/g, vars.class_time)
     .replace(/\{class_date\}/g, vars.class_date)
-    .replace(/\{member_name\}/g, vars.member_name)
+    .replace(/\{member_name\}/g, vars.member_name ?? '')
     .replace(/\{expiry_date\}/g, vars.expiry_date ?? '');
 }
 
@@ -34,13 +39,19 @@ function applyVars(text: string, vars: TemplateVars): string {
 // without orderBy isn't creation time either, so this preserves the same
 // (arbitrary-if-more-than-one) selection behavior rather than "fixing" it
 // into an explicit sort the original never actually had.
+//
+// brand picks which table the template itself lives in (see
+// tableForBrand()/getNotificationTemplates.ts) — defaults to 'incore' so
+// every existing caller (all INCORE member-facing flows) is unaffected;
+// FORCA-only types like POST_WORKOUT_REPORT_DUE must pass 'forca' explicitly.
 export async function resolveTemplate(
   type: TemplateType,
   lang: Lang,
   vars: TemplateVars,
+  brand: 'incore' | 'forca' = 'incore',
 ): Promise<ResolvedMessage | null> {
   const res = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
+    TableName: tableForBrand(brand),
     IndexName: 'GSI1',
     KeyConditionExpression: 'GSI1PK = :pk',
     ExpressionAttributeValues: { ':pk': `TEMPLATETYPE#${type}` },

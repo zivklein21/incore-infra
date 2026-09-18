@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './dynamo';
 import { resolveMemberProfile } from './memberLookup';
 import { deriveMemberName, type FamilyLinkItem } from './entities';
@@ -93,4 +93,28 @@ export async function verifyFamilyLink(parentUid: string, childUid: string): Pro
   }));
   if (!res.Item) return { ok: false };
   return { ok: true, table: resolvedParent.table };
+}
+
+// Every parentUid/childUid appearing in an active family link, for a given
+// table — used to split a broadcast audience into "children"/"parents"
+// (see lib/templateBroadcast.ts). Same full-Scan tradeoff as
+// adminListFamilyLinks.ts's "list everything" path (<=50 users/brand).
+export async function getFamilyLinkSets(tableName: string): Promise<{ parentUids: Set<string>; childUids: Set<string> }> {
+  const parentUids = new Set<string>();
+  const childUids = new Set<string>();
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(new ScanCommand({
+      TableName: tableName,
+      FilterExpression: 'begins_with(SK, :prefix)',
+      ExpressionAttributeValues: { ':prefix': 'FAMILY#' },
+      ExclusiveStartKey: lastKey,
+    }));
+    for (const item of (res.Items ?? []) as FamilyLinkItem[]) {
+      parentUids.add(item.parentUid);
+      childUids.add(item.childUid);
+    }
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
+  return { parentUids, childUids };
 }

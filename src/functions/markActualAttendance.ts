@@ -3,6 +3,7 @@ import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
+import { resolveStaffIdentity } from '../lib/staffIdentity';
 import type { ClassItem } from '../lib/entities';
 
 // POST /markActualAttendance
@@ -53,12 +54,14 @@ export async function handler(
   if (session.closedAt && !access.isAdmin) return json(403, { error: 'session_closed' });
   if (Date.now() < new Date(session.date).getTime() - FIVE_MIN_MS) return json(403, { error: 'too_early' });
 
+  const actualAttendanceBy = await resolveStaffIdentity(callerUid, access);
+
   await ddb.send(new UpdateCommand({
     TableName: FORCA_TABLE_NAME,
     Key: { PK: `CLASS#${classId}`, SK: `REG#${memberId}` },
-    UpdateExpression: 'SET actualAttendance = :val',
+    UpdateExpression: 'SET actualAttendance = :val, actualAttendanceBy = :by',
     ConditionExpression: 'attribute_exists(PK)',
-    ExpressionAttributeValues: { ':val': actualAttendance },
+    ExpressionAttributeValues: { ':val': actualAttendance, ':by': actualAttendanceBy },
   }));
 
   return json(200, { success: true });

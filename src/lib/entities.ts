@@ -188,6 +188,38 @@ export interface RegistrationItem {
   // Optional free-text reason, only meaningful when declaredAttendance === 'no'.
   declineReason?: string;
   actualAttendance?: 'present' | 'absent' | null;
+  // Audit trail for the write above — denormalized at markActualAttendance.ts
+  // write time (same convention as every other *By/*Name field in this
+  // file, e.g. ClassItem.closedBy), so Training History can show who
+  // recorded/corrected this trainee's attendance without a separate lookup.
+  // Absent on any registration whose actualAttendance predates this field.
+  actualAttendanceBy?: { uid: string; name: string; role: 'admin' | 'coach' };
+}
+
+// PK=CLASS#<classId>  SK=POSTWORKOUTREPORT
+// Same partition as the session's own METADATA/REG# rows. Staff-only
+// (coach/admin) session-level report filled in after a session ends —
+// distinct from the trainee's own per-exercise self-log
+// (ExerciseLogEntryItem, see lib/sessionWorkout.ts), which this does not
+// replace or duplicate. `sections` is dynamically derived from the
+// session's assigned Workout Plan at write time (see
+// lib/sessionWorkoutReport.ts's resolveSessionWorkoutReportSections) — every
+// WorkoutPlanBlockItem the plan had when the report was filled in,
+// including the locked closing section, not just the measurable 'stations'
+// sections the trainee self-log flow cares about.
+// One report per session — a re-save overwrites in place (Put, not
+// versioned), consistent with this being a "close the loop" record rather
+// than an append-only log.
+export interface PostWorkoutReportItem {
+  PK: string; SK: string;
+  workoutPlanId: string | null;
+  workoutPlanName: string | null;
+  /** 1–10 subjective session intensity/RPE, optional. */
+  overallRpe: number | null;
+  sections: { sectionId: string; label: string; completed: boolean; note: string }[];
+  generalNotes: string;
+  submittedBy: { uid: string; name: string; role: 'admin' | 'coach' };
+  submittedAt: string;
 }
 
 // PK=GROUP#<id>  SK=METADATA
