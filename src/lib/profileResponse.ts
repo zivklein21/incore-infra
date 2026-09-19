@@ -150,6 +150,11 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     medicalClearance,
     orthopedicFormRequested: forms.orthopedic_form_requested === true,
     orthopedicForm: forms.orthopedic_form === true,
+    // FORCA Trainee Dashboard attendance gate — see reportMedicalConditionChange.ts /
+    // adminClearMedicalCondition.ts / entities.ts's forms.medical_condition_* comment.
+    medicalConditionChanged: forms.medical_condition_changed === true,
+    medicalConditionChangedAt: forms.medical_condition_changed_at ?? null,
+    medicalConditionNote: forms.medical_condition_note ?? null,
     requiresRegistrationForm,
     requiresHealthDeclaration,
     requiresPoliciesAgreement,

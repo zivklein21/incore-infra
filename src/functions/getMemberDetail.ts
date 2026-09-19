@@ -159,6 +159,11 @@ export async function handler(
     orthopedicFormRequestedAt: forms.orthopedic_form_requested_at ?? null,
     orthopedicForm: forms.orthopedic_form === true,
     orthopedicAnswers: forms.orthopedic_answers ?? null,
+    // FORCA Trainee Dashboard — see entities.ts's forms.medical_condition_*
+    // comment / reportMedicalConditionChange.ts / adminClearMedicalCondition.ts.
+    medicalConditionChanged: forms.medical_condition_changed === true,
+    medicalConditionChangedAt: forms.medical_condition_changed_at ?? null,
+    medicalConditionNote: forms.medical_condition_note ?? null,
     parentalAuthorization: forms.parental_authorization?.submitted_at
       ? {
           submittedAt: forms.parental_authorization.submitted_at,

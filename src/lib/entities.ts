@@ -922,6 +922,18 @@ export interface MemberProfileItem {
     orthopedic_form_requested_at?: string;
     orthopedic_form?: boolean;
     orthopedic_answers?: Record<string, unknown>;
+    // FORCA Trainee Dashboard — a trainee self-reports that something about
+    // her medical condition has changed since her last clearance (see
+    // reportMedicalConditionChange.ts). While true, declareAttendance.ts
+    // blocks a fresh 'yes' declaration until an admin/coach reviews the note
+    // and clears it (adminClearMedicalCondition.ts) — same "requested until
+    // cleared" shape as medical_clearance_* above, but trainee-initiated
+    // rather than admin-initiated.
+    medical_condition_changed?: boolean;
+    medical_condition_changed_at?: string;
+    medical_condition_note?: string;
+    medical_condition_cleared_at?: string;
+    medical_condition_cleared_by?: { uid: string; name: string; role: 'admin' | 'coach' };
     // FORCA mandatory pre-login onboarding — legal authorization for a
     // trainee's participation in the program, signed by her parent (while
     // switched into the trainee via switchToChild, same as Registration/

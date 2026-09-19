@@ -3,7 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { verifyFamilyLink } from '../lib/familyLinks';
-import type { ClassItem, RegistrationItem } from '../lib/entities';
+import type { ClassItem, GroupItem, RegistrationItem } from '../lib/entities';
 
 // GET or POST /getChildUpcomingSessions?childUid=xxx
 // Auth: Cognito JWT, caller must be childUid's linked parent (verifyFamilyLink)
@@ -22,17 +22,33 @@ export async function handler(
 
   const link = await verifyFamilyLink(callerUid, childUid);
   if (!link.ok) return json(403, { error: 'forbidden' });
+  const table = link.table;
 
   const regsRes = await ddb.send(new QueryCommand({
-    TableName: link.table,
+    TableName: table,
     IndexName: 'GSI1',
     KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${childUid}`, ':prefix': 'REG#' },
   }));
   const registrations = (regsRes.Items ?? []) as RegistrationItem[];
 
+  // Same cache-per-request rationale as getMyTrainingSessions.ts's
+  // resolveCoachPhone/resolveGroupName — groupName isn't denormalized onto
+  // ClassItem, only groupId, and a child's sessions are almost always all
+  // the same group.
+  const groupNameCache = new Map<string, string | null>();
+  async function resolveGroupName(groupId: string | null | undefined): Promise<string | null> {
+    if (!groupId) return null;
+    if (groupNameCache.has(groupId)) return groupNameCache.get(groupId)!;
+    const res = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `GROUP#${groupId}`, SK: 'METADATA' } }));
+    const group = res.Item as GroupItem | undefined;
+    const name = group?.name ?? null;
+    groupNameCache.set(groupId, name);
+    return name;
+  }
+
   const sessions = await Promise.all(registrations.map(async (r) => {
-    const classRes = await ddb.send(new GetCommand({ TableName: link.table, Key: { PK: `CLASS#${r.classId}`, SK: 'METADATA' } }));
+    const classRes = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `CLASS#${r.classId}`, SK: 'METADATA' } }));
     const session = classRes.Item as ClassItem | undefined;
     if (!session) return null;
     return {
@@ -41,6 +57,8 @@ export async function handler(
       className: session.className ?? '',
       location: session.location ?? null,
       coachName: session.coachName ?? null,
+      coachPhone: null,
+      groupName: await resolveGroupName(session.groupId),
       declaredAttendance: r.declaredAttendance ?? 'pending',
       declineReason: r.declineReason ?? '',
     };

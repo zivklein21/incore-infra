@@ -16,6 +16,7 @@ locals {
     adminChangeHypBillingAgreementPlan = { method = "POST" }
     adminChargeHypAgreementNow         = { method = "POST" }
     adminCheckEmailAvailable           = { method = "ANY" }
+    adminClearMedicalCondition         = { method = "POST" } # FORCA Trainee Dashboard: admin or coach clears a self-reported medical condition change
     adminClearMemberSavedCard          = { method = "POST" }
     adminClearMemberships              = { method = "POST" }
     adminCreateUser                    = { method = "POST" } # IAM-privileged (AdminCreateUser) — see handler comment
@@ -205,6 +206,7 @@ locals {
     markActualAttendance               = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }
+    reportMedicalConditionChange       = { method = "POST" } # FORCA Trainee Dashboard: self-report, locks declareAttendance.ts's 'yes' path until cleared
     resizeProfilePhoto                 = { method = "POST" }
     returnSessionEquipment             = { method = "POST" } # FORCA Coach feature
     saveChildMedicalClearance          = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
