@@ -193,7 +193,7 @@ locals {
     getSessionWorkoutPlan              = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                 = { method = "ANY" }
     getTermsOfServiceContent           = { method = "ANY" }
-    getTrainingHistory                 = { method = "GET" } # FORCA Coach feature: admin-only
+    getTrainingHistory                 = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                   = { method = "GET" } # FORCA Coach feature
     getUploadUrl                       = { method = "POST" }
     getWallet                          = { method = "ANY" }
@@ -215,6 +215,7 @@ locals {
     saveScheduleAlertSettings          = { method = "POST" }
     saveSessionPostWorkoutReport       = { method = "POST" } # FORCA Coach feature: staff-only post-workout performance report
     saveSupportSettings                = { method = "POST" }
+    sendCoachNotification              = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }
     submitHealthDeclaration            = { method = "POST" }
@@ -227,6 +228,7 @@ locals {
     toggleSessionEquipment             = { method = "POST" } # FORCA Coach feature
     triggerTemplateAlert               = { method = "POST" }
     updateClass                        = { method = "POST" }
+    updateCoachOwnProfile              = { method = "POST" } # FORCA Coach feature: self-service name/phone edit, coach-only
     updateProfile                      = { method = "POST" }
     updateProfilePhoto                 = { method = "POST" }
     updatePhotoConsent                 = { method = "POST" }

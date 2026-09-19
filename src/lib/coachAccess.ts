@@ -11,6 +11,8 @@ export interface CoachPermissions {
   equipment: 'none' | 'write';
   /** Governs the Exercise Pool catalog (adminSaveExercise.ts, since exercises are a workout plan's building blocks), the Workout Plan Builder itself (adminSaveWorkoutPlan/Block/Exercise.ts), AND assigning an already-built plan to a session (assignSessionWorkoutPlan.ts, 'write' only) — 'read' is view-only access to plans/their assignment. */
   workoutPlans: 'none' | 'read' | 'write';
+  /** Coach Role epic: composing/sending an ad-hoc push notification to her own assigned-group trainees (sendCoachNotification.ts) — deliberately separate from the admin's all-trainees Notification Templates system, not just a lower tier of it. No 'read' tier: there's nothing to view separate from the compose screen itself. */
+  notifications: 'none' | 'write';
 }
 
 export interface CoachAccess {
@@ -22,20 +24,20 @@ export interface CoachAccess {
 
 const ADMIN_PERMISSIONS: CoachPermissions = {
   attendance: 'write', performance: 'read', healthDeclarations: 'read',
-  testsGrading: 'write', equipment: 'write', workoutPlans: 'write',
+  testsGrading: 'write', equipment: 'write', workoutPlans: 'write', notifications: 'write',
 };
 const DENIED_PERMISSIONS: CoachPermissions = {
   attendance: 'none', performance: 'none', healthDeclarations: 'none',
-  testsGrading: 'none', equipment: 'none', workoutPlans: 'none',
+  testsGrading: 'none', equipment: 'none', workoutPlans: 'none', notifications: 'none',
 };
 
 // De facto pre-permission-matrix behavior — a coach created/edited without
 // ever touching the new permissions UI still works exactly as coaches
 // always have (view everything, mark attendance, grade tests, manage
-// equipment).
+// equipment, notify her own trainees).
 export const DEFAULT_COACH_PERMISSIONS: CoachPermissions = {
   attendance: 'write', performance: 'read', healthDeclarations: 'read',
-  testsGrading: 'write', equipment: 'write', workoutPlans: 'read',
+  testsGrading: 'write', equipment: 'write', workoutPlans: 'read', notifications: 'write',
 };
 
 // Shared body-parsing validator — adminCreateUser.ts and
@@ -59,7 +61,9 @@ export function parseCoachPermissions(raw: unknown, fallback: Partial<CoachPermi
     ? r.equipment : (fallback.equipment ?? DEFAULT_COACH_PERMISSIONS.equipment);
   const workoutPlans = r.workoutPlans === 'read' || r.workoutPlans === 'write' || r.workoutPlans === 'none'
     ? r.workoutPlans : (fallback.workoutPlans ?? DEFAULT_COACH_PERMISSIONS.workoutPlans);
-  return { attendance, performance, healthDeclarations, testsGrading, equipment, workoutPlans };
+  const notifications = r.notifications === 'write' || r.notifications === 'none'
+    ? r.notifications : (fallback.notifications ?? DEFAULT_COACH_PERMISSIONS.notifications);
+  return { attendance, performance, healthDeclarations, testsGrading, equipment, workoutPlans, notifications };
 }
 
 export function groupInAccess(access: CoachAccess, groupId: string | undefined): boolean {

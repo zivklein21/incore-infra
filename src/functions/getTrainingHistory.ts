@@ -2,13 +2,20 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { getCoachAccess } from '../lib/coachAccess';
+import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
 import { fetchSessionLookups, resolveSessionDetail, type RosterEntryDetail } from '../lib/sessionDetail';
 import type { ClassItem } from '../lib/entities';
 
 // GET or POST /getTrainingHistory
-// Auth: Cognito JWT, caller must be admin (Backoffice-only — not a coach
-// feature, unlike getCoachSessions.ts).
+// Auth: Cognito JWT, admin or a coach with attendance !== 'none' (Coach
+// Role epic — Training History tab, item 4: mirrors this same admin audit
+// log, scoped to her own sessions via sessionInAccess(), same as
+// getCoachSessions.ts). Her attendance-editing lock once a session is
+// closedAt is enforced client-side here (this endpoint has no closedAt
+// guard itself, same as adminUpdateSessionInstance.ts) — but her
+// underlying write, markActualAttendance.ts, already 403s her once
+// closedAt is set regardless, so the client-side lock is UX, not the
+// actual security boundary.
 //
 // Lists every past FORCA training session (date < now), built on the same
 // resolveSessionDetail() getCoachSessions.ts uses, with each roster entry
@@ -22,7 +29,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   const access = await getCoachAccess(callerUid);
-  if (!access?.isAdmin) return json(403, { error: 'forbidden' });
+  if (!access || access.permissions.attendance === 'none') return json(403, { error: 'forbidden' });
 
   // Table documented for <=50 users per brand (dynamodb.tf) — same accepted
   // Scan tradeoff as getCoachSessions.ts.
@@ -33,7 +40,8 @@ export async function handler(
     ExpressionAttributeNames: { '#dt': 'date' },
     ExpressionAttributeValues: { ':prefix': 'CLASS#', ':metadata': 'METADATA', ':now': nowIso },
   }));
-  const sessionItems = (sessionsRes.Items ?? []) as (ClassItem & { PK: string })[];
+  const allSessionItems = (sessionsRes.Items ?? []) as (ClassItem & { PK: string })[];
+  const sessionItems = allSessionItems.filter((item) => sessionInAccess(access, item, callerUid));
 
   const lookups = await fetchSessionLookups(sessionItems);
   const sessions = await Promise.all(sessionItems.map(async (session) => {

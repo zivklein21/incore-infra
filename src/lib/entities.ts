@@ -830,12 +830,12 @@ export interface MemberProfileItem {
   // assigns at least one group.
   // identity.coachPermissions — per-action read/write, deny-by-default when
   // unset. See lib/coachAccess.ts's CoachPermissions for the authoritative
-  // shape/comments (testsGrading/equipment/workoutPlans were added after
-  // this field first shipped — getCoachAccess()/parseCoachPermissions()
-  // backfill those three from DEFAULT_COACH_PERMISSIONS for any profile
-  // stored under the older 3-field shape). 'performance'/'healthDeclarations'
-  // stay read-only concepts (no performance-editing UI exists; a coach
-  // never edits a trainee's health declaration).
+  // shape/comments (testsGrading/equipment/workoutPlans/notifications were
+  // added after this field first shipped — getCoachAccess()/
+  // parseCoachPermissions() backfill those from DEFAULT_COACH_PERMISSIONS
+  // for any profile stored under an older shape). 'performance'/
+  // 'healthDeclarations' stay read-only concepts (no performance-editing UI
+  // exists; a coach never edits a trainee's health declaration).
   identity?: {
     role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;
     email?: string; phone?: string; birthday?: string | number;
@@ -849,6 +849,7 @@ export interface MemberProfileItem {
       testsGrading?: 'none' | 'read' | 'write';
       equipment?: 'none' | 'write';
       workoutPlans?: 'none' | 'read' | 'write';
+      notifications?: 'none' | 'write';
     };
   };
   phone?: string;
