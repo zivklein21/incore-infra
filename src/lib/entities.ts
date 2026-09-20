@@ -196,32 +196,6 @@ export interface RegistrationItem {
   actualAttendanceBy?: { uid: string; name: string; role: 'admin' | 'coach' };
 }
 
-// PK=CLASS#<classId>  SK=POSTWORKOUTREPORT
-// Same partition as the session's own METADATA/REG# rows. Staff-only
-// (coach/admin) session-level report filled in after a session ends —
-// distinct from the trainee's own per-exercise self-log
-// (ExerciseLogEntryItem, see lib/sessionWorkout.ts), which this does not
-// replace or duplicate. `sections` is dynamically derived from the
-// session's assigned Workout Plan at write time (see
-// lib/sessionWorkoutReport.ts's resolveSessionWorkoutReportSections) — every
-// WorkoutPlanBlockItem the plan had when the report was filled in,
-// including the locked closing section, not just the measurable 'stations'
-// sections the trainee self-log flow cares about.
-// One report per session — a re-save overwrites in place (Put, not
-// versioned), consistent with this being a "close the loop" record rather
-// than an append-only log.
-export interface PostWorkoutReportItem {
-  PK: string; SK: string;
-  workoutPlanId: string | null;
-  workoutPlanName: string | null;
-  /** 1–10 subjective session intensity/RPE, optional. */
-  overallRpe: number | null;
-  sections: { sectionId: string; label: string; completed: boolean; note: string }[];
-  generalNotes: string;
-  submittedBy: { uid: string; name: string; role: 'admin' | 'coach' };
-  submittedAt: string;
-}
-
 // PK=GROUP#<id>  SK=METADATA
 // FORCA-only, persistent training cohort — a trainee is assigned to at most
 // one via identity.groupId. createTrainingSession.ts scans for members with

@@ -213,7 +213,6 @@ locals {
     saveClassSeries                    = { method = "POST" }
     saveMedicalClearance               = { method = "POST" } # FORCA Profile feature: upload/replace a medical clearance certificate
     saveScheduleAlertSettings          = { method = "POST" }
-    saveSessionPostWorkoutReport       = { method = "POST" } # FORCA Coach feature: staff-only post-workout performance report
     saveSupportSettings                = { method = "POST" }
     sendCoachNotification              = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendSupportMessage                 = { method = "POST" }

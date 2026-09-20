@@ -9,16 +9,21 @@ import type { ExerciseDefinitionItem, ExerciseLogEntryItem } from '../lib/entiti
 // POST /logSessionExercise
 // Body: { classId: string, exerciseId: string, value: { weight?, reps?, timeSeconds?, bandLevel? }, loggedAt?: string }
 // Auth: Cognito JWT, any signed-in FORCA member — always writes for herself.
-// Writes the same ExerciseLogEntryItem shape as logExercise.ts (so
-// getMyExerciseHistory.ts's "my Tracker history" stays one unified list
-// either way), but only accepts a (classId, exerciseId) pair that
-// resolveMeasurableSessionWorkout() would actually resolve — a session she
-// was marked actually present for, whose assigned Workout Plan has a
-// `measurable` section containing that exact exercise — and additionally
-// stamps classId/workoutPlanId/stationId so getSessionWorkoutPlan.ts can
-// show "already logged" per station on a repeat visit. Each save is a new
-// history entry (append-only, same convention as logExercise.ts), not an
-// overwrite of a prior log for that station.
+// Only the trainee herself may log her own working weight (by explicit
+// product decision — a coach's Post-Workout Report only ever gets a
+// read-only view of who has/hasn't logged yet, see
+// WorkoutLogGradingPanel.tsx; contrast with test grading, which the coach
+// DOES enter directly). Writes the same ExerciseLogEntryItem shape as
+// logExercise.ts (so getMyExerciseHistory.ts's "my Tracker history" stays
+// one unified list either way), but only accepts a (classId, exerciseId)
+// pair that resolveMeasurableSessionWorkout() would actually resolve — a
+// session she was marked actually present for, whose assigned Workout Plan
+// has a `measurable` section containing that exact exercise — and
+// additionally stamps classId/workoutPlanId/stationId so
+// getSessionWorkoutPlan.ts/sessionWorkoutLogStatus.ts can show "already
+// logged" per station. Each save is a new history entry (append-only, same
+// convention as logExercise.ts), not an overwrite of a prior log for that
+// station.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {

@@ -1,10 +1,10 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
-import { resolveSessionWorkoutReportSections } from '../lib/sessionWorkoutReport';
-import type { PostWorkoutReportItem } from '../lib/entities';
+import { fetchSessionLookups, resolveSessionDetail } from '../lib/sessionDetail';
+import { resolveSessionReportContext } from '../lib/sessionWorkoutReport';
+import { resolveSessionWorkoutLogStatus } from '../lib/sessionWorkoutLogStatus';
+import type { ClassItem } from '../lib/entities';
 
 // GET or POST /getSessionPostWorkoutReport
 // Query/body: { classId: string }
@@ -13,9 +13,16 @@ import type { PostWorkoutReportItem } from '../lib/entities';
 // coach's own end-of-session flow, not a trainee-facing one (contrast with
 // getSessionWorkoutPlan.ts, which is the trainee's self-log read side).
 //
-// Returns the dynamic section checklist for the session's assigned Workout
-// Plan (see lib/sessionWorkoutReport.ts) plus any already-submitted report,
-// so the screen can both render the form and pre-fill it on re-open/edit.
+// Single fetch backing PostWorkoutReportScreen.tsx's whole dynamic
+// type-branch: returns which flavor of report this session needs
+// (isTestSession/testGroupId → grading matrix via TestSessionGradingPanel;
+// workoutPlanId → measurable-exercise roster checklist via
+// workoutLogStatus/WorkoutLogGradingPanel, pre-filtered to ONLY the plan's
+// מדידים blocks — non-measurable warm-up/cooldown content never appears
+// here; neither → a "not assigned" note). There is no separate session-level
+// report record any more — logging a station or a test attempt saves and
+// stamps itself immediately (see logSessionExercise.ts / adminRecordTestAttempt.ts),
+// so this endpoint is a pure read/resolver, nothing to submit back.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -32,17 +39,20 @@ export async function handler(
   }
   if (!classId) return json(400, { error: 'missing_class_id' });
 
-  const resolved = await resolveSessionWorkoutReportSections(classId);
+  const resolved = await resolveSessionReportContext(classId);
   if (!resolved.ok) return json(resolved.status, { error: resolved.error });
-  const { session, workoutPlanId, workoutPlanName, sections } = resolved;
+  const { session, workoutPlanId, workoutPlanName } = resolved;
 
   if (!sessionInAccess(access, session, callerUid)) return json(403, { error: 'forbidden' });
 
-  const reportRes = await ddb.send(new GetCommand({
-    TableName: FORCA_TABLE_NAME,
-    Key: { PK: `CLASS#${classId}`, SK: 'POSTWORKOUTREPORT' },
-  }));
-  const existingReport = (reportRes.Item as PostWorkoutReportItem | undefined) ?? null;
+  const classItem = session as ClassItem & { PK: string };
+  const lookups = await fetchSessionLookups([classItem]);
+  const detail = await resolveSessionDetail(classItem, lookups, access);
+
+  const presentMemberIds = detail.roster.filter((r) => r.actualAttendance === 'present').map((r) => r.memberId);
+  const workoutLogStatus = (detail.workoutPlanId && !detail.isTestSession && presentMemberIds.length > 0)
+    ? await resolveSessionWorkoutLogStatus(classId, detail.workoutPlanId, presentMemberIds)
+    : { sections: [], loggedByMember: {} };
 
   return json(200, {
     classId,
@@ -50,13 +60,16 @@ export async function handler(
     date: session.date,
     workoutPlanId,
     workoutPlanName,
-    sections,
-    existingReport: existingReport && {
-      overallRpe: existingReport.overallRpe,
-      sections: existingReport.sections,
-      generalNotes: existingReport.generalNotes,
-      submittedBy: existingReport.submittedBy,
-      submittedAt: existingReport.submittedAt,
-    },
+    isTestSession: detail.isTestSession,
+    testGroupId: detail.testGroupId,
+    testGroupName: detail.testGroupName,
+    testComponentIds: detail.testComponentIds,
+    // Unfiltered (present + absent + unmarked) — TestSessionGradingPanel
+    // grades against the full roster, same as its existing
+    // ForcaSessionDetailPanel usage; WorkoutLogGradingPanel filters this down
+    // to actualAttendance==='present' itself (only an attended trainee has
+    // anything to log).
+    roster: detail.roster.map((r) => ({ memberId: r.memberId, name: r.name, actualAttendance: r.actualAttendance })),
+    workoutLogStatus,
   });
 }
