@@ -48,7 +48,7 @@ async function resolveStations(raw: unknown): Promise<WorkoutPlanStation[]> {
 
 // POST /adminSaveWorkoutPlanBlock
 // Body: { id?: string, planId: string, label: string, timeMethod?: string,
-//         mode?: 'stations' | 'freeText',
+//         mode?: 'stations' | 'sequentialRoute' | 'freeText',
 //         stations?: { id?: string, name?: string, exerciseIds: string[], notes?: string }[],
 //         freeTextItems?: string[], manualEquipmentIds?: string[],
 //         noEquipmentNeeded?: boolean, coachGuidelines?: string, order?: number,
@@ -89,7 +89,13 @@ export async function handler(
   const label = typeof body.label === 'string' ? body.label.trim() : '';
   if (!label) return json(400, { error: 'missing_label' });
   const timeMethod = typeof body.timeMethod === 'string' && body.timeMethod.trim() ? body.timeMethod.trim() : undefined;
-  const mode: WorkoutPlanSectionMode = body.mode === 'stations' ? 'stations' : 'freeText';
+  const mode: WorkoutPlanSectionMode =
+    body.mode === 'stations' ? 'stations' : body.mode === 'sequentialRoute' ? 'sequentialRoute' : 'freeText';
+  // 'stations' and 'sequentialRoute' share the exact same ordered-step shape
+  // (WorkoutPlanStation) — 'sequentialRoute' is purely a labeling/rendering
+  // distinction (a cone-route path vs. numbered stations), not a different
+  // data model.
+  const usesStations = mode === 'stations' || mode === 'sequentialRoute';
   const freeTextItems = Array.isArray(body.freeTextItems)
     ? body.freeTextItems.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map((v) => v.trim())
     : undefined;
@@ -98,11 +104,12 @@ export async function handler(
     : undefined;
   const noEquipmentNeeded = body.noEquipmentNeeded === true;
   const coachGuidelines = typeof body.coachGuidelines === 'string' && body.coachGuidelines.trim() ? body.coachGuidelines.trim() : undefined;
-  // Only meaningful for a 'stations' section — a 'freeText' section has
-  // nothing structured to log against, so the flag is dropped for it
-  // regardless of what the client sends.
+  // Only meaningful for a 'stations' section — a 'freeText' or
+  // 'sequentialRoute' section has nothing a trainee logs post-session
+  // results against, so the flag is dropped for it regardless of what the
+  // client sends.
   const measurable = mode === 'stations' && body.measurable === true;
-  const stations = mode === 'stations' ? await resolveStations(body.stations) : [];
+  const stations = usesStations ? await resolveStations(body.stations) : [];
 
   const planRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${planId}`, SK: 'METADATA' } }));
   if (!planRes.Item) return json(404, { error: 'workout_plan_not_found' });
@@ -141,7 +148,7 @@ export async function handler(
     order,
     mode,
     ...(timeMethod ? { timeMethod } : {}),
-    ...(mode === 'stations' && stations.length > 0 ? { stations } : {}),
+    ...(usesStations && stations.length > 0 ? { stations } : {}),
     ...(mode === 'freeText' && freeTextItems && freeTextItems.length > 0 ? { freeTextItems } : {}),
     ...(manualEquipmentIds && manualEquipmentIds.length > 0 ? { manualEquipmentIds } : {}),
     ...(noEquipmentNeeded ? { noEquipmentNeeded } : {}),

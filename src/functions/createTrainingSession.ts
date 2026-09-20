@@ -63,8 +63,7 @@ export async function handler(
     repeatWeekly, seriesId, location, coachId, coachName,
   });
   if (!result.ok) {
-    const status = result.error === 'group_has_no_members' ? 400 : 404;
-    return json(status, { error: result.error });
+    return json(404, { error: result.error });
   }
 
   return json(200, { success: true, classId: result.classId, registeredCount: result.registeredCount });

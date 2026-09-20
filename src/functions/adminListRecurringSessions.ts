@@ -48,6 +48,11 @@ export async function handler(
     location: t.location ?? null,
     coachId: t.coachId ?? null,
     coachName: t.coachName ?? null,
+    workoutPlanId: t.workoutPlanId ?? null,
+    workoutPlanName: t.workoutPlanName ?? null,
+    testGroupId: t.testGroupId ?? null,
+    testGroupName: t.testGroupName ?? null,
+    testComponentIds: t.testComponentIds ?? null,
   }));
 
   templates.sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.time.localeCompare(b.time));

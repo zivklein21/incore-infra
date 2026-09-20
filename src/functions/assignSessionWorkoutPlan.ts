@@ -48,11 +48,14 @@ export async function handler(
     workoutPlanName = plan.name;
   }
 
+  // A session can be a Workout Plan OR a Test Session, never both — assigning
+  // a plan here clears any Test Session already on it, mirroring
+  // assignSessionTestGroup.ts's own clear-the-other-side behavior.
   await ddb.send(new UpdateCommand({
     TableName: FORCA_TABLE_NAME,
     Key: classKey,
     UpdateExpression: workoutPlanId
-      ? 'SET workoutPlanId = :id, workoutPlanName = :name'
+      ? 'SET workoutPlanId = :id, workoutPlanName = :name REMOVE isTestSession, testGroupId, testGroupName, testComponentIds'
       : 'REMOVE workoutPlanId, workoutPlanName',
     ...(workoutPlanId ? { ExpressionAttributeValues: { ':id': workoutPlanId, ':name': workoutPlanName } } : {}),
   }));

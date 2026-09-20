@@ -40,6 +40,7 @@ locals {
     adminDeleteWorkoutPlan             = { method = "POST" } # FORCA Workout Plan builder
     adminDeleteWorkoutPlanBlock        = { method = "POST" } # FORCA Workout Plan builder
     adminEvictFutureRegistrations      = { method = "POST" }
+    adminGenerateMonthInstances        = { method = "POST" } # FORCA Monthly Calendar: bulk-push a full month of recurring-session instances at once
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
     adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
     adminGetMemberFamilyInfo           = { method = "ANY" } # Family Accounts: MemberDetailsScreen's Family card

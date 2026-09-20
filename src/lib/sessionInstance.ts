@@ -22,11 +22,17 @@ export interface CreateSessionInstanceParams {
   coachName?: string;
   /** Set only for instances generated from a RecurringSessionItem template — see adminSaveRecurringSession.ts. */
   recurringSessionId?: string;
+  /** Default Workout Plan/Test Group carried over from the RecurringSessionItem template, if it has one set — see adminSaveRecurringSession.ts. Mutually exclusive, same as ClassItem's own pair. */
+  workoutPlanId?: string;
+  workoutPlanName?: string;
+  testGroupId?: string;
+  testGroupName?: string;
+  testComponentIds?: string[];
 }
 
 export type CreateSessionInstanceResult =
   | { ok: true; classId: string; registeredCount: number }
-  | { ok: false; error: 'group_not_found' | 'training_type_not_found' | 'group_has_no_members' };
+  | { ok: false; error: 'group_not_found' | 'training_type_not_found' };
 
 export async function createSessionInstance(params: CreateSessionInstanceParams): Promise<CreateSessionInstanceResult> {
   const [groupRes, trainingTypeRes] = await Promise.all([
@@ -55,6 +61,12 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
   // sessions materialized from this point on — it never touches a
   // registration that already exists, same "new registrations only" scope
   // as INCORE's own bookClass.ts membership gate.
+  // An empty group (no members yet, or none with an active membership
+  // window) no longer blocks creating/scheduling a session for it — the
+  // roster just starts empty and fills in as members are added/granted
+  // membership later; this only affects sessions materialized from this
+  // point on, same "new registrations only" scope as the membership-window
+  // filter below.
   const now = Date.now();
   const memberIds = members
     .filter((m) => {
@@ -63,7 +75,6 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
       return !Number.isNaN(start) && !Number.isNaN(end) && now >= start && now <= end;
     })
     .map((m) => (m.PK as string).replace('MEMBER#', ''));
-  if (memberIds.length === 0) return { ok: false, error: 'group_has_no_members' };
 
   const classId = randomUUID();
   const nowIso = new Date().toISOString();
@@ -89,6 +100,11 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
     ...(params.location ? { location: params.location } : {}),
     ...(params.coachId ? { coachId: params.coachId, coachName: params.coachName } : {}),
     ...(params.recurringSessionId ? { recurringSessionId: params.recurringSessionId } : {}),
+    ...(params.workoutPlanId ? { workoutPlanId: params.workoutPlanId, workoutPlanName: params.workoutPlanName } : {}),
+    ...(params.testGroupId ? {
+      isTestSession: true, testGroupId: params.testGroupId, testGroupName: params.testGroupName,
+      ...(params.testComponentIds && params.testComponentIds.length > 0 ? { testComponentIds: params.testComponentIds } : {}),
+    } : {}),
     createdAt: nowIso,
     createdBy: params.createdBy,
   };
@@ -146,6 +162,30 @@ export function upcomingOccurrences(from: Date, dayOfWeek: number, time: string)
   const cursor = new Date(Date.UTC(fy, fm - 1, fd));
   while (cursor.getUTCDay() !== dayOfWeek) cursor.setUTCDate(cursor.getUTCDate() + 1);
   const monthEnd = new Date(Date.UTC(fy, fm, 0)); // last calendar day of `from`'s Israel month
+
+  const dates: Date[] = [];
+  while (cursor.getTime() <= monthEnd.getTime()) {
+    dates.push(israelWallTimeToDate(cursor.getUTCFullYear(), cursor.getUTCMonth(), cursor.getUTCDate(), hh, mm));
+    cursor.setUTCDate(cursor.getUTCDate() + 7);
+  }
+  return dates;
+}
+
+/**
+ * Every day in the given Israel-calendar month (year, month1To12: 1=Jan)
+ * that falls on `dayOfWeek`, at `time` — same wall-clock construction as
+ * upcomingOccurrences() above, just bounded to an arbitrary whole month
+ * instead of "from today through the end of the current month". Used by
+ * adminGenerateMonthInstances.ts to bulk-materialize a full month (including
+ * a future month the "from now" cap above would leave ungenerated) in one
+ * admin action.
+ */
+export function occurrencesInMonth(year: number, month1To12: number, dayOfWeek: number, time: string): Date[] {
+  const [hh, mm] = time.split(':').map((v) => parseInt(v, 10));
+
+  const cursor = new Date(Date.UTC(year, month1To12 - 1, 1));
+  while (cursor.getUTCDay() !== dayOfWeek) cursor.setUTCDate(cursor.getUTCDate() + 1);
+  const monthEnd = new Date(Date.UTC(year, month1To12, 0)); // last calendar day of that month
 
   const dates: Date[] = [];
   while (cursor.getTime() <= monthEnd.getTime()) {

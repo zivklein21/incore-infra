@@ -106,6 +106,20 @@ export interface RecurringSessionItem {
   dayOfWeek: number; // 0=Sunday..6=Saturday
   time: string; // "HH:mm", 24h, Asia/Jerusalem — same convention as israelDateStr()
   location?: string;
+  // Default Workout Plan or Test Group applied to every dated instance this
+  // template generates — mutually exclusive, same as ClassItem's own
+  // workoutPlanId/testGroupId pair (see adminSaveRecurringSession.ts, which
+  // rejects a body that sets both). Denormalized names for the same reason
+  // ClassItem's copies are: a later plan/group rename or delete never
+  // breaks this template's own display. An admin can still override or
+  // clear either on one specific dated instance afterwards via
+  // assignSessionWorkoutPlan.ts/assignSessionTestGroup.ts — this is only
+  // the default new instances are created with.
+  workoutPlanId?: string;
+  workoutPlanName?: string;
+  testGroupId?: string;
+  testGroupName?: string;
+  testComponentIds?: string[];
   active: boolean;
   createdAt: string;
   createdBy: string;
@@ -615,8 +629,8 @@ export interface WorkoutPlanItem {
   // digits-only by convention, kept as a string since it's a label a coach
   // reads off a schedule, not a value anything computes with).
   workoutNumber?: string;   // מספר אימון
-  workoutType?: string;     // סוג אימון
-  package?: string;         // מארז
+  workoutType?: string;     // סוג אימון — free text, independent of package (e.g. "אימון פונקציונלי")
+  package?: string;         // מארז — standardized options
   workingMethod?: string;   // שיטת עבודה
   workoutGoal?: string;     // מטרת אימון
   timingStructure?: string; // זמני עבודה — e.g. "1 min work / 30s rest | 2-3 sets | 1 min between sets"
@@ -638,14 +652,18 @@ export const MANDATORY_CLOSING_SECTION_GUIDELINES =
   'לא לדלג. להסביר שכל אימון מסתיים בסיכום כדי לעבד וללמוד מהעשייה, אחת מהשנייה ומהמאמנת.\n\n' +
   'שאלת סיום לכל מתאמנת: משהו אחד שהצלחת בו היום, משהו שהפתיע אותך או משהו חדש שלמדת.';
 
-export type WorkoutPlanSectionMode = 'stations' | 'freeText';
+export type WorkoutPlanSectionMode = 'stations' | 'sequentialRoute' | 'freeText';
 
-// One station within a 'stations'-mode section — numbered by its position
-// (תחנה 1, תחנה 2, ...), each independently pulling one OR MORE exercises
-// from the catalog (interchangeable alternatives a coach can pick between
-// at the station — displayed joined by " / ", e.g. "Squat / Lunge") with
-// one shared optional note for the whole station. Embedded directly on the
-// section item (not a separate DynamoDB row per station, unlike the earlier
+// One entry within a 'stations' or 'sequentialRoute'-mode section — numbered
+// by its position (תחנה 1, תחנה 2, ... for 'stations'; שלב 1, שלב 2, ... for
+// 'sequentialRoute'), each independently pulling one OR MORE exercises from
+// the catalog (interchangeable alternatives a coach can pick between —
+// displayed joined by " / ", e.g. "Squat / Lunge") with one shared optional
+// note. Both modes share this exact same shape — 'sequentialRoute' is purely
+// a display/labeling distinction (an ordered path, e.g. "קונוס 1" -> "בין
+// קונוס 1 ל-2" -> "קונוס 2", rendered with arrow connectors) over the same
+// underlying step data as a 'stations' section. Embedded directly on the
+// section item (not a separate DynamoDB row per entry, unlike the earlier
 // WorkoutPlanExerciseItem design this replaced) — simplest storage for what
 // is, at this app's scale, always a short list.
 export interface WorkoutPlanStation {
@@ -666,13 +684,16 @@ export interface WorkoutPlanStation {
 // attribute updates (swap two rows' `order`) instead of a delete+recreate
 // to change a key.
 //
-// Each non-locked section is in exactly one of two modes: 'stations' (an
+// Each non-locked section is in exactly one of three modes: 'stations' (an
 // ordered, numbered list of exercise-pool picks, each with its own note —
-// for structured circuits/strength stations) or 'freeText' (an ordered list
-// of plain text blocks — for warm-ups, stretches, or general drills that
-// don't map to catalog exercises 1:1). Only the fields for the active mode
-// are meaningful; the other mode's field is simply absent. The locked
-// closing section uses neither (no stations, no free-text items — just
+// for structured circuits/strength stations), 'sequentialRoute' (a cone-
+// route/circuit path — the exact same ordered-step shape as 'stations', see
+// WorkoutPlanStation, just labeled/rendered as a sequence, e.g. "Cone 1" ->
+// "Between Cones 1 & 2" -> "Cone 2") or 'freeText' (an ordered list of plain
+// text blocks — for warm-ups, stretches, or general drills that don't map
+// to catalog exercises 1:1). Only the fields for the active mode are
+// meaningful; the other mode's field is simply absent. The locked closing
+// section uses neither (no stations, no free-text items — just
 // label/timeMethod/coachGuidelines).
 export interface WorkoutPlanBlockItem {
   PK: string; SK: string;
@@ -683,7 +704,7 @@ export interface WorkoutPlanBlockItem {
   /** זמן/שיטה — free text timing or method instructions specific to this section. */
   timeMethod?: string;
   mode: WorkoutPlanSectionMode;
-  /** Station-Based Mode content — see WorkoutPlanStation. */
+  /** Station-Based or Sequential Route/Cone Mode content — see WorkoutPlanStation. */
   stations?: WorkoutPlanStation[];
   /** Free-Text/Custom Mode content — each entry is one text block/item; order in the array is display order. */
   freeTextItems?: string[];

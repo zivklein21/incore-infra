@@ -65,7 +65,10 @@ export async function handler(
       ':testGroupId': testGroupId,
       ':testGroupName': testGroupName,
     };
-    const removes: string[] = [];
+    // A session can be a Test Session OR a Workout Plan, never both —
+    // assigning a test here clears any Workout Plan already on it, mirroring
+    // assignSessionWorkoutPlan.ts's own clear-the-other-side behavior.
+    const removes: string[] = ['workoutPlanId', 'workoutPlanName'];
     if (testComponentIds && testComponentIds.length > 0) {
       sets.push('testComponentIds = :testComponentIds');
       values[':testComponentIds'] = testComponentIds;
