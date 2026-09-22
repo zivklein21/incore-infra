@@ -1,12 +1,12 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { GroupItem, MemberProfileItem } from '../lib/entities';
+import type { ForcaBillingAgreementItem, GroupItem, MemberProfileItem } from '../lib/entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -77,14 +77,31 @@ export async function handler(
   const pc = forms.parental_consent;
 
   const groupId = brand === 'forca' ? p.identity?.groupId : undefined;
-  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, groupRes] = await Promise.all([
+  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, groupRes, agreementRes] = await Promise.all([
     presign(hd?.pdf_key),
     presign(hd?.doctor_approval_key),
     presign(pc?.signatureKey),
     presign(forms.medical_clearance_key),
     groupId ? ddb.send(new GetCommand({ TableName: tableForBrand(brand), Key: { PK: `GROUP#${groupId}`, SK: 'METADATA' } })) : Promise.resolve(null),
+    // Her most recent FORCA subscription agreement, if any — see
+    // ForcaBillingAgreementItem in entities.ts. Real billing data takes
+    // over the admin MEMBERSHIP card's status/next-payment display from the
+    // plain admin-granted start/end/title fields below once a real
+    // subscription exists — same enhancement as lib/profileResponse.ts's
+    // own member-facing card.
+    brand === 'forca'
+      ? ddb.send(new QueryCommand({
+          TableName: tableForBrand(brand),
+          IndexName: 'GSI1',
+          KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+          ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'AGREEMENT#' },
+        }))
+      : Promise.resolve(null),
   ]);
   const groupName = (groupRes?.Item as GroupItem | undefined)?.name ?? null;
+
+  const agreements = (agreementRes?.Items ?? []) as ForcaBillingAgreementItem[];
+  const latestAgreement = agreements.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
   const medicalClearance = {
     requested: forms.medical_clearance_requested === true,
     requestedAt: forms.medical_clearance_requested_at ?? null,
@@ -137,6 +154,14 @@ export async function handler(
     // membershipTypeId already carries its own plan name, this is FORCA's
     // equivalent for the simple start/end/title record on the profile item.
     membershipTitle: brand === 'forca' && typeof membership.title === 'string' ? membership.title : null,
+    // FORCA-only real subscription data (null when she has no subscription
+    // agreement, e.g. a purely admin-granted membership window) — see
+    // ForcaBillingAgreementItem in entities.ts.
+    subscriptionAgreementId: latestAgreement?.agreementId ?? null,
+    subscriptionStatus: latestAgreement?.status ?? null,
+    subscriptionProductName: latestAgreement?.productName ?? null,
+    subscriptionAmountPerCharge: latestAgreement?.amountPerCharge ?? null,
+    subscriptionNextChargeDate: latestAgreement?.nextChargeDate ?? null,
     age, birthday,
     photoUrl: await presign(p.photoKey),
     phone: p.identity?.phone ?? p.phone ?? '',

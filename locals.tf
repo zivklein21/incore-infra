@@ -25,6 +25,7 @@ locals {
     adminDeleteEquipment               = { method = "POST" } # FORCA Coach feature
     adminDeleteExercise                = { method = "POST" } # FORCA Tracker feature
     adminDeleteExtraTraining           = { method = "POST" } # FORCA Extra Training feature
+    adminDeleteForcaSubscriptionProduct = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     adminDeleteGroup                   = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                  = { method = "POST" }
     adminDeleteMemberCredit            = { method = "POST" }
@@ -59,6 +60,7 @@ locals {
     adminLinkFamilyMember              = { method = "POST" } # Family Accounts: link a parent/child pair
     adminListExercises                 = { method = "GET" } # FORCA Tracker feature
     adminListFamilyLinks               = { method = "ANY" }  # Family Accounts: Admin Portal household list
+    adminListForcaSubscriptionProducts = { method = "ANY" }  # FORCA Subscription & Recurring Billing feature
     adminListGroups                    = { method = "ANY" }  # FORCA Coach feature
     adminListHypBillingAgreements      = { method = "ANY" }
     adminListHypOrders                 = { method = "ANY" }
@@ -85,6 +87,7 @@ locals {
     adminSaveEquipment                 = { method = "POST" } # FORCA Coach feature
     adminSaveExercise                  = { method = "POST" } # FORCA Tracker feature
     adminSaveExtraTraining             = { method = "POST" } # FORCA Extra Training feature
+    adminSaveForcaSubscriptionProduct  = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
     adminSaveMedicalClearance          = { method = "POST" } # Backoffice Trainee Profile: upload a medical certificate on behalf of the member
     adminSaveMerchProduct              = { method = "POST" } # FORCA Merch Store feature
@@ -102,6 +105,7 @@ locals {
     adminSaveWorkoutPlanBlock          = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
+    adminSetForcaBillingAgreementStatus = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     adminSetForceShowPaymentButton     = { method = "POST" }
     adminSetHypBillingAgreementStatus  = { method = "POST" }
     adminSetMedicalClearanceRequested  = { method = "POST" } # FORCA Profile feature: flag a trainee's Medical Profile tab
@@ -122,10 +126,14 @@ locals {
     assignSessionWorkoutPlan           = { method = "POST" } # FORCA Workout Plan builder: coach with workoutPlans:'write', or admin
     bookClass                          = { method = "POST" }
     cancelBooking                      = { method = "POST" }
+    cancelForcaSubscription            = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     cancelPolicyPreview                = { method = "POST" }
+    closeForcaSupportInquiry           = { method = "POST" } # FORCA Chat feature
     closeSession                       = { method = "POST" } # FORCA Coach feature
     closeSupportInquiry                = { method = "POST" }
     createClass                        = { method = "POST" }
+    createForcaSubscriptionPaymentPage = { method = "POST" } # FORCA Subscription & Recurring Billing feature
+    createForcaSupportInquiry          = { method = "POST" } # FORCA Chat feature
     createHypCardUpdatePage            = { method = "POST" }
     createHypPaymentPage               = { method = "POST" }
     createHypTokenPurchase             = { method = "POST" }
@@ -142,6 +150,7 @@ locals {
     getActiveTestGroups                = { method = "GET" } # FORCA Tracker feature — self-service Tests & Quizzes picker
     getActivityHistory                 = { method = "ANY" }
     getAdminNotifications              = { method = "ANY" }
+    getAllForcaInquiries               = { method = "ANY" } # FORCA Chat feature
     getAllInquiries                    = { method = "ANY" }
     getAllMemberMemberships            = { method = "ANY" }
     getAllMembers                      = { method = "ANY" }
@@ -159,6 +168,7 @@ locals {
     getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
     getClasses                         = { method = "ANY" }
     getClassTypes                      = { method = "ANY" }
+    getCoachForcaInquiries              = { method = "ANY" } # FORCA Chat feature
     getCoachOptions                    = { method = "GET" } # FORCA Coach feature: admin-only
     getCoachSessions                   = { method = "ANY" } # FORCA Coach feature: isCoachOrAdmin-gated
     getCoachTrainees                   = { method = "GET" } # FORCA Tracker feature: coach's own trainee roster
@@ -166,7 +176,9 @@ locals {
     getExercises                       = { method = "GET" } # FORCA Tracker feature
     getExtraTraining                   = { method = "GET" } # FORCA Extra Training feature
     getFileUrl                         = { method = "ANY" }
+    getForcaInquiryMessages            = { method = "ANY" } # FORCA Chat feature
     getForcaMerchProducts              = { method = "GET" } # FORCA Merch Store feature
+    getForcaSubscriptionProductsForParent = { method = "ANY" } # FORCA Subscription & Recurring Billing feature
     getHypOrderStatus                  = { method = "ANY" }
     getInquiryMessages                 = { method = "ANY" }
     getMemberBookingSources            = { method = "ANY" }
@@ -179,6 +191,8 @@ locals {
     getMyAttendanceHistory             = { method = "GET" } # FORCA Profile feature: trainee's own attendance history
     getMyBillingAgreement              = { method = "ANY" }
     getMyExerciseHistory               = { method = "GET" } # FORCA Tracker feature
+    getMyForcaChildSubscription        = { method = "ANY" }  # FORCA Subscription & Recurring Billing feature
+    getMyForcaInquiries                = { method = "ANY" } # FORCA Chat feature
     getMyInquiries                     = { method = "ANY" }
     getMyOrders                        = { method = "GET" } # FORCA Profile feature: trainee's own merch purchase history
     getMyTestAttempts                  = { method = "ANY" } # FORCA Tracker feature: trainee's own test/quiz results, self-service
@@ -216,8 +230,10 @@ locals {
     saveScheduleAlertSettings          = { method = "POST" }
     saveSupportSettings                = { method = "POST" }
     sendCoachNotification              = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
+    sendForcaSupportMessage            = { method = "POST" } # FORCA Chat feature
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }
+    setForcaSubscriptionFreeze         = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     submitHealthDeclaration            = { method = "POST" }
     submitOrthopedicForm               = { method = "POST" } # FORCA Orthopedic Medical Form: trainee/parent submission
     submitParentalAuthorization        = { method = "POST" } # FORCA mandatory onboarding: parent's signed program-participation authorization
@@ -285,6 +301,7 @@ locals {
     cleanupExpiredMessages         = "cron(0 * * * ? *)"       # hourly (TTL handles most of this — see README.md)
     processWaitlistTimeouts        = "cron(0/1 * * * ? *)"     # every minute
     chargeHypBillingAgreements     = "cron(0 3 * * ? *)"       # 03:00 daily
+    chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
   }
 

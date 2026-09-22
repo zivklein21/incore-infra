@@ -4,7 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ddb } from './dynamo';
 import { resolveMemberProfile } from './memberLookup';
 import { s3, BUCKET_NAME } from './s3';
-import { computeComplianceFlags, type GroupItem, type MembershipItem } from './entities';
+import { computeComplianceFlags, type ForcaBillingAgreementItem, type GroupItem, type MembershipItem } from './entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -72,21 +72,38 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   const brand = profile.identity?.brand ?? 'incore';
   const groupId = brand === 'forca' ? profile.identity?.groupId : undefined;
 
-  const [photoUrl, healthPdfUrl, doctorApprovalUrl, medicalClearanceUrl, groupRes] = await Promise.all([
+  const [photoUrl, healthPdfUrl, doctorApprovalUrl, medicalClearanceUrl, groupRes, agreementRes] = await Promise.all([
     presign(profile.photoKey),
     presign(forms.health_declaration?.pdf_key),
     presign(forms.health_declaration?.doctor_approval_key),
     presign(forms.medical_clearance_key),
     groupId ? ddb.send(new GetCommand({ TableName: table, Key: { PK: `GROUP#${groupId}`, SK: 'METADATA' } })) : Promise.resolve(null),
+    // Her most recent FORCA subscription agreement, if any — see
+    // ForcaBillingAgreementItem in entities.ts. Real billing data (status/
+    // amount/next charge date) takes over the Overview tab's "Next
+    // Payment" row from GroupItem.price below once a real subscription
+    // exists; GroupItem.price stays as the fallback for a trainee with an
+    // admin-granted window but no actual subscription purchase behind it.
+    brand === 'forca'
+      ? ddb.send(new QueryCommand({
+          TableName: table,
+          IndexName: 'GSI1',
+          KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+          ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'AGREEMENT#' },
+        }))
+      : Promise.resolve(null),
   ]);
   const group = groupRes?.Item as GroupItem | undefined;
   const groupName = group?.name ?? null;
-  // FORCA has no recurring billing agreement (see GroupItem's doc comment —
-  // a Group doubles as the membership plan), so there's no concrete next-
-  // charge date to show. GroupItem.price is the closest real "next payment"
-  // signal the Overview tab has — the recurring amount for her group, when
-  // the admin has set one.
+  // GroupItem.price is the fallback "next payment" signal for a trainee
+  // with no real subscription agreement behind her — see the comment above.
   const groupPrice = typeof group?.price === 'number' ? group.price : null;
+
+  const agreements = (agreementRes?.Items ?? []) as ForcaBillingAgreementItem[];
+  const latestAgreement = agreements.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+  const subscriptionStatus = latestAgreement?.status ?? null;
+  const subscriptionAmountPerCharge = latestAgreement?.amountPerCharge ?? null;
+  const subscriptionNextChargeDate = latestAgreement?.nextChargeDate ?? null;
 
   const medicalClearance = {
     requested: forms.medical_clearance_requested === true,
@@ -145,6 +162,9 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     // getMemberDetail.ts already trusts cross-brand rather than new modeling.
     groupName,
     groupPrice,
+    subscriptionStatus,
+    subscriptionAmountPerCharge,
+    subscriptionNextChargeDate,
     membershipStart: typeof profile.membership?.start === 'string' ? profile.membership.start : null,
     membershipEnd: typeof profile.membership?.end === 'string' ? profile.membership.end : null,
     medicalClearance,

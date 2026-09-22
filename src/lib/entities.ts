@@ -227,6 +227,36 @@ export interface GroupItem {
   createdBy: string;
 }
 
+// PK=FORCASUBPRODUCT#<id>  SK=METADATA
+// FORCA-only Subscription Store catalog entry — a purchasable recurring
+// monthly plan, distinct from GroupItem's own price (that's the group's
+// nominal/list price; a subscription product is what's actually sold, and
+// several products can point at the same group, e.g. a discounted custom
+// one alongside the regular one). groupId is the GroupItem the trainee gets
+// mapped into on successful payment (see forcaSubscriptionPayments.ts /
+// forcaBillingAgreements.ts) — every subscription always resolves to a real
+// group, never a runtime guess.
+// visibility mirrors the proven ProductItem.visibility PUBLIC/PRIVATE
+// pattern from StoreManageScreen.tsx, but deliberately does NOT reuse
+// ProductItem.target_group_ids — that field means other subscription
+// *products*, not a FORCA GroupItem (a same-word, different-concept trap).
+// A "custom/partial/pro-rata" product per the FORCA billing spec is simply
+// a PRIVATE product with an admin-set custom price and an explicit
+// targetParentUids list — no separate "type" field needed.
+export interface ForcaSubscriptionProductItem {
+  PK: string; SK: string;
+  name: string;
+  description?: string;
+  price: number;
+  groupId: string;
+  visibility: 'PUBLIC' | 'PRIVATE';
+  // Parent uids (not trainee uids) — only meaningful when visibility === 'PRIVATE'.
+  targetParentUids?: string[];
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
 // A single equipment requirement on a TrainingTypeItem — 'custom' is a
 // fixed quantity the admin types in (e.g. "always 2 stopwatches, however
 // many trainees"); 'per_member' scales with how many members are actually
@@ -393,6 +423,104 @@ export interface MerchOrderItem {
   childName?: string;
   payerUid?: string;
   payerName?: string;
+}
+
+// ─── FORCA Subscription & Recurring Billing ────────────────────────────────
+// FORCA-only, lives in the FORCA table exclusively — same "own parallel
+// entities, never threaded through INCORE's TABLE_NAME machinery" reasoning
+// as MerchOrderItem above. See createForcaSubscriptionPaymentPage.ts /
+// lib/forcaSubscriptionPayments.ts / lib/forcaBillingAgreements.ts.
+
+// PK=FORCASUBORDER#<orderId>  SK=METADATA
+// orderId is always generated as `forcasub-<uuid>` — same dispatch-by-prefix
+// trick as MerchOrderItem's `merch-<uuid>`, so hypPaymentCallback.ts can
+// route to lib/forcaSubscriptionPayments.ts without a DB lookup first. Only
+// ever created for the FIRST charge of a subscription (the one that also
+// captures a card token) — every later monthly renewal is charged directly
+// against the token by lib/forcaBillingAgreements.ts and recorded as its own
+// completed order of this same shape (no new "pending" state involved).
+// childUid/childName/payerUid/payerName mirror MerchOrderItem's own
+// parent-pays-for-child fields exactly — see createForcaSubscriptionPaymentPage.ts.
+export interface ForcaSubscriptionOrderItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  orderId: string;
+  userId: string; // the trainee — order stays keyed to her own purchase history
+  status: 'pending' | 'completed' | 'failed';
+  subscriptionProductId: string;
+  productName: string;
+  groupId: string;
+  groupName: string;
+  amount: number;
+  hypTransactionId?: string;
+  hypCCode?: number;
+  billingAgreementId?: string;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt?: string;
+  childUid?: string;
+  childName?: string;
+  payerUid?: string;
+  payerName?: string;
+}
+
+// PK=FORCAAGREEMENT#<agreementId>  SK=METADATA
+// GSI1PK=MEMBER#<userId> GSI1SK=AGREEMENT#<agreementId> — a trainee's own
+// agreement (parent reads her linked child's subscription through this).
+// GSI2PK='FORCAAGREEMENT' GSI2SK=<createdAtIso>#<agreementId> — global
+// chronological listing for a future admin dashboard.
+// GSI3PK='FORCA_AGREEMENT_STATUS#active' GSI3SK=<nextChargeDateIso> —
+// present ONLY while status==='active'; this is what the monthly billing
+// cron (lib/forcaBillingAgreements.ts) queries. Removed on freeze/cancel/
+// failure — same "drop from the index instead of filtering it" pattern as
+// INCORE's HypBillingAgreementItem.
+//
+// Deliberately simpler than HypBillingAgreementItem: no totalPayments/
+// paymentsCompleted/installments concept — a FORCA subscription just runs
+// monthly until frozen or cancelled, per the FORCA billing spec's
+// "unlimited entries per calendar month" (no usage tracking at all, not
+// even an entry count) and "runs until cancelled" requirements.
+//
+// 'frozen': automated billing is paused starting from the next 1st (see
+// setForcaSubscriptionFreeze.ts/adminSetForcaBillingAgreementStatus.ts) —
+// mechanically identical to dropping GSI3, since a charge only ever
+// happens on the 1st in the first place, so there's nothing to interrupt
+// before then.
+// 'cancelled': the token was deleted and this record is kept only as a
+// historical record — profile.membership (the actual access gate, see
+// GroupItem's doc comment) is deliberately left untouched by cancellation,
+// so the trainee's current paid-through period stays valid until it
+// naturally lapses.
+export type ForcaAgreementStatus = 'active' | 'frozen' | 'cancelled' | 'failed';
+
+export interface ForcaBillingAgreementItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  GSI3PK?: string; GSI3SK?: string;
+  agreementId: string;
+  userId: string; // the trainee
+  payerUid: string; // the parent actually being billed
+  payerName: string;
+  status: ForcaAgreementStatus;
+  subscriptionProductId: string;
+  productName: string;
+  groupId: string;
+  groupName: string;
+  token: string;
+  tokenExpiryMonth: number;
+  tokenExpiryYear: number;
+  amountPerCharge: number;
+  nextChargeDate?: string; // always the 1st of a month; present only while status === 'active'
+  consecutiveFailures: number;
+  lastChargeResult?: { at: string; ccode: number; hypTransactionId: string | null; success: boolean };
+  // Set the first time a "no card on file" charge attempt notifies admins —
+  // same gate/reasoning as HypBillingAgreementItem.noCardAdminNotified.
+  noCardAdminNotified?: boolean;
+  sourceOrderId: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ─── FORCA Tracker (exercises + tests/quizzes) ─────────────────────────────
@@ -769,6 +897,67 @@ export interface SupportInquiryMessageItem {
   isAutoReply?: boolean;
   messageKey?: string;
   createdAt?: string;
+}
+
+// ─── FORCA Chat (trainee/parent ↔ admin or coach) ──────────────────────────
+// FORCA-only, lives in the FORCA table exclusively — same "own parallel
+// entities, never threaded through INCORE's TABLE_NAME machinery" reasoning
+// as MerchOrderItem/ForcaSubscriptionOrderItem. INCORE's own
+// SupportInquiryItem always goes to one fixed admin inbox with no recipient
+// concept at all; FORCA members pick a recipient at send time.
+
+// PK=FORCAINQUIRY#<id>  SK=METADATA
+// GSI1PK=MEMBER#<uid> GSI1SK=FORCAINQUIRY#<createdAtIso>#<id> — a member's
+// own inquiries list. uid here is always the TRAINEE (userId below), same
+// "order stays keyed to the child" convention as MerchOrderItem/
+// ForcaSubscriptionOrderItem — a parent sending on a linked daughter's
+// behalf still shows up in the daughter's own inbox.
+// GSI2PK='FORCAINQUIRY' GSI2SK=<createdAtIso>#<id> — global chronological
+// listing for the admin inbox (getAllForcaInquiries.ts), which — unlike a
+// coach — sees every inquiry regardless of recipientRole.
+//
+// recipientRole is picked once at send time and never changes. When it's
+// 'coach', groupId/groupName are denormalized from the trainee's
+// identity.groupId AT CREATION TIME (not resolved live on every read) —
+// deliberately pinned, so a later group reassignment mid-conversation can't
+// retroactively hide an inquiry from the coach who's already talking to her
+// about it. Visibility is then "any coach currently assigned to that
+// group" (via getCoachAccess()'s groupInAccess()), not one single pinned
+// coach — a trainee's group commonly has more than one coach, and any of
+// them being able to pick up the conversation is more useful than a rigid
+// single owner.
+export interface ForcaSupportInquiryItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  status: 'OPEN' | 'CLOSED';
+  userId: string; // the trainee
+  userDisplayName?: string;
+  userEmail?: string;
+  recipientRole: 'admin' | 'coach';
+  groupId?: string; // set only when recipientRole === 'coach', pinned at creation
+  groupName?: string;
+  subject?: string;
+  lastMessage?: string;
+  lastMessageAt?: string;
+  lastSender?: 'member' | 'admin' | 'coach';
+  createdAt: string;
+  // Set only when a parent sent this on a linked daughter's behalf — same
+  // parent-pays/parent-acts-for-child denormalization convention as
+  // MerchOrderItem's own childUid/childName/payerUid/payerName.
+  childUid?: string;
+  childName?: string;
+  payerUid?: string;
+  payerName?: string;
+}
+
+// PK=FORCAINQUIRY#<id>  SK=MESSAGE#<messageId>
+export interface ForcaSupportInquiryMessageItem {
+  PK: string; SK: string;
+  sender: 'member' | 'admin' | 'coach' | 'system';
+  text: string;
+  messageKey?: string;
+  createdAt: string;
 }
 
 // PK=MAIL#<id>  SK=METADATA — ephemeral: written to trigger an email send,
