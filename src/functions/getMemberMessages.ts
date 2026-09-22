@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 
 // GET or POST /getMemberMessages
@@ -9,13 +10,21 @@ import { getUid, json } from '../lib/http';
 // offers, schedule changes, admin broadcasts). No AWS WebSocket transport
 // exists yet, so the client polls this instead of the old Firestore
 // onSnapshot listener.
+//
+// Messages live in whichever table the member's own profile lives in — a
+// FORCA trainee's broadcasts are written to FORCA_TABLE_NAME (see
+// templateBroadcast.ts), so this can't just hardcode the incore table
+// anymore. resolveMemberProfile() checks both tables for this uid (no
+// brand-aware signal on the JWT itself — see its own comment).
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const uid = getUid(event);
+  const resolved = await resolveMemberProfile(uid);
+  if (!resolved) return json(200, { messages: [] });
 
   const res = await ddb.send(new QueryCommand({
-    TableName: TABLE_NAME,
+    TableName: resolved.table,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'MESSAGE#' },
   }));

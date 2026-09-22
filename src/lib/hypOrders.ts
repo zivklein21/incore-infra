@@ -169,7 +169,11 @@ export async function buildOrderFromProduct(
 
   if (productType === 'subscription') {
     const activeMemberships = await getActiveMemberships();
-    const hasActiveMembership = activeMemberships.length > 0;
+    // A CUSTOM_MIGRATION bridge shouldn't push a real purchase out to next
+    // month — it's a stopgap, not a membership the member is already paying
+    // for this month. handlePaymentSuccess supersedes/expires it once this
+    // purchase's membership is actually created.
+    const hasActiveMembership = activeMemberships.some((m) => m.type !== 'CUSTOM_MIGRATION');
 
     let start: Date;
     if (hasActiveMembership) {

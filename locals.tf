@@ -11,40 +11,68 @@ locals {
     adminAddToClass                    = { method = "POST" }
     adminAddTrialToClass               = { method = "POST" }
     adminApproveWaitlist               = { method = "POST" }
+    adminAssignGroup                   = { method = "POST" } # FORCA Coach feature: assign a trainee to a Group
     adminCancelRegistration            = { method = "POST" }
     adminChangeHypBillingAgreementPlan = { method = "POST" }
     adminChargeHypAgreementNow         = { method = "POST" }
     adminCheckEmailAvailable           = { method = "ANY" }
+    adminClearMedicalCondition         = { method = "POST" } # FORCA Trainee Dashboard: admin or coach clears a self-reported medical condition change
     adminClearMemberSavedCard          = { method = "POST" }
     adminClearMemberships              = { method = "POST" }
     adminCreateUser                    = { method = "POST" } # IAM-privileged (AdminCreateUser) — see handler comment
     adminDeleteClassType               = { method = "POST" }
+    adminDeleteCoach                   = { method = "POST" } # FORCA Coach feature
+    adminDeleteEquipment               = { method = "POST" } # FORCA Coach feature
+    adminDeleteExercise                = { method = "POST" } # FORCA Tracker feature
+    adminDeleteExtraTraining           = { method = "POST" } # FORCA Extra Training feature
+    adminDeleteGroup                   = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                  = { method = "POST" }
     adminDeleteMemberCredit            = { method = "POST" }
+    adminDeleteMerchProduct            = { method = "POST" } # FORCA Merch Store feature
     adminDeleteNotificationTemplate    = { method = "POST" }
     adminDeleteProduct                 = { method = "POST" }
+    adminDeleteRecurringSession        = { method = "POST" } # FORCA Coach feature
     adminDeleteS3Object                = { method = "POST" } # Admin Portal: Assets Manager
+    adminDeleteTestAttempt             = { method = "POST" } # FORCA Tracker feature
+    adminDeleteTestComponent           = { method = "POST" } # FORCA Tracker feature
+    adminDeleteTestGroup               = { method = "POST" } # FORCA Tracker feature
+    adminDeleteTrainingType            = { method = "POST" } # FORCA Coach feature
+    adminDeleteWorkoutPlan             = { method = "POST" } # FORCA Workout Plan builder
+    adminDeleteWorkoutPlanBlock        = { method = "POST" } # FORCA Workout Plan builder
     adminEvictFutureRegistrations      = { method = "POST" }
+    adminGenerateMonthInstances        = { method = "POST" } # FORCA Monthly Calendar: bulk-push a full month of recurring-session instances at once
     adminGetDashboardMetrics           = { method = "ANY" } # Admin Portal: Dashboard
     adminGetLambdaLogs                 = { method = "ANY" } # Admin Portal: Logs Viewer
     adminGetMemberFamilyInfo           = { method = "ANY" } # Family Accounts: MemberDetailsScreen's Family card
     adminGetMemberships                = { method = "ANY" }
     adminGetS3ObjectMetadata           = { method = "ANY" }  # Admin Portal: Assets Manager
     adminGetS3UploadUrl                = { method = "POST" } # Admin Portal: Assets Manager
+    adminGetSessionTestAttempts        = { method = "ANY" }  # FORCA Test Session: coach's post-session grading panel, roster-wide grading status
     adminGetSystemAlerts               = { method = "ANY" }  # Admin Portal: Dashboard
     adminGetSystemConfig               = { method = "ANY" }  # Admin Portal: Config screen
     adminGetTableItem                  = { method = "ANY" }  # Admin Portal: Data Viewer
     adminGetTableShape                 = { method = "ANY" }  # Admin Portal: Data Viewer filter discovery
+    adminGetTestAttempts               = { method = "GET" } # FORCA Tracker feature
     adminGrantCustomMigration          = { method = "POST" }
+    adminGrantForcaMembership          = { method = "POST" } # FORCA admin-manual membership feature
     adminGrantMembership               = { method = "POST" }
     adminLinkFamilyMember              = { method = "POST" } # Family Accounts: link a parent/child pair
+    adminListExercises                 = { method = "GET" } # FORCA Tracker feature
     adminListFamilyLinks               = { method = "ANY" }  # Family Accounts: Admin Portal household list
+    adminListGroups                    = { method = "ANY" }  # FORCA Coach feature
     adminListHypBillingAgreements      = { method = "ANY" }
     adminListHypOrders                 = { method = "ANY" }
     adminListLogGroups                 = { method = "ANY" } # Admin Portal: Logs Viewer
+    adminListMerchProducts             = { method = "GET" } # FORCA Merch Store feature
+    adminListRecurringSessions         = { method = "GET" } # FORCA Coach feature
     adminListS3Objects                 = { method = "ANY" } # Admin Portal: Assets Manager
+    adminListTestGroups                = { method = "GET" } # FORCA Tracker feature
+    adminListWorkoutPlans              = { method = "GET" } # FORCA Workout Plan builder: admin or coach with workoutPlans access
+    adminOverrideFormStatus            = { method = "POST" } # Backoffice Trainee Profile: mark a form submitted/pending on behalf of the member
     adminQueryTableItems               = { method = "ANY" } # Admin Portal: Data Viewer
+    adminRecordTestAttempt             = { method = "POST" } # FORCA Tracker feature
     adminRefundMemberLastPayment       = { method = "POST" }
+    adminRefundMerchOrder              = { method = "POST" } # FORCA Merch Store feature
     adminRefundOrder                   = { method = "POST" }
     adminRejectWaitlist                = { method = "POST" }
     adminRemoveLegalCancellation       = { method = "POST" }
@@ -54,40 +82,64 @@ locals {
     adminRunHypBillingCycle            = { method = "POST" }
     adminSaveBirthdayCampaign          = { method = "POST" }
     adminSaveClassType                 = { method = "POST" }
+    adminSaveEquipment                 = { method = "POST" } # FORCA Coach feature
+    adminSaveExercise                  = { method = "POST" } # FORCA Tracker feature
+    adminSaveExtraTraining             = { method = "POST" } # FORCA Extra Training feature
+    adminSaveGroup                     = { method = "POST" } # FORCA Coach feature
+    adminSaveMedicalClearance          = { method = "POST" } # Backoffice Trainee Profile: upload a medical certificate on behalf of the member
+    adminSaveMerchProduct              = { method = "POST" } # FORCA Merch Store feature
     adminSaveNotificationTemplate      = { method = "POST" }
+    adminSaveOrthopedicFormConfig      = { method = "POST" } # FORCA Orthopedic Medical Form builder
     adminSaveProduct                   = { method = "POST" }
+    adminSaveRecurringSession          = { method = "POST" } # FORCA Coach feature
     adminSaveRegistrationFormConfig    = { method = "POST" }
     adminSaveSystemConfig              = { method = "POST" } # Admin Portal: Config screen
     adminSaveTermsOfServiceContent     = { method = "POST" }
+    adminSaveTestComponent             = { method = "POST" } # FORCA Tracker feature
+    adminSaveTestGroup                 = { method = "POST" } # FORCA Tracker feature
+    adminSaveTrainingType              = { method = "POST" } # FORCA Coach feature
+    adminSaveWorkoutPlan               = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
+    adminSaveWorkoutPlanBlock          = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
     adminSendBirthdayGiftNow           = { method = "POST" }
     adminSendClassMessage              = { method = "POST" }
     adminSetForceShowPaymentButton     = { method = "POST" }
     adminSetHypBillingAgreementStatus  = { method = "POST" }
+    adminSetMedicalClearanceRequested  = { method = "POST" } # FORCA Profile feature: flag a trainee's Medical Profile tab
     adminSetMemberAlert                = { method = "POST" }
+    adminSetOrthopedicFormRequested    = { method = "POST" } # FORCA Orthopedic Medical Form: flag a trainee as needing to fill it out
     adminUnlinkFamilyMember            = { method = "POST" } # Family Accounts: remove a parent/child link
+    adminUpdateCoachPersonal           = { method = "POST" } # FORCA Coach feature
     adminUpdateMemberCredit            = { method = "POST" }
     adminUpdateMembership              = { method = "POST" }
     adminUpdateMemberMembershipBadge   = { method = "POST" }
     adminUpdateMemberPersonal          = { method = "POST" }
     adminUpdateMemberWallet            = { method = "POST" }
     adminUpdatePendingMembership       = { method = "POST" }
+    adminUpdateSessionInstance         = { method = "POST" } # FORCA: edit one dated session instance independently of its recurring template
     adminUpdateTableItem               = { method = "POST" } # Admin Portal: Data Viewer
     adminWhoAmI                        = { method = "ANY" }  # Admin Portal: auth-gate check
+    assignSessionTestGroup             = { method = "POST" } # FORCA Test Session: link a Test Group (+ optional sub-tests) to one dated session, coach with testsGrading:'write' or admin
+    assignSessionWorkoutPlan           = { method = "POST" } # FORCA Workout Plan builder: coach with workoutPlans:'write', or admin
     bookClass                          = { method = "POST" }
     cancelBooking                      = { method = "POST" }
     cancelPolicyPreview                = { method = "POST" }
+    closeSession                       = { method = "POST" } # FORCA Coach feature
     closeSupportInquiry                = { method = "POST" }
     createClass                        = { method = "POST" }
     createHypCardUpdatePage            = { method = "POST" }
     createHypPaymentPage               = { method = "POST" }
     createHypTokenPurchase             = { method = "POST" }
+    createMerchPaymentPage             = { method = "POST" } # FORCA Merch Store feature
     createSupportInquiry               = { method = "POST" }
+    createTrainingSession              = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
+    declareAttendance                  = { method = "POST" } # FORCA Coach feature: trainee's own declared attendance
     deleteClass                        = { method = "POST" }
     deleteClassSeries                  = { method = "POST" }
     deleteMemberMessage                = { method = "POST" }
     deleteSupportInquiry               = { method = "POST" }
     dismissMemberAlert                 = { method = "POST" }
     getActiveMembership                = { method = "ANY" }
+    getActiveTestGroups                = { method = "GET" } # FORCA Tracker feature — self-service Tests & Quizzes picker
     getActivityHistory                 = { method = "ANY" }
     getAdminNotifications              = { method = "ANY" }
     getAllInquiries                    = { method = "ANY" }
@@ -95,50 +147,88 @@ locals {
     getAllMembers                      = { method = "ANY" }
     getBirthdayCampaign                = { method = "ANY" }
     getCancellationPolicySettings      = { method = "ANY" }
+    getChildAttendanceHistory          = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildExerciseHistory            = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildOrders                     = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildProfile                    = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildTestAttempts               = { method = "GET" } # FORCA Child Switcher: parent-session, no identity switch
+    getChildUpcomingSessions           = { method = "GET" } # FORCA Child Switcher: Parent Home tab, read-only
+    getChildUploadUrl                  = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     getClassDetail                     = { method = "ANY" }
     getClassMembers                    = { method = "ANY" }
     getClassParticipants               = { method = "ANY" } # Client-facing public roster (see getClassMembers for admin equivalent)
     getClasses                         = { method = "ANY" }
     getClassTypes                      = { method = "ANY" }
+    getCoachOptions                    = { method = "GET" } # FORCA Coach feature: admin-only
+    getCoachSessions                   = { method = "ANY" } # FORCA Coach feature: isCoachOrAdmin-gated
+    getCoachTrainees                   = { method = "GET" } # FORCA Tracker feature: coach's own trainee roster
+    getEquipment                       = { method = "GET" } # FORCA Coach feature
+    getExercises                       = { method = "GET" } # FORCA Tracker feature
+    getExtraTraining                   = { method = "GET" } # FORCA Extra Training feature
     getFileUrl                         = { method = "ANY" }
+    getForcaMerchProducts              = { method = "GET" } # FORCA Merch Store feature
     getHypOrderStatus                  = { method = "ANY" }
     getInquiryMessages                 = { method = "ANY" }
     getMemberBookingSources            = { method = "ANY" }
     getMemberCancellations             = { method = "ANY" }
     getMemberDetail                    = { method = "ANY" }
+    getMemberExerciseHistory           = { method = "GET" } # FORCA Tracker feature
     getMemberMembership                = { method = "ANY" }
     getMemberMessages                  = { method = "ANY" }
+    getMemberOrders                    = { method = "GET" } # Backoffice Trainee Profile: Purchase History tab
+    getMyAttendanceHistory             = { method = "GET" } # FORCA Profile feature: trainee's own attendance history
     getMyBillingAgreement              = { method = "ANY" }
+    getMyExerciseHistory               = { method = "GET" } # FORCA Tracker feature
     getMyInquiries                     = { method = "ANY" }
+    getMyOrders                        = { method = "GET" } # FORCA Profile feature: trainee's own merch purchase history
+    getMyTestAttempts                  = { method = "ANY" } # FORCA Tracker feature: trainee's own test/quiz results, self-service
+    getMyTrainingSessions              = { method = "GET" } # FORCA Coach feature: trainee's own upcoming sessions
     getNotificationTemplates           = { method = "ANY" }
     getNotificationTimingSettings      = { method = "ANY" }
+    getOrthopedicFormConfig            = { method = "ANY" } # FORCA Orthopedic Medical Form builder
     getPaymentPolicySettings           = { method = "ANY" }
     getProducts                        = { method = "ANY" }
     getProfile                         = { method = "ANY" }
     getRegistrationFormConfig          = { method = "ANY" }
+    getSessionPostWorkoutReport        = { method = "GET" } # FORCA Coach feature: staff-only post-workout performance report, tailored to the session's assigned Workout Plan
+    getSessionWorkoutPlan              = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                 = { method = "ANY" }
     getTermsOfServiceContent           = { method = "ANY" }
+    getTrainingHistory                 = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
+    getTrainingTypes                   = { method = "GET" } # FORCA Coach feature
     getUploadUrl                       = { method = "POST" }
     getWallet                          = { method = "ANY" }
     grantPunchCard                     = { method = "POST" }
     joinWaitlist                       = { method = "POST" }
     leaveWaitlist                      = { method = "POST" }
     listMyFamily                       = { method = "ANY" }  # Family Accounts: a member's own linked children
+    logExercise                        = { method = "POST" } # FORCA Tracker feature
+    logSessionExercise                 = { method = "POST" } # FORCA Tracker feature: trainee's own measurable session workout
+    markActualAttendance               = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead          = { method = "POST" }
     renewSubscriptionWithToken         = { method = "POST" }
+    reportMedicalConditionChange       = { method = "POST" } # FORCA Trainee Dashboard: self-report, locks declareAttendance.ts's 'yes' path until cleared
     resizeProfilePhoto                 = { method = "POST" }
+    returnSessionEquipment             = { method = "POST" } # FORCA Coach feature
+    saveChildMedicalClearance          = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     saveClassSeries                    = { method = "POST" }
+    saveMedicalClearance               = { method = "POST" } # FORCA Profile feature: upload/replace a medical clearance certificate
     saveScheduleAlertSettings          = { method = "POST" }
     saveSupportSettings                = { method = "POST" }
+    sendCoachNotification              = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendSupportMessage                 = { method = "POST" }
     sendWelcomeEmail                   = { method = "POST" }
     submitHealthDeclaration            = { method = "POST" }
+    submitOrthopedicForm               = { method = "POST" } # FORCA Orthopedic Medical Form: trainee/parent submission
+    submitParentalAuthorization        = { method = "POST" } # FORCA mandatory onboarding: parent's signed program-participation authorization
     submitParentalConsent              = { method = "POST" }
     submitRegistrationForm             = { method = "POST" }
     swapClass                          = { method = "POST" }
     switchProfile                      = { method = "POST" } # Family Accounts: parent -> linked child token swap
+    toggleSessionEquipment             = { method = "POST" } # FORCA Coach feature
     triggerTemplateAlert               = { method = "POST" }
     updateClass                        = { method = "POST" }
+    updateCoachOwnProfile              = { method = "POST" } # FORCA Coach feature: self-service name/phone edit, coach-only
     updateProfile                      = { method = "POST" }
     updateProfilePhoto                 = { method = "POST" }
     updatePhotoConsent                 = { method = "POST" }
@@ -169,24 +259,33 @@ locals {
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
 
+  # Only method="ANY" routes actually swallow OPTIONS and need a dedicated
+  # preflight route (see api_gateway.tf's aws_apigatewayv2_route.cors_preflight)
+  # — a GET/POST-only route never matches OPTIONS, so it's already covered by
+  # the API's own cors_configuration block with no extra route required.
+  # Keeping this filtered (instead of covering every function) is what keeps
+  # total route count under API Gateway v2's per-API route quota.
+  cors_preflight_functions = { for k, v in local.all_http_functions : k => v if v.method == "ANY" }
+
   # EventBridge Scheduler — cron expressions in AWS's 6-field syntax,
   # evaluated in Asia/Jerusalem (schedule_expression_timezone), matching the
   # original Firebase onSchedule({ timeZone: 'Asia/Jerusalem' }) configs
   # exactly rather than requiring manual UTC/DST conversion.
   scheduled_functions = {
-    expireProducts             = "cron(0 2 * * ? *)"       # 02:00 daily
-    activatePendingMemberships = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
-    clearUsedPunchCards        = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
-    distributeBirthdayRewards  = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
-    weekendSessionsRoutine     = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend
-    monthEndRollover           = "cron(59 23 28-31 * ? *)" # 23:59 on days 28-31 (last-day guard inside)
-    subscriptionExpiryAlert    = "cron(0 20 28-31 * ? *)"  # 20:00 on days 28-31 (last-day guard inside)
-    classReminderEngine        = "cron(0 * * * ? *)"       # top of every hour
-    scheduleAlertRoutine       = "cron(0/10 * * * ? *)"    # every 10 minutes
-    sendMembershipReminders    = "cron(0 9 * * ? *)"       # 09:00 daily
-    cleanupExpiredMessages     = "cron(0 * * * ? *)"       # hourly (TTL handles most of this — see README.md)
-    processWaitlistTimeouts    = "cron(0/1 * * * ? *)"     # every minute
-    chargeHypBillingAgreements = "cron(0 3 * * ? *)"       # 03:00 daily
+    expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
+    activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
+    clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
+    distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
+    weekendSessionsRoutine         = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend
+    monthEndRollover               = "cron(59 23 28-31 * ? *)" # 23:59 on days 28-31 (last-day guard inside)
+    subscriptionExpiryAlert        = "cron(0 20 28-31 * ? *)"  # 20:00 on days 28-31 (last-day guard inside)
+    classReminderEngine            = "cron(0 * * * ? *)"       # top of every hour
+    scheduleAlertRoutine           = "cron(0/10 * * * ? *)"    # every 10 minutes
+    sendMembershipReminders        = "cron(0 9 * * ? *)"       # 09:00 daily
+    cleanupExpiredMessages         = "cron(0 * * * ? *)"       # hourly (TTL handles most of this — see README.md)
+    processWaitlistTimeouts        = "cron(0/1 * * * ? *)"     # every minute
+    chargeHypBillingAgreements     = "cron(0 3 * * ? *)"       # 03:00 daily
+    checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
   }
 
   # DynamoDB Streams consumers — every one of these must filter internally

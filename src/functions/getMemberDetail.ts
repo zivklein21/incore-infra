@@ -2,11 +2,11 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { MemberProfileItem } from '../lib/entities';
+import type { GroupItem, MemberProfileItem } from '../lib/entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -35,8 +35,16 @@ function deriveFirstLastName(p: MemberProfileItem): { firstName: string; lastNam
   return { firstName: parts[0] ?? '', lastName: parts.slice(1).join(' ') };
 }
 
-// GET or POST /getMemberDetail?memberId=xxx
+// GET or POST /getMemberDetail?memberId=xxx&brand=incore|forca
 // Auth: Cognito JWT, caller must be admin
+//
+// brand picks which table to read (see getAllMembers.ts) — FORCA member
+// profiles live in FORCA_TABLE_NAME, not the INCORE table, so omitting this
+// silently returned `null` (item not found) for every FORCA member instead
+// of an error, which left MemberDetailsScreen's loading guard spinning
+// forever (its `!member` check never distinguishes "still loading" from
+// "query succeeded with nothing"). Defaults to 'incore' for callers that
+// don't pass it yet, matching getAllMembers.ts.
 //
 // membershipStatus/membershipTypeId/membershipStart/membershipEnd/
 // monthlyLateCancellations/monthlyValidCancellations mirror the legacy V1
@@ -53,12 +61,13 @@ export async function handler(
 
   const memberId = event.queryStringParameters?.memberId;
   if (!memberId) return json(400, { error: 'missing_member_id' });
+  const brand = event.queryStringParameters?.brand === 'forca' ? 'forca' as const : 'incore' as const;
 
   // Strongly consistent: an admin re-opening this screen right after
   // flipping a toggle here (e.g. forceShowPaymentButton) must never see a
   // stale pre-write value — the default eventually-consistent read can
   // occasionally still return the old item for a brief window after a write.
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' }, ConsistentRead: true }));
+  const res = await ddb.send(new GetCommand({ TableName: tableForBrand(brand), Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' }, ConsistentRead: true }));
   const p = res.Item as MemberProfileItem | undefined;
   if (!p) return json(200, null);
 
@@ -67,11 +76,21 @@ export async function handler(
   const hd = forms.health_declaration;
   const pc = forms.parental_consent;
 
-  const [pdfUrl, doctorApprovalUrl, signatureUrl] = await Promise.all([
+  const groupId = brand === 'forca' ? p.identity?.groupId : undefined;
+  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, groupRes] = await Promise.all([
     presign(hd?.pdf_key),
     presign(hd?.doctor_approval_key),
     presign(pc?.signatureKey),
+    presign(forms.medical_clearance_key),
+    groupId ? ddb.send(new GetCommand({ TableName: tableForBrand(brand), Key: { PK: `GROUP#${groupId}`, SK: 'METADATA' } })) : Promise.resolve(null),
   ]);
+  const groupName = (groupRes?.Item as GroupItem | undefined)?.name ?? null;
+  const medicalClearance = {
+    requested: forms.medical_clearance_requested === true,
+    requestedAt: forms.medical_clearance_requested_at ?? null,
+    uploadedAt: forms.medical_clearance_uploaded_at ?? null,
+    url: medicalClearanceUrl,
+  };
 
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
@@ -113,11 +132,17 @@ export async function handler(
     membershipTypeId: typeof membership.type === 'string' ? membership.type : null,
     membershipStart: typeof membership.start === 'string' ? membership.start : null,
     membershipEnd: typeof membership.end === 'string' ? membership.end : null,
+    // FORCA-only: the admin-manual membership grant's own label (see
+    // adminGrantForcaMembership.ts) — INCORE's real MembershipItem-backed
+    // membershipTypeId already carries its own plan name, this is FORCA's
+    // equivalent for the simple start/end/title record on the profile item.
+    membershipTitle: brand === 'forca' && typeof membership.title === 'string' ? membership.title : null,
     age, birthday,
     photoUrl: await presign(p.photoKey),
     phone: p.identity?.phone ?? p.phone ?? '',
     email: p.identity?.email ?? p.email ?? '',
     role: p.identity?.role ?? p.role ?? 'member',
+    accountType: p.identity?.accountType ?? 'member',
     adminAlertMessage: p.admin?.alertMessage ?? '',
     healthDeclaration,
     healthDeclarationValid,
@@ -127,6 +152,26 @@ export async function handler(
     policiesAcceptedAt: forms.policiesAcceptedAt ?? null,
     parentalConsent,
     photoConsent,
+    groupName,
+    groupId: groupId ?? null,
+    medicalClearance,
+    orthopedicFormRequested: forms.orthopedic_form_requested === true,
+    orthopedicFormRequestedAt: forms.orthopedic_form_requested_at ?? null,
+    orthopedicForm: forms.orthopedic_form === true,
+    orthopedicAnswers: forms.orthopedic_answers ?? null,
+    // FORCA Trainee Dashboard — see entities.ts's forms.medical_condition_*
+    // comment / reportMedicalConditionChange.ts / adminClearMedicalCondition.ts.
+    medicalConditionChanged: forms.medical_condition_changed === true,
+    medicalConditionChangedAt: forms.medical_condition_changed_at ?? null,
+    medicalConditionNote: forms.medical_condition_note ?? null,
+    parentalAuthorization: forms.parental_authorization?.submitted_at
+      ? {
+          submittedAt: forms.parental_authorization.submitted_at,
+          parentName: forms.parental_authorization.parentName ?? '',
+          parentPhone: forms.parental_authorization.parentPhone ?? '',
+          parentEmail: forms.parental_authorization.parentEmail ?? '',
+        }
+      : null,
     // The product a member is assigned to move onto (e.g. after a manually-
     // created CUSTOM_MIGRATION bridge membership expires) — that bridge
     // record itself carries no price, so MemberDetailsScreen needs this to

@@ -20,7 +20,7 @@ import { getUid, json } from '../lib/http';
 // one member can't overwrite or squat on another member's files. Admins get
 // no special write access here; there's no legitimate reason for an admin
 // to upload into another member's path directly.
-const ALLOWED_PREFIXES = ['profile_photos/', 'health-declarations/', 'doctor-approvals/', 'signatures/'];
+const ALLOWED_PREFIXES = ['profile_photos/', 'health-declarations/', 'doctor-approvals/', 'signatures/', 'medical-clearances/'];
 const UPLOAD_URL_EXPIRY_SECONDS = 300;
 
 export async function handler(

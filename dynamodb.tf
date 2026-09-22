@@ -103,3 +103,101 @@ resource "aws_dynamodb_table" "incore_table" {
     Project     = "incore"
   }
 }
+
+# FORCA gets a fully separate table rather than a brand field on shared
+# items — absolute data separation was the explicit requirement (see the
+# FORCA data separation plan), not just filtering. Schema is a straight
+# mirror of incore_table; the two tables never cross-reference each other
+# except through the app-layer dual lookup in lib/memberLookup.ts (used by
+# the handful of endpoints that only have a uid, not a known brand, to work
+# out which table to read/write — Cognito custom attributes were ruled out
+# for this because adding one to the existing, already-in-use user pool
+# would force Terraform to destroy and recreate it, deleting every real user).
+resource "aws_dynamodb_table" "forca_table" {
+  name         = "forca-production-table"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "PK"
+  range_key    = "SK"
+
+  attribute {
+    name = "PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "SK"
+    type = "S"
+  }
+
+  attribute {
+    name = "GSI1PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "GSI1SK"
+    type = "S"
+  }
+
+  attribute {
+    name = "GSI2PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "GSI2SK"
+    type = "S"
+  }
+
+  attribute {
+    name = "GSI3PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "GSI3SK"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "GSI1"
+    hash_key        = "GSI1PK"
+    range_key       = "GSI1SK"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "GSI2"
+    hash_key        = "GSI2PK"
+    range_key       = "GSI2SK"
+    projection_type = "ALL"
+  }
+
+  global_secondary_index {
+    name            = "GSI3"
+    hash_key        = "GSI3PK"
+    range_key       = "GSI3SK"
+    projection_type = "ALL"
+  }
+
+  ttl {
+    attribute_name = "expiresAtEpoch"
+    enabled        = true
+  }
+
+  stream_enabled   = true
+  stream_view_type = "NEW_AND_OLD_IMAGES"
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    Environment = "production"
+    Project     = "forca"
+  }
+}

@@ -1,11 +1,11 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 
 // POST /adminDeleteProduct
-// Body: { id: string }
+// Body: { id: string, brand?: 'incore' | 'forca' }
 // Auth: Cognito JWT, caller must be admin
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -13,7 +13,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { id?: unknown };
+  let body: { id?: unknown; brand?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -22,6 +22,7 @@ export async function handler(
   const id = typeof body.id === 'string' ? body.id.trim() : '';
   if (!id) return json(400, { error: 'missing_id' });
 
-  await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { PK: `PRODUCT#${id}`, SK: 'METADATA' } }));
+  const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
+  await ddb.send(new DeleteCommand({ TableName: tableForBrand(brand), Key: { PK: `PRODUCT#${id}`, SK: 'METADATA' } }));
   return json(200, { success: true });
 }

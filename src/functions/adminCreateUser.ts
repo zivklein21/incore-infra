@@ -2,23 +2,48 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import {
   CognitoIdentityProviderClient,
   AdminCreateUserCommand,
+  AdminDeleteUserCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import * as nodemailer from 'nodemailer';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { DEFAULT_COACH_PERMISSIONS, parseCoachPermissions, type CoachPermissions } from '../lib/coachAccess';
 import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
+import { createFamilyLink } from '../lib/familyLinks';
+import { recordSystemAlert } from '../lib/alerts';
+import type { MemberProfileItem } from '../lib/entities';
 
 // POST /adminCreateUser
 // Auth: Cognito JWT, caller must be admin
-// Body: { email, firstName, lastName, phone, birthday?, age?, requireHealthForm?, requireRegistrationForm?, membershipId?, accountType? }
+// Body: { email, firstName, lastName, phone, birthday?, age?, requireHealthForm?, requireRegistrationForm?, membershipId?, accountType?, brand?, parentFirstName?, parentLastName?, parentPhone?, parentEmail?, linkParentLater? }
+// FORCA trainees also always get require_parental_authorization: true (see requireParentalAuthorization below) — not an admin-optional body field, same as requireHealthForm/requireRegistrationForm for them.
 //
 // accountType: 'parent_only' (Family Accounts) marks a member created solely
 // to hold family links — no membership/booking of their own; the client
 // hides their schedule/booking tab and leads with their linked child's
 // profile instead (see the Family Accounts plan). Omit or 'member' for a
 // normal trainee account.
+//
+// FORCA (brand: 'forca') trainees are minors: creating one (accountType
+// !== 'parent_only') normally requires parentFirstName/parentPhone/
+// parentEmail, and this handler creates-or-reuses a 'parent_only' account
+// for that email and links it to the trainee via createFamilyLink — see the
+// FORCA Member Creation & Parental Onboarding plan. FORCA's data lives in
+// its own DynamoDB table (see lib/dynamo.ts's tableForBrand()) — both the
+// trainee and her parent are written there, never to the incore table.
+// Passing linkParentLater:true skips all of that — the trainee is created
+// alone (e.g. her parent already has an account from an older sibling), and
+// an admin connects the two afterward via adminLinkFamilyMember.ts (Manage
+// > Family Links).
+// requireHealthForm/requireRegistrationForm
+// are forced true for FORCA trainees regardless of what the caller sent:
+// these are mandatory for minors, not an admin-optional toggle. The parent's
+// own compliance flags (getProfile.ts) are computed from her own forms/admin
+// fields, which start out false — she satisfies the trainee's flags by
+// switching into the trainee's profile (switchProfile.ts) and filling them
+// there, not by filling anything on her own account.
 //
 // SECURITY NOTE for whoever reviews this before deploying: AdminCreateUser
 // is an IAM-privileged Cognito action — it can create arbitrary accounts
@@ -51,6 +76,9 @@ export async function handler(
     email?: unknown; firstName?: unknown; lastName?: unknown; phone?: unknown;
     birthday?: unknown; age?: unknown; requireHealthForm?: unknown;
     requireRegistrationForm?: unknown; membershipId?: unknown; accountType?: unknown;
+    brand?: unknown; parentFirstName?: unknown; parentLastName?: unknown; parentPhone?: unknown; parentEmail?: unknown;
+    linkParentLater?: unknown;
+    role?: unknown; groupId?: unknown; groupIds?: unknown; coachPermissions?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -62,23 +90,212 @@ export async function handler(
   const firstName = typeof body.firstName === 'string' ? body.firstName.trim() : '';
   const lastName = typeof body.lastName === 'string' ? body.lastName.trim() : '';
   if (!email || !firstName) return json(400, { error: 'missing_required_fields' });
-  const name = [firstName, lastName].filter(Boolean).join(' ');
   const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
   const accountType = body.accountType === 'parent_only' ? 'parent_only' as const : 'member' as const;
+  // Registration entry point = whichever brand mode the admin's Backoffice was
+  // toggled to when they created this member (see AdminBrandModeContext in
+  // incore-app). Anything other than the literal 'forca' defaults to 'incore',
+  // same permissive style as accountType above.
+  const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
+  // FORCA no longer allows creating a standalone parent_only account through
+  // this direct path — a FORCA parent account may only ever come into
+  // existence as a side effect of creating her trainee (see the
+  // linkParentLater block below, which always creates/reuses one with a
+  // hardcoded accountType regardless of this check). INCORE's own Family
+  // Accounts are unaffected.
+  if (brand === 'forca' && accountType === 'parent_only') {
+    return json(400, { error: 'forca_parent_only_not_supported' });
+  }
+  // Coach (מדריכה): FORCA-only restricted staff role — view-only across
+  // sessions/rosters/tracking, one write action (markActualAttendance.ts).
+  // She's staff, not a trainee, so isForcaTrainee below excludes her —
+  // no parent-linking, no health/registration-form requirements.
+  const isCoach = brand === 'forca' && body.role === 'coach';
+  const isForcaTrainee = brand === 'forca' && accountType !== 'parent_only' && !isCoach;
+  // A FORCA trainee's persistent training cohort (GroupItem, adminSaveGroup.ts)
+  // — meaningless for a coach or a parent_only account.
+  const groupId = isForcaTrainee && typeof body.groupId === 'string' && body.groupId
+    ? body.groupId : undefined;
+  // A coach's assigned Groups (plural) — see lib/coachAccess.ts's
+  // getCoachAccess()/entities.ts's identity.groupIds comment. Defaults
+  // applied in createMemberAccount() when a coach is created without these
+  // (e.g. via the older AddCoachScreen flow before this UI existed).
+  const groupIds = isCoach && Array.isArray(body.groupIds)
+    ? body.groupIds.filter((g): g is string => typeof g === 'string')
+    : undefined;
+  const coachPermissions = isCoach ? parseCoachPermissions(body.coachPermissions) : undefined;
+
+  // Lets the admin create a trainee alone when her parent already has an
+  // account (e.g. from an older sibling created earlier) — the two get
+  // connected afterward via adminLinkFamilyMember.ts (Manage > Family
+  // Links) instead of this handler creating-or-reusing a parent here.
+  const linkParentLater = isForcaTrainee && body.linkParentLater === true;
+
+  let parentFirstName = '';
+  let parentLastName = '';
+  let parentPhone = '';
+  let parentEmail = '';
+  if (isForcaTrainee && !linkParentLater) {
+    parentFirstName = typeof body.parentFirstName === 'string' ? body.parentFirstName.trim() : '';
+    parentLastName = typeof body.parentLastName === 'string' ? body.parentLastName.trim() : '';
+    parentPhone = typeof body.parentPhone === 'string' ? body.parentPhone.trim() : '';
+    parentEmail = typeof body.parentEmail === 'string' ? body.parentEmail.trim().toLowerCase() : '';
+    if (!parentFirstName || !parentPhone || !parentEmail) {
+      return json(400, { error: 'missing_parent_details' });
+    }
+  }
+  const parentFullName = [parentFirstName, parentLastName].filter(Boolean).join(' ');
+
+  const requireHealthForm = isForcaTrainee ? true : body.requireHealthForm === true;
+  const requireRegistrationForm = isForcaTrainee ? true : body.requireRegistrationForm === true;
+  // Mandatory for every FORCA trainee, same as the two above — no
+  // admin-optional toggle (see computeComplianceFlags in entities.ts).
+  const requireParentalAuthorization = isForcaTrainee;
+  // Mandatory onboarding step, filled by the parent right after Health
+  // Declaration (see resolvePostLoginRoute.ts) — required for every FORCA
+  // trainee to actually start using the app, not an admin-optional
+  // per-trainee flag like adminSetOrthopedicFormRequested.ts's separate
+  // "flag for a re-submission later" mechanism.
+  const requireOrthopedicForm = isForcaTrainee;
 
   const userPoolId = process.env.COGNITO_USER_POOL_ID as string;
   const cognito = new CognitoIdentityProviderClient({});
+
+  // Resolve the parent account before creating the trainee, so a bad/
+  // conflicting parentEmail fails fast without leaving an orphaned trainee
+  // Cognito user behind.
+  let parentUid: string | undefined;
+  if (isForcaTrainee && !linkParentLater) {
+    const existingRes = await ddb.send(new QueryCommand({
+      TableName: tableForBrand('forca'),
+      IndexName: 'GSI3',
+      KeyConditionExpression: 'GSI3PK = :pk',
+      ExpressionAttributeValues: { ':pk': `EMAIL#${parentEmail}` },
+      Limit: 1,
+    }));
+    const existingParent = existingRes.Items?.[0] as MemberProfileItem | undefined;
+    if (existingParent) {
+      // Already scoped to the FORCA table by the query above, so brand is
+      // guaranteed — only accountType still needs checking (Cognito
+      // enforces email uniqueness pool-wide, so a hit here means this email
+      // belongs to some FORCA member; just not necessarily a parent_only one).
+      if (existingParent.identity?.accountType === 'parent_only') {
+        parentUid = (existingParent.PK as string).replace('MEMBER#', '');
+      } else {
+        return json(409, { error: 'parent_email_conflict' });
+      }
+    } else {
+      const parentCreate = await createMemberAccount({
+        email: parentEmail,
+        firstName: parentFirstName,
+        lastName: parentLastName,
+        phone: parentPhone,
+        accountType: 'parent_only',
+        brand: 'forca',
+        role: 'member',
+        requireHealthForm: false,
+        requireRegistrationForm: false,
+        requireParentalAuthorization: false,
+        requireOrthopedicForm: false,
+      }, callerUid, cognito, userPoolId);
+      if ('error' in parentCreate) return json(parentCreate.status, { error: parentCreate.error });
+      parentUid = parentCreate.uid;
+      await sendWelcomeEmail(parentEmail, parentFullName, parentCreate.initialPassword).catch((err) => {
+        console.error('[adminCreateUser] parent welcome email failed', err);
+      });
+    }
+  }
+
+  const traineeCreate = await createMemberAccount({
+    email,
+    firstName,
+    lastName,
+    phone,
+    accountType,
+    brand,
+    role: isCoach ? 'coach' : 'member',
+    groupId,
+    groupIds,
+    coachPermissions,
+    requireHealthForm,
+    requireRegistrationForm,
+    requireParentalAuthorization,
+    requireOrthopedicForm,
+    birthday: typeof body.birthday === 'string' ? body.birthday : undefined,
+    age: typeof body.age === 'number' ? body.age : undefined,
+    membershipId: typeof body.membershipId === 'string' && body.membershipId ? body.membershipId : undefined,
+  }, callerUid, cognito, userPoolId);
+  if ('error' in traineeCreate) return json(traineeCreate.status, { error: traineeCreate.error });
+
+  await sendWelcomeEmail(email, [firstName, lastName].filter(Boolean).join(' '), traineeCreate.initialPassword).catch((err) => {
+    // Non-fatal — the account exists and works even if the email fails.
+    console.error('[adminCreateUser] welcome email failed', err);
+  });
+
+  if (traineeCreate.pendingMembership) {
+    await bridgeTokenToBillingAgreement(traineeCreate.uid);
+  }
+
+  if (isForcaTrainee && parentUid) {
+    const linkResult = await createFamilyLink(parentUid, traineeCreate.uid, callerUid);
+    if (!linkResult.ok) {
+      // Both accounts already exist at this point — surface the problem
+      // rather than failing the whole request, same non-fatal pattern as
+      // the welcome email above.
+      await recordSystemAlert({
+        severity: 'error',
+        source: 'adminCreateUser',
+        message: `Failed to link FORCA trainee ${traineeCreate.uid} to parent ${parentUid}: ${linkResult.error}`,
+        context: { parentUid, childUid: traineeCreate.uid, error: linkResult.error },
+      }).catch(() => {});
+    }
+  }
+
+  return json(200, { success: true, uid: traineeCreate.uid, ...(parentUid ? { parentUid } : {}) });
+}
+
+interface CreateMemberInput {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  accountType: 'member' | 'parent_only';
+  brand: 'incore' | 'forca';
+  role: 'member' | 'coach';
+  groupId?: string;
+  groupIds?: string[];
+  coachPermissions?: CoachPermissions;
+  requireHealthForm: boolean;
+  requireRegistrationForm: boolean;
+  requireParentalAuthorization: boolean;
+  requireOrthopedicForm: boolean;
+  birthday?: string;
+  age?: number;
+  membershipId?: string;
+}
+
+type CreateMemberResult =
+  | { uid: string; initialPassword: string; pendingMembership: boolean }
+  | { error: string; status: number };
+
+async function createMemberAccount(
+  input: CreateMemberInput,
+  callerUid: string,
+  cognito: CognitoIdentityProviderClient,
+  userPoolId: string,
+): Promise<CreateMemberResult> {
+  const name = [input.firstName, input.lastName].filter(Boolean).join(' ');
   const initialPassword = generateInitialPassword();
 
   let uid: string;
   try {
     const createRes = await cognito.send(new AdminCreateUserCommand({
       UserPoolId: userPoolId,
-      Username: email,
+      Username: input.email,
       TemporaryPassword: initialPassword,
-      MessageAction: 'SUPPRESS', // custom welcome email sent below instead of Cognito's default
+      MessageAction: 'SUPPRESS', // custom welcome email sent by the caller instead of Cognito's default
       UserAttributes: [
-        { Name: 'email', Value: email },
+        { Name: 'email', Value: input.email },
         { Name: 'email_verified', Value: 'true' },
         { Name: 'name', Value: name },
       ],
@@ -87,67 +304,62 @@ export async function handler(
     if (!subAttr?.Value) throw new Error('Cognito did not return a sub for the new user');
     uid = subAttr.Value;
   } catch (err: any) {
-    if (err?.name === 'UsernameExistsException') return json(409, { error: 'email_already_exists' });
+    if (err?.name === 'UsernameExistsException') return { error: 'email_already_exists', status: 409 };
     console.error('[adminCreateUser] Cognito error', err);
-    return json(500, { error: 'cognito_create_failed' });
+    return { error: 'cognito_create_failed', status: 500 };
   }
 
   const profileItem: Record<string, unknown> = {
     PK: `MEMBER#${uid}`,
     SK: 'PROFILE',
-    GSI3PK: `EMAIL#${email}`,
+    GSI3PK: `EMAIL#${input.email}`,
     GSI3SK: `MEMBER#${uid}`,
     identity: {
       name,
-      first_name: firstName,
-      last_name: lastName,
-      email,
-      phone,
-      role: 'member',
-      accountType,
-      ...(typeof body.birthday === 'string' ? { birthday: body.birthday } : {}),
-      ...(typeof body.age === 'number' ? { age: body.age } : {}),
+      first_name: input.firstName,
+      last_name: input.lastName,
+      email: input.email,
+      phone: input.phone,
+      role: input.role,
+      accountType: input.accountType,
+      brand: input.brand,
+      ...(input.groupId ? { groupId: input.groupId } : {}),
+      ...(input.role === 'coach' ? {
+        groupIds: input.groupIds ?? [],
+        coachPermissions: input.coachPermissions ?? DEFAULT_COACH_PERMISSIONS,
+      } : {}),
+      ...(input.birthday ? { birthday: input.birthday } : {}),
+      ...(input.age != null ? { age: input.age } : {}),
     },
     admin: {
-      require_health_form: body.requireHealthForm === true,
-      require_registration_form: body.requireRegistrationForm === true,
+      require_health_form: input.requireHealthForm,
+      require_registration_form: input.requireRegistrationForm,
+      require_parental_authorization: input.requireParentalAuthorization,
+      require_orthopedic_form: input.requireOrthopedicForm,
     },
     createdAt: new Date().toISOString(),
     createdBy: callerUid,
   };
-  if (typeof body.membershipId === 'string' && body.membershipId) {
-    profileItem.pending_membership = { type: body.membershipId };
+  if (input.membershipId) {
+    profileItem.pending_membership = { type: input.membershipId };
   }
 
   try {
-    await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: profileItem }));
+    await ddb.send(new PutCommand({ TableName: tableForBrand(input.brand), Item: profileItem }));
   } catch (err: any) {
     // Roll back the Cognito user if the profile write fails, so Cognito and
     // DynamoDB never end up out of sync (same rationale as the old Firebase
     // useCreateMember.ts's rollback-on-failure behavior).
     console.error('[adminCreateUser] DynamoDB write failed, rolling back Cognito user', err);
     try {
-      const { AdminDeleteUserCommand } = await import('@aws-sdk/client-cognito-identity-provider');
-      await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: email }));
+      await cognito.send(new AdminDeleteUserCommand({ UserPoolId: userPoolId, Username: input.email }));
     } catch (rollbackErr) {
-      console.error('[adminCreateUser] rollback also failed — manual cleanup needed for', email, rollbackErr);
+      console.error('[adminCreateUser] rollback also failed — manual cleanup needed for', input.email, rollbackErr);
     }
-    return json(500, { error: 'profile_write_failed' });
+    return { error: 'profile_write_failed', status: 500 };
   }
 
-  await sendWelcomeEmail(email, name, initialPassword).catch((err) => {
-    // Non-fatal — the account exists and works even if the email fails.
-    console.error('[adminCreateUser] welcome email failed', err);
-  });
-
-  // Symmetric with adminUpdatePendingMembership.ts's own bridge call — almost
-  // always a no-op here since a brand-new member has no prior saved token,
-  // but keeps both pending_membership write sites consistent.
-  if (profileItem.pending_membership) {
-    await bridgeTokenToBillingAgreement(uid);
-  }
-
-  return json(200, { success: true, uid });
+  return { uid, initialPassword, pendingMembership: !!input.membershipId };
 }
 
 function generateInitialPassword(): string {

@@ -1,0 +1,184 @@
+import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { randomUUID } from 'crypto';
+import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
+import { getUid, json } from '../lib/http';
+import { getMemberFirstLastName, getMemberFullName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
+import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
+import { verifyFamilyLink } from '../lib/familyLinks';
+import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProductItem } from '../lib/entities';
+
+// POST /createMerchPaymentPage
+// Auth: Cognito JWT (any signed-in FORCA member)
+// Body: { items: { merchProductId: string, merchVariantId: string, quantity: number }[], childUid?: string }
+// Response: { paymentUrl: string, orderId: string }
+//
+// One or more line items — "Buy Now" sends a single-entry list (quantity 1),
+// a cart checkout sends the whole cart; both are the same order shape (see
+// entities.ts's MerchOrderItem) and the same endpoint, not two code paths.
+//
+// childUid (FORCA Child Switcher): a parent shopping on behalf of a linked
+// daughter, from her own session — no ActiveProfileContext.switchToChild.
+// Family-link authorized (verifyFamilyLink), same as getChildProfile.ts and
+// friends. The order still belongs to the child (GSI1PK/userId resolve off
+// her profile, so it shows up correctly in her own Purchase History), but
+// the actual HYP charge (ClientName/ClientLName/email/cell/UserId) is always
+// billed to the PARENT's own profile — payment must go through her account,
+// never the child's — and the order record + HYP Info text both carry an
+// explicit childUid/childName so it's clear who the purchase was for. Omit
+// childUid for a normal self-checkout, same as before this existed.
+//
+// Deliberately separate from createHypPaymentPage.ts/buildOrderFromProduct
+// (which is wired to ProductItem's subscription/installment/mid-month
+// shape, none of which applies here) — see entities.ts's MerchOrderItem
+// comment for the full reasoning. Reuses the same underlying HYP
+// account/client (createHypSignedPaymentUrl) since both brands share one
+// HYP merchant account; only the order bookkeeping is kept separate.
+export async function handler(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+): Promise<APIGatewayProxyStructuredResultV2> {
+  const callerUid = getUid(event);
+
+  let body: { items?: unknown; childUid?: unknown };
+  try {
+    body = JSON.parse(event.body ?? '{}');
+  } catch {
+    return json(400, { error: 'invalid_json' });
+  }
+
+  const childUid = typeof body.childUid === 'string' ? body.childUid.trim() : '';
+  if (childUid) {
+    const link = await verifyFamilyLink(callerUid, childUid);
+    if (!link.ok) return json(403, { error: 'forbidden' });
+  }
+  const uid = childUid || callerUid;
+
+  const rawItems = Array.isArray(body.items) ? body.items : [];
+  const requested = rawItems
+    .map((r) => {
+      const o = r && typeof r === 'object' ? r as Record<string, unknown> : {};
+      return {
+        merchProductId: typeof o.merchProductId === 'string' ? o.merchProductId.trim() : '',
+        merchVariantId: typeof o.merchVariantId === 'string' ? o.merchVariantId.trim() : '',
+        quantity: typeof o.quantity === 'number' && o.quantity > 0 ? Math.trunc(o.quantity) : 0,
+      };
+    })
+    .filter((r) => r.merchProductId && r.merchVariantId && r.quantity > 0);
+  if (requested.length === 0) return json(400, { error: 'missing_items' });
+
+  const memberRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' } }));
+  const member = memberRes.Item as MemberProfileItem | undefined;
+  if (!member) return json(404, { error: 'member_not_found' });
+
+  // Payment must always be executed through the PARENT's own account — never
+  // the child's, even though the order/catalog-facing identity (uid/member
+  // above) stays hers so it keeps showing in her own purchase history. When
+  // childUid is set, callerUid (already family-link-verified above) IS the
+  // parent, so her profile is the one HYP should bill and receipt.
+  let payer: MemberProfileItem | undefined;
+  if (childUid) {
+    const payerRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${callerUid}`, SK: 'PROFILE' } }));
+    payer = payerRes.Item as MemberProfileItem | undefined;
+    if (!payer) return json(404, { error: 'payer_not_found' });
+  }
+
+  // Distinct products only — dedupe before the lookup round-trip below (a
+  // cart can have multiple lines for different variants of the same product).
+  const productIds = Array.from(new Set(requested.map((r) => r.merchProductId)));
+  const productResults = await Promise.all(productIds.map((id) =>
+    ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MERCHPRODUCT#${id}`, SK: 'METADATA' } })),
+  ));
+  const productsById = new Map<string, MerchProductItem>();
+  productResults.forEach((res, i) => {
+    if (res.Item) productsById.set(productIds[i], res.Item as MerchProductItem);
+  });
+
+  const lineItems: MerchOrderLineItem[] = [];
+  for (const r of requested) {
+    const product = productsById.get(r.merchProductId);
+    if (!product) return json(404, { error: 'product_not_found' });
+    if (!product.active) return json(400, { error: 'product_inactive' });
+    const variant = product.variants.find((v) => v.id === r.merchVariantId);
+    if (!variant) return json(404, { error: 'variant_not_found' });
+    if (variant.stock < r.quantity) return json(400, { error: 'out_of_stock' });
+    if (!(product.price >= 0)) return json(400, { error: 'invalid_price' });
+
+    lineItems.push({
+      merchProductId: product.PK.replace('MERCHPRODUCT#', ''),
+      merchProductName: product.name,
+      merchVariantId: variant.id,
+      merchVariantLabel: variant.label,
+      quantity: r.quantity,
+      unitPrice: product.price,
+    });
+  }
+
+  const totalAmount = lineItems.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0);
+  if (totalAmount <= 0) return json(400, { error: 'invalid_price' });
+
+  // clientName/clientLName/email/cell/userId are the identity HYP actually
+  // bills and receipts — the payer (parent) when childUid is set, otherwise
+  // the checking-out member herself, unchanged from before.
+  const billedMember = payer ?? member;
+  const { firstName: clientFirstName, lastName: clientLastName } = getMemberFirstLastName(billedMember);
+  const email = billedMember.identity?.email || billedMember.email || '';
+  const cell = billedMember.identity?.phone || billedMember.phone || '';
+  const childName = childUid ? getMemberFullName(member) : undefined;
+
+  const orderId = `merch-${randomUUID()}`;
+  const nowIso = new Date().toISOString();
+  const order: MerchOrderItem = {
+    PK: `MERCHORDER#${orderId}`,
+    SK: 'METADATA',
+    GSI1PK: `MEMBER#${uid}`,
+    GSI1SK: `MERCHORDER#${nowIso}#${orderId}`,
+    GSI2PK: 'MERCHORDER',
+    GSI2SK: `${nowIso}#${orderId}`,
+    orderId,
+    userId: uid,
+    status: 'pending',
+    items: lineItems,
+    amount: totalAmount,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    ...(childUid ? {
+      childUid,
+      childName,
+      payerUid: callerUid,
+      payerName: getMemberFullName(payer!),
+    } : {}),
+  };
+  await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: order }));
+
+  const infoLine = lineItems.map((item) => `${item.merchProductName} (${item.merchVariantLabel})${item.quantity > 1 ? ` x${item.quantity}` : ''}`).join(', ');
+
+  try {
+    const paymentUrl = await createHypSignedPaymentUrl({
+      order: orderId,
+      amount: totalAmount,
+      tash: 1,
+      clientName: clientFirstName,
+      clientLName: clientLastName || undefined,
+      email: email || undefined,
+      cell: cell || undefined,
+      userId: getMemberIdNumber(billedMember) || HYP_NO_ID_PLACEHOLDER,
+      info: childName ? buildHypInfo(infoLine, `שם הילדה: ${childName}`) : buildHypInfo(infoLine),
+      pageLang: 'HEB',
+      sendReceipt: true,
+    });
+    return json(200, { paymentUrl, orderId, amountCharged: totalAmount });
+  } catch (err: any) {
+    console.error('[createMerchPaymentPage] HYP SIGN call failed:', err);
+    await ddb.send(new UpdateCommand({
+      TableName: FORCA_TABLE_NAME,
+      Key: { PK: `MERCHORDER#${orderId}`, SK: 'METADATA' },
+      UpdateExpression: 'SET #status = :failed, updatedAt = :now',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':failed': 'failed', ':now': new Date().toISOString() },
+    }));
+    if (err instanceof HypSignError) {
+      return json(502, { error: 'hyp_sign_failed', ccode: err.ccode, hypFields: err.fields });
+    }
+    return json(502, { error: 'hyp_sign_failed' });
+  }
+}

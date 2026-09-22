@@ -103,11 +103,14 @@ export async function handler(
 
   const registered = registrations.map((r) => {
     if (r.consumedFrom === 'TRIAL') {
-      return { id: r.userId, name: r.fullName || 'Trial Trainee', subtitle: '', membershipStatus: 'active' as const, isTrial: true };
+      // No MemberProfileItem to resolve a brand from — trials are an
+      // INCORE-only concept for now, default to 'incore' so every
+      // downstream brand filter can use a single uniform predicate.
+      return { id: r.userId, name: r.fullName || 'Trial Trainee', subtitle: '', membershipStatus: 'active' as const, isTrial: true, brand: 'incore' as const };
     }
     const p = profileById.get(r.userId);
     const membership = membershipByRegKey.get(`${r.userId}#${r.membershipId}`);
-    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p, membership), membershipStatus: deriveStatus(p), isTrial: false };
+    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p, membership), membershipStatus: deriveStatus(p), isTrial: false, brand: p?.identity?.brand ?? 'incore' };
   });
 
   const waitlistOut = waitlist.map((w) => {
@@ -120,6 +123,7 @@ export async function handler(
       since: w.since,
       status: w.status,
       pendingSince: w.pendingSince ?? null,
+      brand: p?.identity?.brand ?? 'incore',
     };
   });
 
