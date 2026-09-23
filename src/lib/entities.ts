@@ -748,6 +748,22 @@ export interface TestAttemptItem {
 // per_member/custom "mode" the way a whole training type has, but a real
 // quantity nonetheless.
 
+// PK=WORKOUTPACKAGE#<id> SK=METADATA — FORCA's admin-managed list of
+// standardized package (מארז) labels offered in the Workout Plan Builder's
+// Package dropdown (WorkoutPlanItem.package below just stores whichever
+// label string was picked — this catalog is what makes the *offered set*
+// admin-editable instead of the old hardcoded PACKAGE_OPTIONS constant).
+// Deleting a package type here does not touch any plan that already used
+// its label — WorkoutPlanItem.package is a denormalized string, same
+// "delete the catalog entry, historical records keep their own copy"
+// convention as ExerciseDefinitionItem/EquipmentItem. FORCA-only.
+export interface WorkoutPackageTypeItem {
+  PK: string; SK: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+}
+
 // PK=WORKOUTPLAN#<id>  SK=METADATA
 export interface WorkoutPlanItem {
   PK: string; SK: string;
