@@ -188,6 +188,10 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     policiesAcceptedAt: forms.policiesAcceptedAt ?? null,
     parentalConsent,
     photoConsent,
+    healthConnections: {
+      appleHealth: { connected: profile.healthConnections?.appleHealth?.connected === true, connectedAt: profile.healthConnections?.appleHealth?.connectedAt ?? null },
+      healthConnect: { connected: profile.healthConnections?.healthConnect?.connected === true, connectedAt: profile.healthConnections?.healthConnect?.connectedAt ?? null },
+    },
     parentalAuthorization: forms.parental_authorization?.submitted_at
       ? {
           submittedAt: forms.parental_authorization.submitted_at,

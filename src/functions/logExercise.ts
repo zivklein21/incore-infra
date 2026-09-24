@@ -47,7 +47,9 @@ export async function handler(
     (exercise.measurementType === 'time' && value.timeSeconds != null) ||
     (exercise.measurementType === 'band_level' && !!value.bandLevel) ||
     (exercise.measurementType === 'bodyweight_reps' && value.reps != null) ||
-    (exercise.measurementType === 'reps_band_level' && value.reps != null && !!value.bandLevel);
+    (exercise.measurementType === 'reps_band_level' && value.reps != null && !!value.bandLevel) ||
+    (exercise.measurementType === 'weight' && value.weight != null) ||
+    (exercise.measurementType === 'weight_time' && value.weight != null && value.timeSeconds != null);
   if (!hasRequiredField) return json(400, { error: 'missing_value' });
 
   const id = randomUUID();

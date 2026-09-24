@@ -4,6 +4,7 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess } from '../lib/coachAccess';
+import { backfillRunningSessions } from '../lib/runningSessionBackfill';
 import {
   MANDATORY_CLOSING_SECTION_GUIDELINES,
   MANDATORY_CLOSING_SECTION_LABEL,
@@ -17,7 +18,8 @@ const TEXT_FIELDS = ['workoutNumber', 'workoutType', 'package', 'workingMethod',
 // POST /adminSaveWorkoutPlan
 // Body: { id?: string, name: string, active?: boolean, workoutNumber?: string,
 //         workoutType?: string, package?: string, workingMethod?: string,
-//         workoutGoal?: string, timingStructure?: string } — omit id to create
+//         workoutGoal?: string, timingStructure?: string, category?: 'running' }
+//         — omit id to create
 // Auth: Cognito JWT, admin or a coach with workoutPlans:'write' — building
 // plans is the same permission tier as assigning an already-published one
 // to a session (see assignSessionWorkoutPlan.ts).
@@ -72,6 +74,7 @@ export async function handler(
     const value = body[field];
     if (typeof value === 'string' && value.trim()) item[field] = value.trim();
   }
+  if (body.category === 'running') item.category = 'running';
 
   const writes: Promise<unknown>[] = [
     ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: item })),
@@ -94,6 +97,7 @@ export async function handler(
   }
 
   await Promise.all(writes);
+  await backfillRunningSessions({ workoutPlanId: id });
 
   return json(200, { success: true, id });
 }

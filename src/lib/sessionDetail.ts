@@ -3,10 +3,11 @@
 // can reuse the exact same computation instead of duplicating it. See
 // getCoachSessions.ts for the full behavioral write-up.
 
-import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { CoachAccess } from './coachAccess';
 import { resolveWorkoutPlanEquipmentQuantitiesBatch } from './workoutPlanEquipment';
+import { getAllMemberProfiles } from './memberScan';
 import {
   deriveMemberName,
   type ClassItem,
@@ -23,16 +24,25 @@ export interface SessionLookups {
   equipmentById: Map<string, { name: string; availableQuantity: number }>;
   /** Each referenced Workout Plan's own required equipment quantities — see resolveWorkoutPlanEquipmentQuantities(). */
   planEquipmentByPlanId: Map<string, Map<string, number>>;
+  /** Every FORCA member's profile, keyed by uid — see fetchSessionLookups()'s comment on why this is one Scan, not a GetCommand per roster entry. */
+  profileById: Map<string, MemberProfileItem>;
 }
 
 /**
- * Fetches the shared Training Type / Group / Equipment lookup tables needed
- * to resolve any set of sessions — equipment is only scanned when at least
- * one of the given sessions actually references a training type with
- * equipment requirements, since most callers' session sets are untyped.
+ * Fetches the shared Training Type / Group / Equipment / Member-Profile
+ * lookup tables needed to resolve any set of sessions — equipment is only
+ * scanned when at least one of the given sessions actually references a
+ * training type with equipment requirements, since most callers' session
+ * sets are untyped. Profiles are scanned unconditionally (one Scan of
+ * ≤50 FORCA members, same accepted tradeoff getAllMemberProfiles() already
+ * documents) and shared by every session's roster resolution below —
+ * previously each session did its own GetCommand per registered member,
+ * which duplicated work for any trainee appearing in more than one session
+ * and was a real contributor to getCoachSessions.ts's timeout on top of the
+ * Scan-vs-Query fix there.
  */
 export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<SessionLookups> {
-  const [trainingTypesRes, groupsRes] = await Promise.all([
+  const [trainingTypesRes, groupsRes, profiles] = await Promise.all([
     ddb.send(new ScanCommand({
       TableName: FORCA_TABLE_NAME,
       FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
@@ -43,6 +53,7 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
       FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
       ExpressionAttributeValues: { ':prefix': 'GROUP#', ':metadata': 'METADATA' },
     })),
+    getAllMemberProfiles(FORCA_TABLE_NAME),
   ]);
   const trainingTypesById = new Map(
     ((trainingTypesRes.Items ?? []) as TrainingTypeItem[]).map((t) => [t.PK.replace('TRAININGTYPE#', ''), t]),
@@ -50,6 +61,7 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
   const groupNameById = new Map(
     ((groupsRes.Items ?? []) as GroupItem[]).map((g) => [g.PK.replace('GROUP#', ''), g.name ?? '']),
   );
+  const profileById = new Map(profiles.map((p) => [p.PK.replace('MEMBER#', ''), p]));
 
   const planIdsNeeded = [...new Set(sessionItems.map((s) => s.workoutPlanId).filter((id): id is string => !!id))];
   const planEquipmentByPlanId = await resolveWorkoutPlanEquipmentQuantitiesBatch(planIdsNeeded);
@@ -75,7 +87,7 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
     }
   }
 
-  return { trainingTypesById, groupNameById, equipmentById, planEquipmentByPlanId };
+  return { trainingTypesById, groupNameById, equipmentById, planEquipmentByPlanId, profileById };
 }
 
 export interface RosterEntryDetail {
@@ -124,12 +136,8 @@ export async function resolveSessionDetail(
   }));
   const registrations = (regsRes.Items ?? []) as RegistrationItem[];
 
-  const profiles = await Promise.all(registrations.map((r) =>
-    ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${r.userId}`, SK: 'PROFILE' } })),
-  ));
-
-  const roster: RosterEntryDetail[] = registrations.map((r, i) => {
-    const profile = profiles[i].Item as MemberProfileItem | undefined;
+  const roster: RosterEntryDetail[] = registrations.map((r) => {
+    const profile = lookups.profileById.get(r.userId);
     const healthAnswers = profile?.forms?.health_declaration?.answers ?? {};
     return {
       memberId: r.userId,

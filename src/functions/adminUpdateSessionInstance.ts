@@ -64,9 +64,11 @@ export async function handler(
     values[':coachName'] = typeof body.coachName === 'string' ? body.coachName : '';
   }
   if (body.location === null) {
-    removes.push('location');
+    removes.push('#loc');
+    names['#loc'] = 'location';
   } else if (typeof body.location === 'string' && body.location) {
-    sets.push('location = :location');
+    sets.push('#loc = :location');
+    names['#loc'] = 'location';
     values[':location'] = body.location;
   }
 

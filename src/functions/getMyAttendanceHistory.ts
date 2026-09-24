@@ -46,6 +46,7 @@ export async function handler(
         declineReason: r.declineReason || null,
         actualAttendance: r.actualAttendance ?? null,
         workoutPlanId: session.workoutPlanId ?? null,
+        isRunningSession: session.isRunningSession ?? false,
       };
     })
     .filter((s): s is NonNullable<typeof s> => s !== null);

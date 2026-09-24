@@ -4,6 +4,7 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { backfillRunningSessions } from '../lib/runningSessionBackfill';
 import type { TrainingTypeEquipmentRequirement, TrainingTypeItem } from '../lib/entities';
 
 function parseEquipmentRequirements(raw: unknown): TrainingTypeEquipmentRequirement[] | undefined {
@@ -22,7 +23,8 @@ function parseEquipmentRequirements(raw: unknown): TrainingTypeEquipmentRequirem
 
 // POST /adminSaveTrainingType
 // Body: { id?: string, name: string, durationMinutes?: number,
-//         equipmentRequirements?: { equipmentId, mode: 'custom'|'per_member', customQuantity? }[] }
+//         equipmentRequirements?: { equipmentId, mode: 'custom'|'per_member', customQuantity? }[],
+//         category?: 'running' }
 // Omit id to create, pass it to rename/update.
 // Auth: Cognito JWT, caller must be admin
 // FORCA-only — see adminSaveClassType.ts for the INCORE equivalent.
@@ -32,7 +34,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { id?: unknown; name?: unknown; durationMinutes?: unknown; equipmentRequirements?: unknown };
+  let body: { id?: unknown; name?: unknown; durationMinutes?: unknown; equipmentRequirements?: unknown; category?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -44,6 +46,7 @@ export async function handler(
   const existingId = typeof body.id === 'string' && body.id ? body.id : null;
   const id = existingId ?? randomUUID();
   const equipmentRequirements = parseEquipmentRequirements(body.equipmentRequirements);
+  const category = body.category === 'running' ? 'running' as const : undefined;
 
   // A PutCommand replaces the whole item, so a rename has to carry the
   // original createdAt/createdBy forward explicitly rather than omitting
@@ -65,11 +68,13 @@ export async function handler(
     name,
     ...(typeof body.durationMinutes === 'number' ? { durationMinutes: body.durationMinutes } : {}),
     ...(equipmentRequirements ? { equipmentRequirements } : {}),
+    ...(category ? { category } : {}),
     createdAt,
     createdBy,
   };
 
   await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: item }));
+  await backfillRunningSessions({ trainingTypeId: id });
 
   return json(200, { success: true, id, name });
 }

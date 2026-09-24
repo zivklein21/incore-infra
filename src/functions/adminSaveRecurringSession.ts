@@ -79,12 +79,17 @@ export async function handler(
   if (!trainingType) return json(404, { error: 'training_type_not_found' });
 
   let workoutPlanName: string | undefined;
+  let workoutPlanIsRunning = false;
   if (workoutPlanId) {
     const planRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${workoutPlanId}`, SK: 'METADATA' } }));
     const plan = planRes.Item as WorkoutPlanItem | undefined;
     if (!plan) return json(404, { error: 'workout_plan_not_found' });
     workoutPlanName = plan.name;
+    workoutPlanIsRunning = plan.category === 'running';
   }
+  // isRunningSession is the OR of the TrainingType's own category and the
+  // assigned plan's — see entities.ts's WorkoutPlanItem.category comment.
+  const isRunningSession = trainingType.category === 'running' || workoutPlanIsRunning;
   let testGroupName: string | undefined;
   if (testGroupId) {
     const testGroupRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `TESTGROUP#${testGroupId}`, SK: 'METADATA' } }));
@@ -173,6 +178,8 @@ export async function handler(
       const setClauses = ['className = :className', 'trainingTypeId = :ttid'];
       const removeClauses: string[] = [];
       const values: Record<string, unknown> = { ':className': trainingType.name, ':ttid': trainingTypeId };
+      if (isRunningSession) { setClauses.push('isRunningSession = :isRunning'); values[':isRunning'] = true; }
+      else { removeClauses.push('isRunningSession'); }
       if (location) { setClauses.push('#loc = :loc'); values[':loc'] = location; } else { removeClauses.push('#loc'); }
       if (coachId) { setClauses.push('coachId = :coachId', 'coachName = :coachName'); values[':coachId'] = coachId; values[':coachName'] = coachName; }
       else { removeClauses.push('coachId', 'coachName'); }

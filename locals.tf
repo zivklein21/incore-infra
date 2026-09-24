@@ -208,9 +208,11 @@ locals {
     getProducts                             = { method = "ANY" }
     getProfile                              = { method = "ANY" }
     getRegistrationFormConfig               = { method = "ANY" }
+    getRunningReport                        = { method = "GET" } # FORCA running-session post-workout report: trainee's own RPE/pace for one session
     getSessionPostWorkoutReport             = { method = "GET" } # FORCA Coach feature: staff-only post-workout performance report, tailored to the session's assigned Workout Plan
     getSessionWorkoutPlan                   = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                      = { method = "ANY" }
+    getSyncedWorkouts                       = { method = "GET" } # Smartwatch & Health Apps Integration: member's own recently synced workouts, cross-brand
     getTermsOfServiceContent                = { method = "ANY" }
     getTrainingHistory                      = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                        = { method = "GET" } # FORCA Coach feature
@@ -232,8 +234,10 @@ locals {
     saveChildMedicalClearance               = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     saveClassSeries                         = { method = "POST" }
     saveMedicalClearance                    = { method = "POST" } # FORCA Profile feature: upload/replace a medical clearance certificate
+    saveRunningReport                       = { method = "POST" } # FORCA running-session post-workout report: trainee's own RPE/pace for one session
     saveScheduleAlertSettings               = { method = "POST" }
     saveSupportSettings                     = { method = "POST" }
+    saveSyncedWorkouts                      = { method = "POST" } # Smartwatch & Health Apps Integration: write side of a device workout sync, cross-brand
     sendCoachNotification                   = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendForcaSupportMessage                 = { method = "POST" } # FORCA Chat feature
     sendSupportMessage                      = { method = "POST" }
@@ -250,6 +254,7 @@ locals {
     triggerTemplateAlert                    = { method = "POST" }
     updateClass                             = { method = "POST" }
     updateCoachOwnProfile                   = { method = "POST" } # FORCA Coach feature: self-service name/phone edit, coach-only
+    updateHealthConnection                  = { method = "POST" } # Smartwatch & Health Apps Integration: connect/disconnect a health data source, cross-brand
     updateProfile                           = { method = "POST" }
     updateProfilePhoto                      = { method = "POST" }
     updatePhotoConsent                      = { method = "POST" }

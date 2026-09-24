@@ -22,6 +22,7 @@ export async function handler(
       name: t.name ?? '',
       durationMinutes: t.durationMinutes ?? null,
       equipmentRequirements: t.equipmentRequirements ?? [],
+      category: t.category ?? null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 

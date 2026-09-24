@@ -206,7 +206,16 @@ resource "aws_lambda_function" "fn" {
   handler          = "${each.key}.handler"
   runtime          = "nodejs20.x"
   timeout          = contains(keys(local.scheduled_functions), each.key) ? 300 : 30
-  memory_size      = contains(["resizeProfilePhoto", "adminBackfillResizeProfilePhotos"], each.key) ? 512 : 128
+  # AWS ties a Lambda's CPU share to its memory size, not just its RAM
+  # ceiling — 128MB (the default below) gets a small fraction of a vCPU.
+  # getCoachSessions/getTrainingHistory fan out many parallel DynamoDB
+  # calls (per-day GSI queries, per-session roster resolution) even after
+  # cutting their call COUNT down; confirmed via CloudWatch that real
+  # invocations were taking 2.7-11s on 128MB, well past the client's 6s
+  # timeout, purely from being CPU-starved scheduling that many concurrent
+  # awaits — not from DynamoDB's own per-call latency. 512MB matches the
+  # existing resizeProfilePhoto precedent below.
+  memory_size      = contains(["resizeProfilePhoto", "adminBackfillResizeProfilePhotos", "getCoachSessions", "getTrainingHistory"], each.key) ? 512 : 128
   layers           = [aws_lambda_layer_version.dependencies.arn]
 
   environment {

@@ -6,7 +6,7 @@ import { getUid, json } from '../lib/http';
 import { getCoachAccess } from '../lib/coachAccess';
 import type { ExerciseDefinitionItem, ExerciseEquipmentRequirement, ExerciseMeasurementType } from '../lib/entities';
 
-const MEASUREMENT_TYPES: ExerciseMeasurementType[] = ['weight_reps', 'reps_only', 'time', 'band_level', 'bodyweight_reps', 'reps_band_level'];
+const MEASUREMENT_TYPES: ExerciseMeasurementType[] = ['weight_reps', 'reps_only', 'time', 'band_level', 'bodyweight_reps', 'reps_band_level', 'weight', 'weight_time'];
 const BAND_LEVEL_TYPES: ExerciseMeasurementType[] = ['band_level', 'reps_band_level'];
 
 interface EquipmentInput { equipmentId?: unknown; quantity?: unknown }

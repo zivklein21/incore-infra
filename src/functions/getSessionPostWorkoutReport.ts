@@ -4,6 +4,7 @@ import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
 import { fetchSessionLookups, resolveSessionDetail } from '../lib/sessionDetail';
 import { resolveSessionReportContext } from '../lib/sessionWorkoutReport';
 import { resolveSessionWorkoutLogStatus } from '../lib/sessionWorkoutLogStatus';
+import { resolveRunningReportStatus } from '../lib/runningReportStatus';
 import type { ClassItem } from '../lib/entities';
 
 // GET or POST /getSessionPostWorkoutReport
@@ -15,13 +16,15 @@ import type { ClassItem } from '../lib/entities';
 //
 // Single fetch backing PostWorkoutReportScreen.tsx's whole dynamic
 // type-branch: returns which flavor of report this session needs
-// (isTestSession/testGroupId → grading matrix via TestSessionGradingPanel;
-// workoutPlanId → measurable-exercise roster checklist via
-// workoutLogStatus/WorkoutLogGradingPanel, pre-filtered to ONLY the plan's
-// מדידים blocks — non-measurable warm-up/cooldown content never appears
-// here; neither → a "not assigned" note). There is no separate session-level
-// report record any more — logging a station or a test attempt saves and
-// stamps itself immediately (see logSessionExercise.ts / adminRecordTestAttempt.ts),
+// (isRunningSession → read-only RPE/pace roster via runningReports/
+// RunningReportPanel; isTestSession/testGroupId → grading matrix via
+// TestSessionGradingPanel; workoutPlanId → measurable-exercise roster
+// checklist via workoutLogStatus/WorkoutLogGradingPanel, pre-filtered to
+// ONLY the plan's מדידים blocks — non-measurable warm-up/cooldown content
+// never appears here; none of the above → a "not assigned" note). There is
+// no separate session-level report record any more — logging a station, a
+// test attempt, or a running report saves and stamps itself immediately
+// (see logSessionExercise.ts / adminRecordTestAttempt.ts / saveRunningReport.ts),
 // so this endpoint is a pure read/resolver, nothing to submit back.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -50,9 +53,13 @@ export async function handler(
   const detail = await resolveSessionDetail(classItem, lookups, access);
 
   const presentMemberIds = detail.roster.filter((r) => r.actualAttendance === 'present').map((r) => r.memberId);
+  const isRunningSession = session.isRunningSession ?? false;
   const workoutLogStatus = (detail.workoutPlanId && !detail.isTestSession && presentMemberIds.length > 0)
     ? await resolveSessionWorkoutLogStatus(classId, detail.workoutPlanId, presentMemberIds)
     : { sections: [], loggedByMember: {} };
+  const runningReports = (isRunningSession && presentMemberIds.length > 0)
+    ? await resolveRunningReportStatus(classId, presentMemberIds)
+    : {};
 
   return json(200, {
     classId,
@@ -64,6 +71,7 @@ export async function handler(
     testGroupId: detail.testGroupId,
     testGroupName: detail.testGroupName,
     testComponentIds: detail.testComponentIds,
+    isRunningSession,
     // Unfiltered (present + absent + unmarked) — TestSessionGradingPanel
     // grades against the full roster, same as its existing
     // ForcaSessionDetailPanel usage; WorkoutLogGradingPanel filters this down
@@ -71,5 +79,6 @@ export async function handler(
     // anything to log).
     roster: detail.roster.map((r) => ({ memberId: r.memberId, name: r.name, actualAttendance: r.actualAttendance })),
     workoutLogStatus,
+    runningReports,
   });
 }

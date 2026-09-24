@@ -74,6 +74,13 @@ export interface ClassItem {
   testGroupId?: string;
   testGroupName?: string;
   testComponentIds?: string[];
+  // Denormalized from the linked TrainingTypeItem's category at creation
+  // time (see lib/sessionInstance.ts) — same "derived, stored explicitly"
+  // rationale as isTestSession above, so PostWorkoutReportScreen.tsx /
+  // AttendanceTab.tsx can branch on it without a lookup. Drives the
+  // dedicated running post-workout report (RPE + average pace per segment)
+  // instead of the regular Workout Plan measurable-station log.
+  isRunningSession?: boolean;
   // Set once the assigned coach (or admin) marks the session done — see
   // closeSession.ts. Requires every roster entry to have actualAttendance
   // recorded and equipmentTaken to be empty (everything returned) first.
@@ -279,6 +286,12 @@ export interface TrainingTypeItem {
   name: string;
   durationMinutes?: number;
   equipmentRequirements?: TrainingTypeEquipmentRequirement[];
+  // Optional tag, not a general taxonomy — today the only value is
+  // 'running', which marks every session created from this type as a
+  // running session (see lib/sessionInstance.ts's isRunningSession stamp)
+  // and switches its post-workout flow to the dedicated RPE + average-pace
+  // report instead of the regular Workout Plan log.
+  category?: 'running';
   createdAt: string;
   createdBy: string;
 }
@@ -527,7 +540,7 @@ export interface ForcaBillingAgreementItem {
 // FORCA-only, lives in the FORCA table exclusively. See adminSaveExercise.ts /
 // adminSaveTestDefinition.ts.
 
-export type ExerciseMeasurementType = 'weight_reps' | 'reps_only' | 'time' | 'band_level' | 'bodyweight_reps' | 'reps_band_level';
+export type ExerciseMeasurementType = 'weight_reps' | 'reps_only' | 'time' | 'band_level' | 'bodyweight_reps' | 'reps_band_level' | 'weight' | 'weight_time';
 
 // PK=EXERCISE#<id>  SK=METADATA
 // Admin-defined exercise catalog — mirrors TrainingTypeItem's shape.
@@ -595,6 +608,30 @@ export interface ExerciseLogEntryItem {
   classId?: string;
   workoutPlanId?: string;
   stationId?: string;
+}
+
+// PK=RUNNINGREPORT#<classId>#<uid>  SK=METADATA
+// One trainee's post-workout self-report for one running-type session
+// (isRunningSession on ClassItem) — perceived exertion (1-10) and average
+// pace per segment/split (free text; pace notation varies too much for a
+// numeric field). Deterministic PK, not an append-only history entry like
+// ExerciseLogEntryItem, since there's exactly one summary per trainee per
+// session: a re-save overwrites rather than accumulating duplicates, and
+// lets the coach's roster view (getSessionPostWorkoutReport.ts) fetch every
+// present member's report with a direct GetCommand instead of a GSI1
+// fan-out + filter (see sessionWorkoutLogStatus.ts for that pattern, which
+// this deliberately avoids). GSI1 (MEMBER#<uid>) is still populated so a
+// future "my running progress over time" view can query across sessions,
+// same shape as getMyExerciseHistory.ts does for ExerciseLogEntryItem.
+export interface RunningReportItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  userId: string;
+  classId: string;
+  perceivedExertion: number;
+  averagePace: string;
+  loggedAt: string;
+  createdAt: string;
 }
 
 // A test's raw grading/attempt value is always a plain number underneath —
@@ -774,6 +811,13 @@ export interface WorkoutPlanItem {
   // reads off a schedule, not a value anything computes with).
   workoutNumber?: string;   // מספר אימון
   workoutType?: string;     // סוג אימון — free text, independent of package (e.g. "אימון פונקציונלי")
+  // Structured tag, deliberately separate from the free-text workoutType
+  // field above despite the similar name — mirrors TrainingTypeItem.category.
+  // A plan tagged 'running' turns on the running post-workout report
+  // (isRunningSession) for any session it's assigned to, even one whose own
+  // TrainingType isn't itself tagged running — see lib/sessionInstance.ts /
+  // assignSessionWorkoutPlan.ts, which OR the two sources together.
+  category?: 'running';
   package?: string;         // מארז — standardized options
   workingMethod?: string;   // שיטת עבודה
   workoutGoal?: string;     // מטרת אימון
@@ -1154,6 +1198,20 @@ export interface MemberProfileItem {
       signaturePaths?: string[];
     };
   };
+  // Health/fitness data source connections (INCORE & FORCA Smartwatch &
+  // Health Apps Integration, phase 1: permissions/connect-manage UI shell
+  // only — see updateHealthConnection.ts). `connected` is the one thing the
+  // UI shell reads/writes today; a later phase will wire the "on" side of
+  // each toggle to a real native HealthKit/Health Connect permission prompt
+  // instead of just persisting a boolean. Deliberately no Strava — out of
+  // scope by explicit product decision, not deferred. This is device-local
+  // read-only workout data per Apple/Google's own HealthKit/Health Connect
+  // APIs — `connected` here is just this app's own record of whether the
+  // member granted permission, not a copy of her health data.
+  healthConnections?: {
+    appleHealth?: { connected: boolean; connectedAt?: string };
+    healthConnect?: { connected: boolean; connectedAt?: string };
+  };
   payment?: {
     hypToken?: string;
     hypTokenExpiryMonth?: number;
@@ -1185,6 +1243,32 @@ export interface MemberProfileItem {
   };
   subscriptionStatus?: string;
   subscriptionExpiryAlertSent?: string;
+}
+
+// PK=SYNCEDWORKOUT#<source>#<externalId>  SK=METADATA
+// A running workout read from a connected device-native health source (see
+// MemberProfileItem.healthConnections above) — phase 3 of the Smartwatch &
+// Health Apps Integration epic. externalId is that source's own stable id
+// for the workout (HealthKit's HKWorkout.uuid; Health Connect's own record
+// id once phase 4 lands) — baking it into the PK makes a re-sync of an
+// overlapping date range a plain idempotent overwrite instead of needing
+// separate dedup logic, see saveSyncedWorkouts.ts. Cross-brand (an INCORE
+// or FORCA member can each connect their own device) — lives in whichever
+// table resolveMemberProfile() resolves the caller to, same as every other
+// "I only have a uid" write.
+export interface SyncedWorkoutItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  userId: string;
+  source: 'appleHealth' | 'healthConnect';
+  activityType: string;
+  startDate: string;
+  endDate: string;
+  durationSeconds: number;
+  energyKcal?: number;
+  distanceMeters?: number;
+  averageHeartRate?: number;
+  syncedAt: string;
 }
 
 // Same fallback chain as getProfile.ts's `name` resolution — identity.name,

@@ -8,7 +8,7 @@
 import { randomUUID } from 'crypto';
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
-import { israelDateStr, israelWallTimeToDate, type GroupItem, type MemberProfileItem, type TrainingTypeItem } from './entities';
+import { israelDateStr, israelWallTimeToDate, type GroupItem, type MemberProfileItem, type TrainingTypeItem, type WorkoutPlanItem } from './entities';
 
 export interface CreateSessionInstanceParams {
   groupId: string;
@@ -35,14 +35,22 @@ export type CreateSessionInstanceResult =
   | { ok: false; error: 'group_not_found' | 'training_type_not_found' };
 
 export async function createSessionInstance(params: CreateSessionInstanceParams): Promise<CreateSessionInstanceResult> {
-  const [groupRes, trainingTypeRes] = await Promise.all([
+  const [groupRes, trainingTypeRes, workoutPlanRes] = await Promise.all([
     ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `GROUP#${params.groupId}`, SK: 'METADATA' } })),
     ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `TRAININGTYPE#${params.trainingTypeId}`, SK: 'METADATA' } })),
+    params.workoutPlanId
+      ? ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${params.workoutPlanId}`, SK: 'METADATA' } }))
+      : Promise.resolve(undefined),
   ]);
   const group = groupRes.Item as GroupItem | undefined;
   if (!group) return { ok: false, error: 'group_not_found' };
   const trainingType = trainingTypeRes.Item as TrainingTypeItem | undefined;
   if (!trainingType) return { ok: false, error: 'training_type_not_found' };
+  // Running is the OR of two independent sources — the session's own
+  // TrainingType category, or the Workout Plan carried over from the
+  // template (if any) — see entities.ts's WorkoutPlanItem.category comment.
+  const workoutPlan = workoutPlanRes?.Item as WorkoutPlanItem | undefined;
+  const isRunningSession = trainingType.category === 'running' || workoutPlan?.category === 'running';
 
   // Table documented for <=50 users per brand (dynamodb.tf) — same accepted
   // Scan tradeoff as getAllMemberProfiles()/getClassTypes.ts. identity is a
@@ -94,6 +102,7 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
     allowedMemberIds: memberIds,
     groupId: params.groupId,
     trainingTypeId: params.trainingTypeId,
+    ...(isRunningSession ? { isRunningSession: true } : {}),
     equipmentTaken: [],
     repeat_weekly: params.repeatWeekly === true,
     ...(params.seriesId ? { series_id: params.seriesId } : {}),
@@ -193,6 +202,37 @@ export function occurrencesInMonth(year: number, month1To12: number, dayOfWeek: 
     cursor.setUTCDate(cursor.getUTCDate() + 7);
   }
   return dates;
+}
+
+/**
+ * Every Israel-calendar date string (`YYYY-MM-DD`, matching a ClassItem's
+ * own GSI2PK `CLASSDATE#<date>` — see the item literal above) from
+ * `fromIso` through the day before `toIso` (exclusive), inclusive of
+ * `fromIso`'s own day. Same UTC-midnight-anchored Y/M/D counter as
+ * upcomingOccurrences()/occurrencesInMonth() above — this is pure calendar
+ * arithmetic on the two boundary date strings, not a real-instant walk, so
+ * it's immune to DST drift. Powers getCoachSessions.ts's day-by-day GSI2
+ * fan-out, which replaced an unbounded full-table Scan that kept getting
+ * slower as session history grew (that Scan cost was driven by the WHOLE
+ * table's item count, not just sessions, since a Scan reads every item
+ * before any FilterExpression is applied).
+ */
+export function israelDateStrRange(fromIso: string, toIso: string): string[] {
+  const fromDateStr = israelDateStr(new Date(fromIso));
+  const toDateStr = israelDateStr(new Date(toIso));
+  const [fy, fm, fd] = fromDateStr.split('-').map(Number);
+  const cursor = new Date(Date.UTC(fy, fm - 1, fd));
+
+  const dateStrs: string[] = [];
+  // Safety cap — the callers bound their own windows (≤ a few hundred
+  // days), this just guards against an accidental unbounded range.
+  for (let i = 0; i < 1000; i++) {
+    const dateStr = `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}-${String(cursor.getUTCDate()).padStart(2, '0')}`;
+    if (dateStr >= toDateStr) break;
+    dateStrs.push(dateStr);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dateStrs;
 }
 
 /**
