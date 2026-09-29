@@ -332,6 +332,7 @@ export async function markOrderFailedAndNotifyAdmins(
   await notifyAdminsPaymentFailed({
     userId: order.userId,
     userName: member ? getMemberFullName(member) : 'Unknown Member',
+    brand: 'incore',
     transactionType,
     itemName: order.productName,
     amount: order.amount,

@@ -130,6 +130,7 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
         await notifyAdminsPaymentFailed({
           userId: agreement.userId,
           userName: agreement.payerName || chargeClientName,
+          brand: 'forca',
           transactionType: 'subscription_renewal',
           itemName: agreement.productName,
           amount: agreement.amountPerCharge,
@@ -155,6 +156,7 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
       await notifyAdminsPaymentFailed({
         userId: agreement.userId,
         userName: agreement.payerName || chargeClientName,
+        brand: 'forca',
         transactionType: 'subscription_renewal',
         itemName: agreement.productName,
         amount: agreement.amountPerCharge,

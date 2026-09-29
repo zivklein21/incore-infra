@@ -32,5 +32,24 @@ export async function handler(
   const response = await buildProfileResponse(memberId);
   if (!response) return json(404, { error: 'member_not_found' });
 
+  // A FORCA trainee never pays for herself — her parent manages payments
+  // (see profileResponse.ts's forceShowPaymentButton comment, and
+  // getChildProfile.ts, the parent's own read of her). Her own self-view of
+  // this endpoint must not leak subscription/payment status either, even
+  // though buildProfileResponse() always computes it (it deliberately does
+  // no caller-context filtering itself — see its doc comment). Only
+  // stripped for a FORCA trainee ('member' role) viewing HERSELF; a
+  // parent_only account viewing her own profile has her own real billing to
+  // see, and an admin (viewing anyone, including herself) needs the full
+  // picture.
+  if (memberId === callerUid && response.brand === 'forca' && response.role === 'member') {
+    response.groupPrice = null;
+    response.subscriptionStatus = null;
+    response.subscriptionAmountPerCharge = null;
+    response.subscriptionNextChargeDate = null;
+    response.forceShowPaymentButton = false;
+    response.payment = { hasSavedCard: false, hypTokenExpiryMonth: null, hypTokenExpiryYear: null, hypTokenLast4: null, cardBrand: null };
+  }
+
   return json(200, response);
 }

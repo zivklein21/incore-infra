@@ -62,10 +62,13 @@ export async function handler(
     ExpressionAttributeValues: { ':declaredAttendance': declaredAttendance, ':declineReason': declineReason },
   }));
 
-  // Alerts admins (push + their notification inbox — notifyAdmins() reads
-  // TABLE_NAME/incore, which is correct here even though this endpoint is
-  // FORCA-only: admins aren't brand-scoped, see isAdmin()'s doc comment)
-  // and, separately, pushes directly to the session's assigned coach (no
+  // Alerts admins (push + their notification inbox — notifyAdmins() always
+  // writes to TABLE_NAME/incore even though this endpoint is FORCA-only,
+  // since the admin identity itself isn't brand-scoped, see isAdmin()'s doc
+  // comment — but the notification is tagged brand: 'forca' so it only
+  // shows in the FORCA side of the admin inbox, see
+  // getAdminNotifications.ts's own brand filter) and, separately, pushes
+  // directly to the session's assigned coach (no
   // ROLE#coach fan-out exists, and a broadcast to every coach would be
   // wrong anyway — only the coach actually running this session needs to
   // know). Awaited (not truly fire-and-forget) so Lambda doesn't freeze the
@@ -97,6 +100,7 @@ async function notifyDecline(callerUid: string, classId: string, declineReason: 
   await notifyAdmins({
     type: 'FORCA_ATTENDANCE_DECLINED',
     priority: 'NORMAL',
+    brand: 'forca',
     pushTitle: 'Trainee declined attendance',
     message,
     extra: { memberId: callerUid, classId },

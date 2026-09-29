@@ -154,6 +154,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         await notifyAdminsPaymentFailed({
           userId: agreement.userId,
           userName: chargeClientName,
+          brand: 'incore',
           transactionType,
           itemName: agreement.productName,
           amount: chargeAmount,
@@ -180,6 +181,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
       await notifyAdminsPaymentFailed({
         userId: agreement.userId,
         userName: chargeClientName,
+        brand: 'incore',
         transactionType,
         itemName: agreement.productName,
         amount: chargeAmount,

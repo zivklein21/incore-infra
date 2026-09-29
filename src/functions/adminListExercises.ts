@@ -31,6 +31,7 @@ export async function handler(
       name: e.name,
       category: e.category ?? '',
       measurementType: e.measurementType,
+      measurementTypeId: e.measurementTypeId ?? null,
       bandLevels: e.bandLevels ?? [],
       equipment: e.equipment ?? [],
       active: e.active,

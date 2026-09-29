@@ -14,6 +14,7 @@ locals {
     adminAssignGroup                        = { method = "POST" } # FORCA Coach feature: assign a trainee to a Group
     adminBulkSetForcaBillingAgreementStatus = { method = "POST" } # FORCA Subscriptions Management: Freeze All/Unfreeze All
     adminCancelRegistration                 = { method = "POST" }
+    adminCancelSessionInstance              = { method = "POST" } # FORCA: cancel one dated session instance from the Monthly Calendar, independent of its recurring template
     adminChangeHypBillingAgreementPlan      = { method = "POST" }
     adminChargeHypAgreementNow              = { method = "POST" }
     adminCheckEmailAvailable                = { method = "ANY" }
@@ -26,6 +27,7 @@ locals {
     adminDeleteEquipment                    = { method = "POST" } # FORCA Coach feature
     adminDeleteExercise                     = { method = "POST" } # FORCA Tracker feature
     adminDeleteExtraTraining                = { method = "POST" } # FORCA Extra Training feature
+    adminDeleteMeasurementType               = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
     adminDeleteForcaSubscriptionProduct     = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     adminDeleteGroup                        = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                       = { method = "POST" }
@@ -39,6 +41,8 @@ locals {
     adminDeleteTestComponent                = { method = "POST" } # FORCA Tracker feature
     adminDeleteTestGroup                    = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType                 = { method = "POST" } # FORCA Coach feature
+    adminDeleteWeeklyTask                   = { method = "POST" } # FORCA Weekly Tasks feature
+    adminDeleteWorkoutMethodType             = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
     adminDeleteWorkoutPackageType           = { method = "POST" } # FORCA Workout Plan builder: Package dropdown management
     adminDeleteWorkoutPlan                  = { method = "POST" } # FORCA Workout Plan builder
     adminDeleteWorkoutPlanBlock             = { method = "POST" } # FORCA Workout Plan builder
@@ -72,6 +76,7 @@ locals {
     adminListRecurringSessions              = { method = "GET" }  # FORCA Coach feature
     adminListS3Objects                      = { method = "ANY" }  # Admin Portal: Assets Manager
     adminListTestGroups                     = { method = "GET" }  # FORCA Tracker feature
+    adminListWeeklyTasks                    = { method = "ANY" }  # FORCA Weekly Tasks feature
     adminListWorkoutPlans                   = { method = "GET" }  # FORCA Workout Plan builder: admin or coach with workoutPlans access
     adminOverrideFormStatus                 = { method = "POST" } # Backoffice Trainee Profile: mark a form submitted/pending on behalf of the member
     adminQueryTableItems                    = { method = "ANY" }  # Admin Portal: Data Viewer
@@ -91,6 +96,7 @@ locals {
     adminSaveExercise                       = { method = "POST" } # FORCA Tracker feature
     adminSaveExtraTraining                  = { method = "POST" } # FORCA Extra Training feature
     adminSaveForcaSubscriptionProduct       = { method = "POST" } # FORCA Subscription & Recurring Billing feature
+    adminSaveMeasurementType                = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
     adminSaveGroup                          = { method = "POST" } # FORCA Coach feature
     adminSaveMedicalClearance               = { method = "POST" } # Backoffice Trainee Profile: upload a medical certificate on behalf of the member
     adminSaveMerchProduct                   = { method = "POST" } # FORCA Merch Store feature
@@ -104,6 +110,8 @@ locals {
     adminSaveTestComponent                  = { method = "POST" } # FORCA Tracker feature
     adminSaveTestGroup                      = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType                   = { method = "POST" } # FORCA Coach feature
+    adminSaveWeeklyTask                     = { method = "POST" } # FORCA Weekly Tasks feature
+    adminSaveWorkoutMethodType               = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
     adminSaveWorkoutPackageType             = { method = "POST" } # FORCA Workout Plan builder: Package dropdown management
     adminSaveWorkoutPlan                    = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
     adminSaveWorkoutPlanBlock               = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
@@ -164,6 +172,7 @@ locals {
     getChildExerciseHistory                 = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
     getChildOrders                          = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
     getChildProfile                         = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
+    getChildRunningReports                  = { method = "GET" }  # FORCA Tracker feature: parent-session, no identity switch
     getChildTestAttempts                    = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
     getChildUpcomingSessions                = { method = "GET" }  # FORCA Child Switcher: Parent Home tab, read-only
     getChildUploadUrl                       = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
@@ -183,11 +192,13 @@ locals {
     getForcaInquiryMessages                 = { method = "ANY" } # FORCA Chat feature
     getForcaMerchProducts                   = { method = "GET" } # FORCA Merch Store feature
     getForcaSubscriptionProductsForParent   = { method = "ANY" } # FORCA Subscription & Recurring Billing feature
+    getGroupWeeklyTaskStatus                = { method = "ANY" } # FORCA Weekly Tasks: coach/admin group completion tracker
     getHypOrderStatus                       = { method = "ANY" }
     getInquiryMessages                      = { method = "ANY" }
     getMemberBookingSources                 = { method = "ANY" }
     getMemberCancellations                  = { method = "ANY" }
     getMemberDetail                         = { method = "ANY" }
+    getMeasurementTypes                     = { method = "ANY" } # FORCA Exercise Pool: custom measurement type source
     getMemberExerciseHistory                = { method = "GET" } # FORCA Tracker feature
     getMemberMembership                     = { method = "ANY" }
     getMemberMessages                       = { method = "ANY" }
@@ -200,7 +211,9 @@ locals {
     getMyInquiries                          = { method = "ANY" }
     getMyOrders                             = { method = "GET" } # FORCA Profile feature: trainee's own merch purchase history
     getMyTestAttempts                       = { method = "ANY" } # FORCA Tracker feature: trainee's own test/quiz results, self-service
+    getMyRunningReports                     = { method = "ANY" } # FORCA Tracker feature: trainee's own running-session report history
     getMyTrainingSessions                   = { method = "GET" } # FORCA Coach feature: trainee's own upcoming sessions
+    getMyWeeklyTasks                        = { method = "ANY" } # FORCA Weekly Tasks: trainee's own active tasks + completion
     getNotificationTemplates                = { method = "ANY" }
     getNotificationTimingSettings           = { method = "ANY" }
     getOrthopedicFormConfig                 = { method = "ANY" } # FORCA Orthopedic Medical Form builder
@@ -208,13 +221,16 @@ locals {
     getProducts                             = { method = "ANY" }
     getProfile                              = { method = "ANY" }
     getRegistrationFormConfig               = { method = "ANY" }
+    getRunningReport                        = { method = "GET" } # FORCA running-session post-workout report: trainee's own RPE/pace for one session
     getSessionPostWorkoutReport             = { method = "GET" } # FORCA Coach feature: staff-only post-workout performance report, tailored to the session's assigned Workout Plan
     getSessionWorkoutPlan                   = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                      = { method = "ANY" }
     getTermsOfServiceContent                = { method = "ANY" }
+    getTraineeOrthopedicForm                = { method = "ANY" } # FORCA: coach/admin review of a trainee's Orthopedic Medical Form
     getTrainingHistory                      = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                        = { method = "GET" } # FORCA Coach feature
     getUploadUrl                            = { method = "POST" }
+    getWorkoutMethodTypes                    = { method = "ANY" } # FORCA Workout Plan builder: Working Method dropdown source
     getWorkoutPackageTypes                  = { method = "ANY" } # FORCA Workout Plan builder: Package dropdown source
     getWallet                               = { method = "ANY" }
     grantPunchCard                          = { method = "POST" }
@@ -223,6 +239,7 @@ locals {
     listMyFamily                            = { method = "ANY" }  # Family Accounts: a member's own linked children
     logExercise                             = { method = "POST" } # FORCA Tracker feature
     logSessionExercise                      = { method = "POST" } # FORCA Tracker feature: trainee's own measurable session workout
+    logWeeklyTaskExercise                   = { method = "POST" } # FORCA Weekly Tasks: trainee logs one exercise value on a measurable task
     markActualAttendance                    = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead               = { method = "POST" }
     renewSubscriptionWithToken              = { method = "POST" }
@@ -232,8 +249,10 @@ locals {
     saveChildMedicalClearance               = { method = "POST" } # FORCA Child Switcher: parent-session, no identity switch
     saveClassSeries                         = { method = "POST" }
     saveMedicalClearance                    = { method = "POST" } # FORCA Profile feature: upload/replace a medical clearance certificate
+    saveRunningReport                       = { method = "POST" } # FORCA running-session post-workout report: trainee's own RPE/pace for one session
     saveScheduleAlertSettings               = { method = "POST" }
     saveSupportSettings                     = { method = "POST" }
+    searchForca                             = { method = "ANY" } # FORCA Global Search: trainees/groups/workout plans
     sendCoachNotification                   = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendForcaSupportMessage                 = { method = "POST" } # FORCA Chat feature
     sendSupportMessage                      = { method = "POST" }
@@ -244,9 +263,12 @@ locals {
     submitParentalAuthorization             = { method = "POST" } # FORCA mandatory onboarding: parent's signed program-participation authorization
     submitParentalConsent                   = { method = "POST" }
     submitRegistrationForm                  = { method = "POST" }
+    submitWeeklyTaskRunningReport           = { method = "POST" } # FORCA Weekly Tasks: trainee's RPE+pace report for a running task
     swapClass                               = { method = "POST" }
     switchProfile                           = { method = "POST" } # Family Accounts: parent -> linked child token swap
+    takeAllSessionEquipment                 = { method = "POST" } # FORCA Coach feature: bulk "took everything" pack-list check-out
     toggleSessionEquipment                  = { method = "POST" } # FORCA Coach feature
+    toggleWeeklyTaskCompletion              = { method = "POST" } # FORCA Weekly Tasks: trainee marks her own completion
     triggerTemplateAlert                    = { method = "POST" }
     updateClass                             = { method = "POST" }
     updateCoachOwnProfile                   = { method = "POST" } # FORCA Coach feature: self-service name/phone edit, coach-only

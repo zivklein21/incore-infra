@@ -27,7 +27,11 @@ export async function handler(
 
   const admins = incoreProfiles
     .filter((p) => p.role === 'admin' || p.identity?.role === 'admin')
-    .map((p) => ({ id: (p.PK as string).replace('MEMBER#', ''), name: deriveMemberName(p), isAdmin: true }));
+    // The Backoffice admin is always Or Saraf — her own INCORE profile row
+    // isn't guaranteed to carry a real display name the way a FORCA
+    // member's does, so this is shown directly rather than trusting
+    // deriveMemberName() to resolve it correctly.
+    .map((p) => ({ id: (p.PK as string).replace('MEMBER#', ''), name: 'Or Saraf', isAdmin: true }));
 
   const coaches = forcaProfiles
     .filter((p) => p.identity?.role === 'coach')

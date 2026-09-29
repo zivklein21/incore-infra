@@ -2,7 +2,16 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
+import { isAdmin } from '../lib/auth';
 import type { ClassItem, GroupItem, MemberProfileItem, RegistrationItem } from '../lib/entities';
+
+// The Backoffice admin (Or Saraf) has no FORCA MemberProfileItem — she
+// lives in the INCORE table only — so a session she's assigned as coach on
+// would otherwise resolve no phone at all and silently hide the WhatsApp
+// action below. Hardcoded rather than read from her INCORE profile since
+// that record isn't guaranteed to carry this number in the same field a
+// FORCA member's would.
+const ADMIN_WHATSAPP_PHONE = '0544714230';
 
 // GET or POST /getMyTrainingSessions
 // Auth: Cognito JWT, any signed-in member — returns only the caller's own
@@ -33,6 +42,10 @@ export async function handler(
   async function resolveCoachPhone(coachId: string | null | undefined): Promise<string | null> {
     if (!coachId) return null;
     if (coachPhoneCache.has(coachId)) return coachPhoneCache.get(coachId)!;
+    if (await isAdmin(coachId)) {
+      coachPhoneCache.set(coachId, ADMIN_WHATSAPP_PHONE);
+      return ADMIN_WHATSAPP_PHONE;
+    }
     const res = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${coachId}`, SK: 'PROFILE' } }));
     const coachProfile = res.Item as MemberProfileItem | undefined;
     const phone = coachProfile?.identity?.phone ?? coachProfile?.phone ?? null;

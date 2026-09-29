@@ -77,11 +77,12 @@ export async function handler(
   const pc = forms.parental_consent;
 
   const groupId = brand === 'forca' ? p.identity?.groupId : undefined;
-  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, groupRes, agreementRes] = await Promise.all([
+  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, orthopedicSignatureUrl, groupRes, agreementRes] = await Promise.all([
     presign(hd?.pdf_key),
     presign(hd?.doctor_approval_key),
     presign(pc?.signatureKey),
     presign(forms.medical_clearance_key),
+    presign(forms.orthopedic_signature_key),
     groupId ? ddb.send(new GetCommand({ TableName: tableForBrand(brand), Key: { PK: `GROUP#${groupId}`, SK: 'METADATA' } })) : Promise.resolve(null),
     // Her most recent FORCA subscription agreement, if any — see
     // ForcaBillingAgreementItem in entities.ts. Real billing data takes
@@ -184,6 +185,18 @@ export async function handler(
     orthopedicFormRequestedAt: forms.orthopedic_form_requested_at ?? null,
     orthopedicForm: forms.orthopedic_form === true,
     orthopedicAnswers: forms.orthopedic_answers ?? null,
+    // Declaration block — same "submittedAt present means it's real" shape
+    // as parentalAuthorization below. pdfUrl is already presigned server-
+    // side (same convention as healthDeclaration.pdf_url above) — a short-
+    // lived viewable URL, not a raw S3 key.
+    orthopedicDeclaration: forms.orthopedic_submitted_at
+      ? {
+          submittedAt: forms.orthopedic_submitted_at,
+          traineeName: forms.orthopedic_trainee_name ?? '',
+          parentName: forms.orthopedic_parent_name ?? '',
+          pdfUrl: orthopedicSignatureUrl ?? null,
+        }
+      : null,
     // FORCA Trainee Dashboard — see entities.ts's forms.medical_condition_*
     // comment / reportMedicalConditionChange.ts / adminClearMedicalCondition.ts.
     medicalConditionChanged: forms.medical_condition_changed === true,

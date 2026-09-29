@@ -35,7 +35,7 @@ export async function handler(
   if (!resolved.ok) return json(resolved.status, { error: resolved.error });
   const { session, planId, planName, measurableSections } = resolved;
 
-  const exerciseIds = [...new Set(measurableSections.flatMap((b) => (b.stations ?? []).flatMap((st) => st.exerciseIds)))];
+  const exerciseIds = [...new Set(measurableSections.flatMap((b) => (b.stations ?? []).filter((st) => st.measurable === true).flatMap((st) => st.exerciseIds)))];
   const exercisesById = new Map<string, ExerciseDefinitionItem>();
   await Promise.all(exerciseIds.map(async (exId) => {
     const res = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `EXERCISE#${exId}`, SK: 'METADATA' } }));
@@ -58,7 +58,7 @@ export async function handler(
   const sections = measurableSections.map((b) => ({
     id: b.SK.replace('BLOCK#', ''),
     label: b.label,
-    stations: (b.stations ?? []).slice().sort((a, c) => a.order - c.order).map((st) => {
+    stations: (b.stations ?? []).filter((st) => st.measurable === true).slice().sort((a, c) => a.order - c.order).map((st) => {
       const logged = loggedByStationId.get(st.id);
       return {
         id: st.id,
@@ -67,6 +67,7 @@ export async function handler(
         exercises: st.exerciseIds.map((exId, i) => ({
           id: exId,
           name: st.exerciseNames[i] ?? exercisesById.get(exId)?.name ?? '',
+          category: exercisesById.get(exId)?.category ?? '',
           measurementType: exercisesById.get(exId)?.measurementType ?? 'reps_only',
           bandLevels: exercisesById.get(exId)?.bandLevels ?? [],
         })),

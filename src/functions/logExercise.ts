@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import type { ExerciseDefinitionItem, ExerciseLogEntryItem } from '../lib/entities';
+import { measurementValueSatisfies, type ExerciseDefinitionItem, type ExerciseLogEntryItem } from '../lib/entities';
 
 // POST /logExercise
 // Body: { exerciseId: string, value: { weight?, reps?, timeSeconds?, bandLevel? }, loggedAt?: string }
@@ -41,14 +41,7 @@ export async function handler(
   // Require at least the field(s) this exercise's measurement type actually
   // needs — a "weight_reps" entry with neither weight nor reps set isn't a
   // real log, it's an empty submit.
-  const hasRequiredField =
-    (exercise.measurementType === 'weight_reps' && value.weight != null && value.reps != null) ||
-    (exercise.measurementType === 'reps_only' && value.reps != null) ||
-    (exercise.measurementType === 'time' && value.timeSeconds != null) ||
-    (exercise.measurementType === 'band_level' && !!value.bandLevel) ||
-    (exercise.measurementType === 'bodyweight_reps' && value.reps != null) ||
-    (exercise.measurementType === 'reps_band_level' && value.reps != null && !!value.bandLevel);
-  if (!hasRequiredField) return json(400, { error: 'missing_value' });
+  if (!measurementValueSatisfies(exercise.measurementType, value)) return json(400, { error: 'missing_value' });
 
   const id = randomUUID();
   const loggedAt = typeof body.loggedAt === 'string' && body.loggedAt ? body.loggedAt : new Date().toISOString();

@@ -5,33 +5,47 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { GroupItem, RecurringSessionItem, TestGroupItem, TrainingTypeItem, WorkoutPlanItem } from '../lib/entities';
-import { createSessionInstance, deleteFutureInstances, upcomingOccurrences } from '../lib/sessionInstance';
+import { israelDateStr, israelWallTimeToDate } from '../lib/entities';
+import { createSessionInstance, deleteFutureInstances, normalizeDaysOfWeek, upcomingOccurrences } from '../lib/sessionInstance';
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
 // POST /adminSaveRecurringSession
-// Body: { id?: string, groupId: string, trainingTypeId: string, dayOfWeek: number (0=Sun..6=Sat),
-//         time: string ("HH:mm"), location?: string, coachId?: string, coachName?: string,
+// Body: { id?: string, groupId: string, trainingTypeId: string, dayOfWeek: number[] (0=Sun..6=Sat, one or more),
+//         time: string ("HH:mm"), endTime?: string ("HH:mm"), startDate?: string (ISO date, regenerate-from override),
+//         location?: string, coachId?: string, coachName?: string,
 //         workoutPlanId?: string | null, testGroupId?: string | null, testComponentIds?: string[] | null }
 // — omit id to create. workoutPlanId/testGroupId are mutually exclusive (like
-// ClassItem's own pair) — sending both is rejected.
+// ClassItem's own pair) — sending both is rejected. endTime is purely
+// informational (display/calendar-export) — like location/coach, it's not
+// part of the "pattern" (dayOfWeek/time/groupId), so changing it alone
+// patches every not-yet-occurred instance in place rather than triggering a
+// delete+regenerate. A template has no end date of its own — it recurs
+// "עד לשינוי" (until changed/deactivated), see RecurringSessionItem.active.
 // Auth: Cognito JWT, caller must be admin
 //
 // Create: writes the RecurringSessionItem template, then materializes
 // concrete ClassItem instances (via lib/sessionInstance.ts's
-// createSessionInstance()) for every matching weekday from today through
-// the end of the current month — each one pre-assigned the template's own
-// default Workout Plan/Test Group, if it has one set.
+// createSessionInstance()) for every matching weekday from `startDate`
+// (default: today) through the end of upcomingOccurrences()'s own
+// months-ahead window (currently this month + the following two) — each one
+// pre-assigned the template's own default Workout Plan/Test Group, if it
+// has one set. Further-out months still need an admin's manual
+// adminGenerateMonthInstances.ts "generate" action from the calendar.
 //
-// Update: a change to the pattern itself (dayOfWeek/time/groupId) deletes
+// Update: a change to the pattern itself (dayOfWeek/time/groupId), OR an
+// explicit `startDate` even with the pattern otherwise unchanged, deletes
 // every not-yet-occurred instance this template previously generated and
-// regenerates fresh ones on the new pattern — reliably correct without
-// needing to reschedule individual dates. A change to trainingTypeId/
-// coachId/coachName/location/workoutPlanId/testGroupId only (pattern
-// unchanged) instead patches those fields in place on every not-yet-occurred
-// instance, same "apply to future occurrences" idea saveClassSeries.ts
-// already uses for INCORE — this overwrites whatever a specific instance had
-// been individually assigned via assignSessionWorkoutPlan.ts/
+// regenerates fresh ones starting from `startDate` (lets an admin say
+// "this new pattern takes effect from next Monday", or just "push out when
+// the current pattern starts applying" without changing the pattern at
+// all) — reliably correct without needing to reschedule individual dates.
+// A change to trainingTypeId/coachId/coachName/location/workoutPlanId/
+// testGroupId only, with NEITHER the pattern NOR startDate touched, instead
+// patches those fields in place on every not-yet-occurred instance, same
+// "apply to future occurrences" idea saveClassSeries.ts already uses for
+// INCORE — this overwrites whatever a specific instance had been
+// individually assigned via assignSessionWorkoutPlan.ts/
 // assignSessionTestGroup.ts, same as it already does for coach/location.
 // Past instances are never touched either way.
 export async function handler(
@@ -41,7 +55,7 @@ export async function handler(
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
   let body: {
-    id?: unknown; groupId?: unknown; trainingTypeId?: unknown; dayOfWeek?: unknown; time?: unknown;
+    id?: unknown; groupId?: unknown; trainingTypeId?: unknown; dayOfWeek?: unknown; time?: unknown; endTime?: unknown; startDate?: unknown;
     location?: unknown; coachId?: unknown; coachName?: unknown;
     workoutPlanId?: unknown; testGroupId?: unknown; testComponentIds?: unknown;
   };
@@ -55,10 +69,18 @@ export async function handler(
   if (!groupId) return json(400, { error: 'missing_group_id' });
   const trainingTypeId = typeof body.trainingTypeId === 'string' ? body.trainingTypeId.trim() : '';
   if (!trainingTypeId) return json(400, { error: 'missing_training_type_id' });
-  const dayOfWeek = typeof body.dayOfWeek === 'number' ? body.dayOfWeek : NaN;
-  if (!Number.isInteger(dayOfWeek) || dayOfWeek < 0 || dayOfWeek > 6) return json(400, { error: 'invalid_day_of_week' });
+  const dayOfWeek = Array.isArray(body.dayOfWeek)
+    ? [...new Set(body.dayOfWeek.filter((v): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 6))]
+    : [];
+  if (dayOfWeek.length === 0) return json(400, { error: 'invalid_day_of_week' });
   const time = typeof body.time === 'string' ? body.time : '';
   if (!TIME_RE.test(time)) return json(400, { error: 'invalid_time' });
+  const endTimeRaw = typeof body.endTime === 'string' ? body.endTime.trim() : '';
+  if (endTimeRaw && !TIME_RE.test(endTimeRaw)) return json(400, { error: 'invalid_end_time' });
+  const endTime = endTimeRaw || undefined;
+  const startDateRaw = typeof body.startDate === 'string' ? new Date(body.startDate) : null;
+  const startDateProvided = startDateRaw !== null && !Number.isNaN(startDateRaw.getTime());
+  const startDate = startDateProvided ? startDateRaw! : new Date();
   const location = typeof body.location === 'string' && body.location.trim() ? body.location.trim() : undefined;
   const coachId = typeof body.coachId === 'string' && body.coachId ? body.coachId : undefined;
   const coachName = typeof body.coachName === 'string' && body.coachName.trim() ? body.coachName.trim() : undefined;
@@ -79,12 +101,17 @@ export async function handler(
   if (!trainingType) return json(404, { error: 'training_type_not_found' });
 
   let workoutPlanName: string | undefined;
+  let workoutPlanIsRunning = false;
   if (workoutPlanId) {
     const planRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${workoutPlanId}`, SK: 'METADATA' } }));
     const plan = planRes.Item as WorkoutPlanItem | undefined;
     if (!plan) return json(404, { error: 'workout_plan_not_found' });
     workoutPlanName = plan.name;
+    workoutPlanIsRunning = plan.category === 'running';
   }
+  // isRunningSession is the OR of the TrainingType's own category and the
+  // assigned plan's — see entities.ts's WorkoutPlanItem.category comment.
+  const isRunningSession = trainingType.category === 'running' || workoutPlanIsRunning;
   let testGroupName: string | undefined;
   if (testGroupId) {
     const testGroupRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `TESTGROUP#${testGroupId}`, SK: 'METADATA' } }));
@@ -109,6 +136,7 @@ export async function handler(
     trainingTypeId,
     dayOfWeek,
     time,
+    ...(endTime ? { endTime } : {}),
     active: true,
     ...(location ? { location } : {}),
     ...(coachId ? { coachId, coachName } : {}),
@@ -123,9 +151,9 @@ export async function handler(
   let registeredCount = 0;
 
   if (!existing) {
-    for (const date of upcomingOccurrences(new Date(), dayOfWeek, time)) {
+    for (const date of upcomingOccurrences(startDate, dayOfWeek, time)) {
       const result = await createSessionInstance({
-        groupId, trainingTypeId, date, createdBy: callerUid, location, coachId, coachName, recurringSessionId: id,
+        groupId, trainingTypeId, date, endTime, createdBy: callerUid, location, coachId, coachName, recurringSessionId: id,
         workoutPlanId, workoutPlanName, testGroupId, testGroupName, testComponentIds,
       });
       if (!result.ok) {
@@ -140,13 +168,24 @@ export async function handler(
       registeredCount += result.registeredCount;
     }
   } else {
-    const patternChanged = existing.groupId !== groupId || existing.dayOfWeek !== dayOfWeek || existing.time !== time;
+    const existingDayOfWeek = normalizeDaysOfWeek(existing.dayOfWeek).sort().join(',');
+    const patternChanged = existing.groupId !== groupId || existingDayOfWeek !== [...dayOfWeek].sort().join(',') || existing.time !== time;
+    // An explicit startDate ("Effective From" on the client) also forces a
+    // regenerate even when the pattern itself is untouched — the whole
+    // point of that field is "apply from this date instead of today", which
+    // silently did nothing before this: the in-place patch branch below
+    // never even reads startDate. The client only ever sends it when the
+    // admin actually picked one (see ForcaTrainingScreen.tsx's
+    // startDateTouched) — every OTHER edit omits it, so this never turns an
+    // unrelated field change (coach/location/plan) into a destructive
+    // delete+regenerate.
+    const shouldRegenerate = patternChanged || startDateProvided;
 
-    if (patternChanged) {
+    if (shouldRegenerate) {
       await deleteFutureInstances(id);
-      for (const date of upcomingOccurrences(new Date(), dayOfWeek, time)) {
+      for (const date of upcomingOccurrences(startDate, dayOfWeek, time)) {
         const result = await createSessionInstance({
-          groupId, trainingTypeId, date, createdBy: callerUid, location, coachId, coachName, recurringSessionId: id,
+          groupId, trainingTypeId, date, endTime, createdBy: callerUid, location, coachId, coachName, recurringSessionId: id,
           workoutPlanId, workoutPlanName, testGroupId, testGroupName, testComponentIds,
         });
         if (!result.ok) {
@@ -169,10 +208,13 @@ export async function handler(
         ExpressionAttributeNames: { '#dt': 'date' },
         ExpressionAttributeValues: { ':rsid': id, ':now': nowIso },
       }));
-      const futureItems = (futureRes.Items ?? []) as { PK: string }[];
+      const futureItems = (futureRes.Items ?? []) as { PK: string; date: string }[];
       const setClauses = ['className = :className', 'trainingTypeId = :ttid'];
       const removeClauses: string[] = [];
       const values: Record<string, unknown> = { ':className': trainingType.name, ':ttid': trainingTypeId };
+      if (endTime) { setClauses.push('endDate = :endDate'); } else { removeClauses.push('endDate'); }
+      if (isRunningSession) { setClauses.push('isRunningSession = :isRunning'); values[':isRunning'] = true; }
+      else { removeClauses.push('isRunningSession'); }
       if (location) { setClauses.push('#loc = :loc'); values[':loc'] = location; } else { removeClauses.push('#loc'); }
       if (coachId) { setClauses.push('coachId = :coachId', 'coachName = :coachName'); values[':coachId'] = coachId; values[':coachName'] = coachName; }
       else { removeClauses.push('coachId', 'coachName'); }
@@ -191,13 +233,24 @@ export async function handler(
       }
       const updateExpression = `SET ${setClauses.join(', ')}` + (removeClauses.length ? ` REMOVE ${removeClauses.join(', ')}` : '');
 
-      await Promise.all(futureItems.map((f) => ddb.send(new UpdateCommand({
-        TableName: FORCA_TABLE_NAME,
-        Key: { PK: f.PK, SK: 'METADATA' },
-        UpdateExpression: updateExpression,
-        ExpressionAttributeNames: { '#loc': 'location' },
-        ExpressionAttributeValues: values,
-      }))));
+      await Promise.all(futureItems.map((f) => {
+        // endDate is computed per item — same calendar day as that item's
+        // own `date`, just at endTime's wall-clock hour/minute (mirrors
+        // lib/sessionInstance.ts's createSessionInstance() construction).
+        const itemValues = { ...values };
+        if (endTime) {
+          const [ey, em, ed] = israelDateStr(new Date(f.date)).split('-').map(Number);
+          const [ehh, emm] = endTime.split(':').map(Number);
+          itemValues[':endDate'] = israelWallTimeToDate(ey, em - 1, ed, ehh, emm).toISOString();
+        }
+        return ddb.send(new UpdateCommand({
+          TableName: FORCA_TABLE_NAME,
+          Key: { PK: f.PK, SK: 'METADATA' },
+          UpdateExpression: updateExpression,
+          ExpressionAttributeNames: { '#loc': 'location' },
+          ExpressionAttributeValues: itemValues,
+        }));
+      }));
       instancesCreated = futureItems.length;
     }
   }

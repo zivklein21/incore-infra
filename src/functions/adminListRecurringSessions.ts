@@ -4,6 +4,7 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { GroupItem, RecurringSessionItem, TrainingTypeItem } from '../lib/entities';
+import { normalizeDaysOfWeek } from '../lib/sessionInstance';
 
 // GET or POST /adminListRecurringSessions
 // Auth: Cognito JWT, caller must be admin
@@ -43,8 +44,9 @@ export async function handler(
     groupName: groupNameById.get(t.groupId) ?? '',
     trainingTypeId: t.trainingTypeId,
     trainingTypeName: trainingTypeNameById.get(t.trainingTypeId) ?? '',
-    dayOfWeek: t.dayOfWeek,
+    dayOfWeek: normalizeDaysOfWeek(t.dayOfWeek),
     time: t.time,
+    endTime: t.endTime ?? null,
     location: t.location ?? null,
     coachId: t.coachId ?? null,
     coachName: t.coachName ?? null,
@@ -55,7 +57,7 @@ export async function handler(
     testComponentIds: t.testComponentIds ?? null,
   }));
 
-  templates.sort((a, b) => a.dayOfWeek - b.dayOfWeek || a.time.localeCompare(b.time));
+  templates.sort((a, b) => Math.min(...a.dayOfWeek) - Math.min(...b.dayOfWeek) || a.time.localeCompare(b.time));
 
   return json(200, { templates });
 }

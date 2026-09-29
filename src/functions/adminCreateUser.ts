@@ -13,6 +13,7 @@ import { DEFAULT_COACH_PERMISSIONS, parseCoachPermissions, type CoachPermissions
 import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
 import { createFamilyLink } from '../lib/familyLinks';
 import { recordSystemAlert } from '../lib/alerts';
+import { getEmailBrandTokens } from '../lib/emailBranding';
 import type { MemberProfileItem } from '../lib/entities';
 
 // POST /adminCreateUser
@@ -200,7 +201,7 @@ export async function handler(
       }, callerUid, cognito, userPoolId);
       if ('error' in parentCreate) return json(parentCreate.status, { error: parentCreate.error });
       parentUid = parentCreate.uid;
-      await sendWelcomeEmail(parentEmail, parentFullName, parentCreate.initialPassword).catch((err) => {
+      await sendWelcomeEmail(parentEmail, parentFullName, parentCreate.initialPassword, 'forca').catch((err) => {
         console.error('[adminCreateUser] parent welcome email failed', err);
       });
     }
@@ -227,7 +228,7 @@ export async function handler(
   }, callerUid, cognito, userPoolId);
   if ('error' in traineeCreate) return json(traineeCreate.status, { error: traineeCreate.error });
 
-  await sendWelcomeEmail(email, [firstName, lastName].filter(Boolean).join(' '), traineeCreate.initialPassword).catch((err) => {
+  await sendWelcomeEmail(email, [firstName, lastName].filter(Boolean).join(' '), traineeCreate.initialPassword, brand).catch((err) => {
     // Non-fatal — the account exists and works even if the email fails.
     console.error('[adminCreateUser] welcome email failed', err);
   });
@@ -373,40 +374,51 @@ const ANDROID_APP_URL = 'https://play.google.com/store/apps/details?id=com.worko
 // Hosted under the incore-production-uploads bucket's email-assets/ prefix —
 // the one deliberate public-read exception on an otherwise fully private
 // bucket (see s3.tf) — email clients fetch embedded images unauthenticated,
-// so a presigned URL isn't an option here.
+// so a presigned URL isn't an option here. FORCA is the same app/app-store
+// listing under a different in-app brand mode, so the download badges/links
+// are shared — only the logo/colors/copy below vary by brand.
 const APP_STORE_BADGE_URL   = 'https://incore-production-uploads.s3.eu-central-1.amazonaws.com/email-assets/appstore.png';
 const GOOGLE_PLAY_BADGE_URL = 'https://incore-production-uploads.s3.eu-central-1.amazonaws.com/email-assets/googleplay.png';
-const STUDIO_LOGO_URL       = 'https://incore-production-uploads.s3.eu-central-1.amazonaws.com/email-assets/Logo.png';
 
-async function sendWelcomeEmail(email: string, name: string, password: string): Promise<void> {
+// FORCA trainees/parents are addressed in feminine Hebrew throughout the
+// app (see e.g. FormsStatusTab.tsx's copy) — mirrored in the forca copy
+// below; INCORE's existing masculine-default copy is left as-is.
+async function sendWelcomeEmail(email: string, name: string, password: string, brand: 'incore' | 'forca'): Promise<void> {
+  const t = getEmailBrandTokens(brand);
+  const intro = brand === 'forca'
+    ? 'איזה כיף לראות אותך איתנו! אנחנו נרגשים שהצטרפת ל-FORCA.'
+    : 'איזה כיף לראות אותך איתנו! אנחנו נרגשים שהצטרפת לאפליקציה שלנו.';
+
   const transporter = nodemailer.createTransport({
     service: 'gmail',
     auth: { user: 'incoreworkout@gmail.com', pass: process.env.GMAIL_APP_PASSWORD },
   });
 
   await transporter.sendMail({
-    from: '"INCORE" <incoreworkout@gmail.com>',
+    from: `"${t.senderName}" <incoreworkout@gmail.com>`,
     to: email,
-    subject: 'ברוך הבא ל-INCORE! פרטי ההתחברות שלך בפנים',
+    subject: brand === 'forca'
+      ? `ברוכה הבאה ל-${t.senderName}! פרטי ההתחברות שלך בפנים`
+      : `ברוך הבא ל-${t.senderName}! פרטי ההתחברות שלך בפנים`,
     html: `<!DOCTYPE html>
 <html lang="he" dir="rtl"><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background-color:#f4f7f9;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;direction:rtl;">
   <div style="max-width:600px;margin:20px auto;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 4px 10px rgba(0,0,0,0.05);">
-    <div style="padding:24px 30px;text-align:center;border-bottom:1px solid #eeeeee;">
-      <img src="${STUDIO_LOGO_URL}" alt="INCORE" height="48" style="height:48px;width:auto;border:0;">
+    <div style="padding:24px 30px;text-align:center;border-bottom:1px solid #eeeeee;background-color:${t.headerBg};">
+      <img src="${t.logoUrl}" alt="${t.senderName}" height="${t.logoHeight}" style="height:${t.logoHeight}px;width:auto;max-width:220px;border:0;">
     </div>
     <div style="padding:40px 30px;color:#333333;line-height:1.6;text-align:right;">
       <h2 style="color:#2c3e50;margin-top:0;">שלום ${name},</h2>
-      <p style="margin:0 0 16px 0;">איזה כיף לראות אותך איתנו! אנחנו נרגשים שהצטרפת לאפליקציה שלנו.</p>
+      <p style="margin:0 0 16px 0;">${intro}</p>
       <p>החשבון שלך הוגדר בהצלחה. להלן פרטי ההתחברות האישיים שלך:</p>
-      <div style="background-color:#f8f9fa;border-right:4px solid #5C3A8F;padding:20px;margin:25px 0;border-radius:4px;">
-        <p style="margin:0 0 10px 0;"><strong>שם משתמש:</strong> <a href="mailto:${email}" style="color:#5C3A8F;">${email}</a></p>
-        <p style="margin:0;"><strong>סיסמה זמנית:</strong> <span style="color:#5C3A8F;font-weight:bold;">${password}</span></p>
+      <div style="background-color:#f8f9fa;border-right:4px solid ${t.accentColor};padding:20px;margin:25px 0;border-radius:4px;">
+        <p style="margin:0 0 10px 0;"><strong>שם משתמש:</strong> <a href="mailto:${email}" style="color:${t.accentColor};">${email}</a></p>
+        <p style="margin:0;"><strong>סיסמה זמנית:</strong> <span style="color:${t.accentColor};font-weight:bold;">${password}</span></p>
       </div>
       <p style="font-size:0.9em;color:#666;">* ליתר ביטחון, אנו ממליצים להחליף את הסיסמה הזמנית לאחר הכניסה הראשונה.</p>
     </div>
-    <div style="background-color:#f4f2fa;padding:30px;text-align:center;">
-      <p style="margin:0 0 6px 0;font-size:17px;font-weight:700;color:#5C3A8F;">הורד את האפליקציה עכשיו</p>
+    <div style="background-color:${t.footerBg};padding:30px;text-align:center;">
+      <p style="margin:0 0 6px 0;font-size:17px;font-weight:700;color:${t.accentColor};">הורד את האפליקציה עכשיו</p>
       <p style="margin:0 0 20px 0;font-size:13px;color:#666;">זמין ל-iPhone וגם לאנדרואיד</p>
       <a href="${ANDROID_APP_URL}" style="display:inline-block;margin:0 6px;" target="_blank" rel="noopener noreferrer">
         <img src="${GOOGLE_PLAY_BADGE_URL}" alt="הורד מ-Google Play" height="48" style="height:48px;width:auto;border:0;">

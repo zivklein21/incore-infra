@@ -100,6 +100,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
         await notifyAdminsPaymentFailed({
           userId: order.userId,
           userName: member ? getMemberFullName(member) : 'Unknown Member',
+          brand: 'incore',
           transactionType,
           itemName: order.productName,
           amount: order.amount,

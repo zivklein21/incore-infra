@@ -4,7 +4,7 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { resolveMeasurableSessionWorkout } from '../lib/sessionWorkout';
-import type { ExerciseDefinitionItem, ExerciseLogEntryItem } from '../lib/entities';
+import { measurementValueSatisfies, type ExerciseDefinitionItem, type ExerciseLogEntryItem } from '../lib/entities';
 
 // POST /logSessionExercise
 // Body: { classId: string, exerciseId: string, value: { weight?, reps?, timeSeconds?, bandLevel? }, loggedAt?: string }
@@ -46,7 +46,7 @@ export async function handler(
 
   let stationId: string | undefined;
   for (const section of resolved.measurableSections) {
-    const station = (section.stations ?? []).find((st) => st.exerciseIds.includes(exerciseId));
+    const station = (section.stations ?? []).find((st) => st.measurable === true && st.exerciseIds.includes(exerciseId));
     if (station) { stationId = station.id; break; }
   }
   if (!stationId) return json(403, { error: 'exercise_not_measurable_for_session' });
@@ -63,14 +63,7 @@ export async function handler(
     ...(typeof raw.bandLevel === 'string' && raw.bandLevel ? { bandLevel: raw.bandLevel } : {}),
   };
 
-  const hasRequiredField =
-    (exercise.measurementType === 'weight_reps' && value.weight != null && value.reps != null) ||
-    (exercise.measurementType === 'reps_only' && value.reps != null) ||
-    (exercise.measurementType === 'time' && value.timeSeconds != null) ||
-    (exercise.measurementType === 'band_level' && !!value.bandLevel) ||
-    (exercise.measurementType === 'bodyweight_reps' && value.reps != null) ||
-    (exercise.measurementType === 'reps_band_level' && value.reps != null && !!value.bandLevel);
-  if (!hasRequiredField) return json(400, { error: 'missing_value' });
+  if (!measurementValueSatisfies(exercise.measurementType, value)) return json(400, { error: 'missing_value' });
 
   const id = randomUUID();
   const loggedAt = typeof body.loggedAt === 'string' && body.loggedAt ? body.loggedAt : new Date().toISOString();

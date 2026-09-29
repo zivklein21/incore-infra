@@ -243,6 +243,7 @@ async function sendDropoutAlert(classId: string, classItem: ClassItem): Promise<
   await notifyAdmins({
     type: 'CRITICAL_CLASS_DROPOUT',
     priority: 'HIGH',
+    brand: 'incore',
     pushTitle: 'Critical Alert:',
     message,
     extra: { classId, className, classTimestamp: classItem.date, lastTraineeId, lastTraineeName },

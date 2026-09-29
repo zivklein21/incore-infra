@@ -5,6 +5,16 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 
 // GET or POST /getAdminNotifications
+// Query/body: { brand?: 'incore' | 'forca' } — the Backoffice's currently
+// active brand tab (see AdminBrandModeContext.tsx), so admin only sees
+// that brand's own notifications while viewing it, never the other
+// brand's mixed in. Every notification the write side (notifyAdmins() in
+// lib/adminNotify.ts) creates is tagged with a `brand`; a legacy row
+// written before that tag existed has none and is treated as 'incore' (the
+// only brand that wrote any before FORCA's own alerts existed), so nothing
+// pre-existing silently disappears from either view. Omitting `brand`
+// entirely returns everything unfiltered — kept for any caller that hasn't
+// been updated to pass it yet.
 // Auth: Cognito JWT, caller must be admin
 // GSI2PK="ADMINNOTIF" — see notifyAdmins() in lib/adminNotify.ts for the
 // write side (dropout alerts etc). No AWS WebSocket transport exists yet,
@@ -16,6 +26,10 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
+  const rawBrand = event.queryStringParameters?.brand
+    ?? (event.body ? (JSON.parse(event.body) as { brand?: unknown }).brand : undefined);
+  const brand = rawBrand === 'incore' || rawBrand === 'forca' ? rawBrand : undefined;
+
   const res = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     IndexName: 'GSI2',
@@ -24,7 +38,10 @@ export async function handler(
     ExpressionAttributeValues: { ':pk': 'ADMINNOTIF', ':false': false },
   }));
 
-  const notifications = ((res.Items ?? []) as Record<string, unknown>[]).map((n) => ({
+  const items = (res.Items ?? []) as Record<string, unknown>[];
+  const filtered = brand ? items.filter((n) => (n.brand ?? 'incore') === brand) : items;
+
+  const notifications = filtered.map((n) => ({
     id: (n.PK as string).replace('NOTIFICATION#', ''),
     type: n.type,
     priority: n.priority,

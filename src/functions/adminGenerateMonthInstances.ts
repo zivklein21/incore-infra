@@ -4,7 +4,7 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { israelDateStr, type ClassItem, type RecurringSessionItem } from '../lib/entities';
-import { createSessionInstance, occurrencesInMonth } from '../lib/sessionInstance';
+import { createSessionInstance, normalizeDaysOfWeek, occurrencesInMonth } from '../lib/sessionInstance';
 
 // POST /adminGenerateMonthInstances
 // Body: { year: number, month: number (1-12) }
@@ -52,7 +52,7 @@ export async function handler(
 
   for (const template of templates) {
     const recurringSessionId = template.PK.replace('RECURRINGSESSION#', '');
-    for (const date of occurrencesInMonth(year, month, template.dayOfWeek, template.time)) {
+    for (const date of occurrencesInMonth(year, month, normalizeDaysOfWeek(template.dayOfWeek), template.time)) {
       const dateStr = israelDateStr(date);
       const sameDayRes = await ddb.send(new QueryCommand({
         TableName: FORCA_TABLE_NAME,
@@ -68,6 +68,7 @@ export async function handler(
         groupId: template.groupId,
         trainingTypeId: template.trainingTypeId,
         date,
+        endTime: template.endTime,
         createdBy: callerUid,
         location: template.location,
         coachId: template.coachId,

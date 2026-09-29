@@ -26,6 +26,7 @@ export async function notifyForcaInquiryParticipants(
         await notifyAdmins({
           type: 'FORCA_INQUIRY',
           priority: 'NORMAL',
+          brand: 'forca',
           pushTitle: title,
           message: text,
           extra: { inquiryId: inquiry.PK.replace('FORCAINQUIRY#', '') },
