@@ -6,17 +6,26 @@ import { getUid, json } from '../lib/http';
 import { getCoachAccess } from '../lib/coachAccess';
 import type { ExerciseDefinitionItem, WorkoutPlanBlockItem, WorkoutPlanSectionMode, WorkoutPlanStation } from '../lib/entities';
 
-interface StationInput { id?: unknown; name?: unknown; exerciseIds?: unknown; notes?: unknown }
+interface StationInput { id?: unknown; name?: unknown; exerciseIds?: unknown; notes?: unknown; measurable?: unknown; freeTextExercise?: unknown }
 
-async function resolveStations(raw: unknown): Promise<WorkoutPlanStation[]> {
+// `allowMeasurable` gates the per-station מדידים flag on the parent
+// section's mode — only a 'stations' section has anything a trainee logs
+// results against (mirrors the old block-level gate, just applied per
+// station now instead of once for the whole section).
+async function resolveStations(raw: unknown, allowMeasurable: boolean): Promise<WorkoutPlanStation[]> {
   if (!Array.isArray(raw)) return [];
   const inputs = (raw as StationInput[])
-    .filter((s): s is StationInput => !!s && typeof s === 'object' && Array.isArray(s.exerciseIds))
+    .filter((s): s is StationInput => !!s && typeof s === 'object')
     .map((s) => ({
       ...s,
-      exerciseIds: [...new Set((s.exerciseIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map((v) => v.trim()))],
+      exerciseIds: Array.isArray(s.exerciseIds)
+        ? [...new Set((s.exerciseIds as unknown[]).filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map((v) => v.trim()))]
+        : [],
+      freeTextExercise: typeof s.freeTextExercise === 'string' ? s.freeTextExercise.trim() : '',
     }))
-    .filter((s) => s.exerciseIds.length > 0);
+    // A station needs either a catalog pick or its own free-text fallback —
+    // a non-measurable station can skip the catalog entirely (see below).
+    .filter((s) => s.exerciseIds.length > 0 || s.freeTextExercise.length > 0);
   const allExerciseIds = [...new Set(inputs.flatMap((s) => s.exerciseIds))];
   const exercisesById = new Map<string, ExerciseDefinitionItem>();
   await Promise.all(allExerciseIds.map(async (exId) => {
@@ -30,9 +39,11 @@ async function resolveStations(raw: unknown): Promise<WorkoutPlanStation[]> {
     // Alternatives whose exercise no longer exists in the catalog are
     // dropped rather than failing the whole section save — same tolerant
     // convention as equipmentIds elsewhere. A station left with zero
-    // resolved exercises is dropped entirely.
+    // resolved exercises is dropped entirely, UNLESS it has its own
+    // free-text fallback, in which case it degrades to a free-text station
+    // instead of disappearing.
     const resolved = input.exerciseIds.filter((id) => exercisesById.has(id));
-    if (resolved.length === 0) continue;
+    if (resolved.length === 0 && !input.freeTextExercise) continue;
     stations.push({
       id: typeof input.id === 'string' && input.id ? input.id : randomUUID(),
       order,
@@ -40,6 +51,15 @@ async function resolveStations(raw: unknown): Promise<WorkoutPlanStation[]> {
       exerciseNames: resolved.map((id) => exercisesById.get(id)!.name),
       ...(typeof input.name === 'string' && input.name.trim() ? { name: input.name.trim() } : {}),
       ...(typeof input.notes === 'string' && input.notes.trim() ? { notes: input.notes.trim() } : {}),
+      // Free text is only meaningful (and only ever sent by the builder UI)
+      // for a station with no resolved catalog pick — a pool-based station
+      // never carries this field, so there's no ambiguity about which one
+      // to display downstream.
+      ...(resolved.length === 0 && input.freeTextExercise ? { freeTextExercise: input.freeTextExercise } : {}),
+      // A station can only be measurable if it has a real catalog exercise
+      // to log against — a free-text station has nothing structured a
+      // trainee could log, so the flag is dropped regardless of what's sent.
+      ...(allowMeasurable && input.measurable === true && resolved.length > 0 ? { measurable: true } : {}),
     });
     order += 1;
   }
@@ -48,13 +68,15 @@ async function resolveStations(raw: unknown): Promise<WorkoutPlanStation[]> {
 
 // POST /adminSaveWorkoutPlanBlock
 // Body: { id?: string, planId: string, label: string, timeMethod?: string,
-//         mode?: 'stations' | 'sequentialRoute' | 'freeText',
-//         stations?: { id?: string, name?: string, exerciseIds: string[], notes?: string }[],
+//         mode?: 'stations' | 'sequentialRoute' | 'strength' | 'freeText',
+//         stations?: { id?: string, name?: string, exerciseIds: string[], notes?: string, measurable?: boolean, freeTextExercise?: string }[],
 //         freeTextItems?: string[], manualEquipmentIds?: string[],
-//         noEquipmentNeeded?: boolean, coachGuidelines?: string, order?: number,
-//         measurable?: boolean }
+//         noEquipmentNeeded?: boolean, coachGuidelines?: string, order?: number }
 //   — omit id to create; omit order on create to append at the end of the
-//   plan's section list
+//   plan's section list. The section-level `measurable` is no longer
+//   accepted from the client — it's derived from each station's own flag
+//   (see resolveStations()/below); only 'stations'/'strength'-mode stations
+//   can carry the flag at all.
 // Auth: Cognito JWT, admin or a coach with workoutPlans:'write'.
 // `locked` is never accepted from the client — it's set exactly once, by
 // adminSaveWorkoutPlan.ts, for the one auto-created closing section, and
@@ -76,7 +98,7 @@ export async function handler(
   let body: {
     id?: unknown; planId?: unknown; label?: unknown; timeMethod?: unknown; mode?: unknown;
     stations?: unknown; freeTextItems?: unknown; manualEquipmentIds?: unknown;
-    noEquipmentNeeded?: unknown; coachGuidelines?: unknown; order?: unknown; measurable?: unknown;
+    noEquipmentNeeded?: unknown; coachGuidelines?: unknown; order?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -90,12 +112,16 @@ export async function handler(
   if (!label) return json(400, { error: 'missing_label' });
   const timeMethod = typeof body.timeMethod === 'string' && body.timeMethod.trim() ? body.timeMethod.trim() : undefined;
   const mode: WorkoutPlanSectionMode =
-    body.mode === 'stations' ? 'stations' : body.mode === 'sequentialRoute' ? 'sequentialRoute' : 'freeText';
-  // 'stations' and 'sequentialRoute' share the exact same ordered-step shape
-  // (WorkoutPlanStation) — 'sequentialRoute' is purely a labeling/rendering
-  // distinction (a cone-route path vs. numbered stations), not a different
-  // data model.
-  const usesStations = mode === 'stations' || mode === 'sequentialRoute';
+    body.mode === 'stations' ? 'stations'
+    : body.mode === 'sequentialRoute' ? 'sequentialRoute'
+    : body.mode === 'strength' ? 'strength'
+    : 'freeText';
+  // 'stations', 'sequentialRoute' and 'strength' all share the exact same
+  // ordered-step shape (WorkoutPlanStation) — 'sequentialRoute'/'strength'
+  // are purely labeling/rendering distinctions (a cone-route path, or a
+  // strength-specific numbering, vs. plain numbered stations), not a
+  // different data model.
+  const usesStations = mode === 'stations' || mode === 'sequentialRoute' || mode === 'strength';
   const freeTextItems = Array.isArray(body.freeTextItems)
     ? body.freeTextItems.filter((v): v is string => typeof v === 'string' && v.trim().length > 0).map((v) => v.trim())
     : undefined;
@@ -104,12 +130,14 @@ export async function handler(
     : undefined;
   const noEquipmentNeeded = body.noEquipmentNeeded === true;
   const coachGuidelines = typeof body.coachGuidelines === 'string' && body.coachGuidelines.trim() ? body.coachGuidelines.trim() : undefined;
-  // Only meaningful for a 'stations' section — a 'freeText' or
-  // 'sequentialRoute' section has nothing a trainee logs post-session
-  // results against, so the flag is dropped for it regardless of what the
-  // client sends.
-  const measurable = mode === 'stations' && body.measurable === true;
-  const stations = usesStations ? await resolveStations(body.stations) : [];
+  const allowMeasurable = mode === 'stations' || mode === 'strength';
+  const stations = usesStations ? await resolveStations(body.stations, allowMeasurable) : [];
+  // Derived, not accepted directly from the client any more — true iff at
+  // least one of the resolved stations above is itself flagged measurable
+  // (see WorkoutPlanStation.measurable). Only meaningful for a 'stations' or
+  // 'strength' section — a 'freeText' or 'sequentialRoute' section has
+  // nothing a trainee logs post-session results against.
+  const measurable = allowMeasurable && stations.some((st) => st.measurable === true);
 
   const planRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${planId}`, SK: 'METADATA' } }));
   if (!planRes.Item) return json(404, { error: 'workout_plan_not_found' });

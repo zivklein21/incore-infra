@@ -15,13 +15,20 @@ export async function notifyAdmins(params: {
   priority: 'HIGH' | 'NORMAL';
   pushTitle: string;
   message: string;
+  // Which brand's own activity this alert is about — INCORE and FORCA each
+  // only want to see their own notifications in the admin inbox (see
+  // getAdminNotifications.ts's own `brand` filter), even though the
+  // notification record itself always lives in the INCORE table (one admin
+  // identity, not brand-scoped — see isAdmin()'s doc comment) and both
+  // brands' admins get the exact same push fan-out either way.
+  brand: 'incore' | 'forca';
   extra?: Record<string, unknown>;
   // Forwarded as-is to Expo's push `data` field — lets the client deep-link
   // (e.g. { memberId } → navigate to that member's screen on tap) without
   // parsing it back out of `message`.
   pushData?: Record<string, unknown>;
 }): Promise<void> {
-  const { type, priority, pushTitle, message, extra = {}, pushData } = params;
+  const { type, priority, pushTitle, message, brand, extra = {}, pushData } = params;
   const nowIso = new Date().toISOString();
   const id = randomUUID();
 
@@ -34,6 +41,7 @@ export async function notifyAdmins(params: {
       GSI2SK: `${nowIso}#${id}`,
       type,
       priority,
+      brand,
       title: pushTitle,
       message,
       isRead: false,
@@ -64,6 +72,7 @@ export type PaymentFailureTransactionType = 'subscription_renewal' | 'subscripti
 export interface PaymentFailurePayload {
   userId: string;
   userName: string;
+  brand: 'incore' | 'forca';
   transactionType: PaymentFailureTransactionType;
   itemName: string;
   amount: number;
@@ -94,13 +103,14 @@ function describeHypFailureReason(ccode: number, hadCardOnFile: boolean): string
 // never rethrown to the caller.
 export async function notifyAdminsPaymentFailed(payload: PaymentFailurePayload): Promise<void> {
   try {
-    const { userId, userName, transactionType, itemName, amount, ccode, hadCardOnFile, sourceId } = payload;
+    const { userId, userName, brand, transactionType, itemName, amount, ccode, hadCardOnFile, sourceId } = payload;
     const reason = describeHypFailureReason(ccode, hadCardOnFile);
     const dateStr = new Date().toISOString().slice(0, 10);
 
     await notifyAdmins({
       type: 'PAYMENT_FAILED',
       priority: 'HIGH',
+      brand,
       pushTitle: `Payment Failed - ${userName}`,
       message: `Failed to process ${itemName} for ${userName} on ${dateStr}. Reason: ${reason}`,
       extra: {

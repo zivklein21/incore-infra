@@ -1,12 +1,12 @@
 import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb } from './dynamo';
+import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import { resolveMemberProfile } from './memberLookup';
 import { deriveMemberName, type FamilyLinkItem } from './entities';
 
 export type CreateFamilyLinkResult =
   | { ok: true; linkId: string }
-  | { ok: false; error: 'parent_not_found' | 'child_not_found' | 'already_linked' | 'child_already_linked' | 'brand_mismatch' };
+  | { ok: false; error: 'parent_not_found' | 'child_not_found' | 'already_linked' | 'child_already_linked' | 'brand_mismatch' | 'parent_wrong_account_type' | 'child_wrong_account_type' };
 
 // Shared by adminLinkFamilyMember.ts (explicit admin action) and
 // adminCreateUser.ts (implicit link created alongside a new FORCA trainee).
@@ -33,6 +33,21 @@ export async function createFamilyLink(
   if (resolvedParent.table !== resolvedChild.table) return { ok: false, error: 'brand_mismatch' };
   const table = resolvedParent.table;
   const { profile: childProfile } = resolvedChild;
+
+  // FORCA's Family Accounts model is specifically parent_only accounts
+  // linked to real trainee accounts — a parent_only holder has no
+  // membership/booking of her own (see adminCreateUser.ts), so she can
+  // never be a "child" in this tree, and the "parent" slot only makes
+  // sense filled by the account actually built to hold family links. Only
+  // enforced on the FORCA table — INCORE has no equivalent parent/trainee
+  // account-type split, so this would incorrectly reject every INCORE
+  // family link if applied there too.
+  if (table === FORCA_TABLE_NAME) {
+    const parentAccountType = resolvedParent.profile.identity?.accountType;
+    const childAccountType = childProfile.identity?.accountType;
+    if (parentAccountType !== 'parent_only') return { ok: false, error: 'parent_wrong_account_type' };
+    if (childAccountType === 'parent_only') return { ok: false, error: 'child_wrong_account_type' };
+  }
 
   const [existingLinkRes, childAlreadyLinkedRes] = await Promise.all([
     ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${parentUid}`, SK: `FAMILY#${childUid}` } })),

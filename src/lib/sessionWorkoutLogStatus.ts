@@ -5,6 +5,8 @@ import type { ExerciseDefinitionItem, ExerciseLogEntryItem, WorkoutPlanBlockItem
 export interface WorkoutLogStatusExercise {
   id: string;
   name: string;
+  /** Free-text admin grouping (e.g. "Strength", "Mobility") — see ExerciseDefinitionItem.category. Powers the coach's muscle-group breakdown, same as getSessionWorkoutPlan.ts's trainee-facing equivalent. */
+  category: string;
   measurementType: ExerciseDefinitionItem['measurementType'];
   bandLevels: string[];
 }
@@ -50,10 +52,10 @@ export async function resolveSessionWorkoutLogStatus(
     ExpressionAttributeValues: { ':pk': `WORKOUTPLAN#${workoutPlanId}`, ':prefix': 'BLOCK#' },
   }));
   const measurableBlocks = ((blocksRes.Items ?? []) as (WorkoutPlanBlockItem & { PK: string; SK: string })[])
-    .filter((b) => b.mode === 'stations' && b.measurable === true)
+    .filter((b) => (b.mode === 'stations' || b.mode === 'strength') && b.measurable === true)
     .sort((a, b) => a.order - b.order);
 
-  const exerciseIds = [...new Set(measurableBlocks.flatMap((b) => (b.stations ?? []).flatMap((st) => st.exerciseIds)))];
+  const exerciseIds = [...new Set(measurableBlocks.flatMap((b) => (b.stations ?? []).filter((st) => st.measurable === true).flatMap((st) => st.exerciseIds)))];
   const exercisesById = new Map<string, ExerciseDefinitionItem>();
   await Promise.all(exerciseIds.map(async (exId) => {
     const res = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `EXERCISE#${exId}`, SK: 'METADATA' } }));
@@ -63,13 +65,14 @@ export async function resolveSessionWorkoutLogStatus(
   const sections: WorkoutLogStatusSection[] = measurableBlocks.map((b) => ({
     id: b.SK.replace('BLOCK#', ''),
     label: b.label,
-    stations: (b.stations ?? []).slice().sort((a, c) => a.order - c.order).map((st) => ({
+    stations: (b.stations ?? []).filter((st) => st.measurable === true).slice().sort((a, c) => a.order - c.order).map((st) => ({
       id: st.id,
       name: st.name ?? '',
       notes: st.notes ?? '',
       exercises: st.exerciseIds.map((exId, i) => ({
         id: exId,
         name: st.exerciseNames[i] ?? exercisesById.get(exId)?.name ?? '',
+        category: exercisesById.get(exId)?.category ?? '',
         measurementType: exercisesById.get(exId)?.measurementType ?? 'reps_only',
         bandLevels: exercisesById.get(exId)?.bandLevels ?? [],
       })),

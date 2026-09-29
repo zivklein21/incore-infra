@@ -1,9 +1,10 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { MemberProfileItem } from '../lib/entities';
+import type { ForcaBillingAgreementItem, MemberProfileItem } from '../lib/entities';
+import { firstOfNextMonth } from '../lib/entities';
 
 // POST /adminGrantForcaMembership
 // Body: { memberId: string, title: string, startDate: string, endDate: string }
@@ -62,6 +63,38 @@ export async function handler(
     UpdateExpression: 'SET membership = :membership',
     ExpressionAttributeValues: { ':membership': membership },
   }));
+
+  // If she also has a real subscription agreement (paid through the app),
+  // an admin manually covering her for a period — e.g. she paid this
+  // stretch out of the app, in cash/by transfer — must not leave the
+  // automatic monthly charge still firing underneath it and double-billing
+  // her. Push the agreement's next charge out past whatever the admin just
+  // covered; never pull it earlier just because the window got edited
+  // shorter, since that's not this scenario.
+  const agreementsRes = await ddb.send(new QueryCommand({
+    TableName: FORCA_TABLE_NAME,
+    IndexName: 'GSI1',
+    KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+    FilterExpression: '#status IN (:active, :frozen)',
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'AGREEMENT#', ':active': 'active', ':frozen': 'frozen' },
+  }));
+  const agreement = (agreementsRes.Items ?? [])[0] as ForcaBillingAgreementItem | undefined;
+  if (agreement) {
+    const currentNextCharge = agreement.nextChargeDate ? new Date(agreement.nextChargeDate).getTime() : -Infinity;
+    const endMs = new Date(endDate).getTime();
+    if (endMs > currentNextCharge) {
+      const pushedNextChargeDate = firstOfNextMonth(new Date(endDate)).toISOString();
+      await ddb.send(new UpdateCommand({
+        TableName: FORCA_TABLE_NAME,
+        Key: { PK: agreement.PK, SK: agreement.SK },
+        UpdateExpression: agreement.status === 'active'
+          ? 'SET nextChargeDate = :ncd, updatedAt = :now, GSI3SK = :ncd'
+          : 'SET nextChargeDate = :ncd, updatedAt = :now',
+        ExpressionAttributeValues: { ':ncd': pushedNextChargeDate, ':now': new Date().toISOString() },
+      }));
+    }
+  }
 
   return json(200, { success: true, membership });
 }

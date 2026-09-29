@@ -6,7 +6,7 @@ import { isAdmin } from '../lib/auth';
 import type { ClassItem } from '../lib/entities';
 
 // POST /adminUpdateSessionInstance
-// Body: { classId: string, date?: string, coachId?: string | null, coachName?: string | null, location?: string | null }
+// Body: { classId: string, date?: string, coachId?: string | null, coachName?: string | null, location?: string | null, manualEquipment?: { equipmentId: string, quantity: number }[] | null }
 // Auth: Cognito JWT, admin-only — same gating as adminSaveRecurringSession.ts.
 // Rescheduling touches who's assigned/when, a scheduling-management action,
 // not a coach's own session-running action (compare sessionInAccess()'s
@@ -31,7 +31,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { classId?: unknown; date?: unknown; coachId?: unknown; coachName?: unknown; location?: unknown };
+  let body: { classId?: unknown; date?: unknown; coachId?: unknown; coachName?: unknown; location?: unknown; manualEquipment?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -64,10 +64,29 @@ export async function handler(
     values[':coachName'] = typeof body.coachName === 'string' ? body.coachName : '';
   }
   if (body.location === null) {
-    removes.push('location');
+    removes.push('#loc');
+    names['#loc'] = 'location';
   } else if (typeof body.location === 'string' && body.location) {
-    sets.push('location = :location');
+    sets.push('#loc = :location');
+    names['#loc'] = 'location';
     values[':location'] = body.location;
+  }
+  if (body.manualEquipment === null) {
+    removes.push('manualEquipment');
+  } else if (Array.isArray(body.manualEquipment)) {
+    const seen = new Set<string>();
+    const entries: { equipmentId: string; quantity: number }[] = [];
+    for (const raw of body.manualEquipment) {
+      if (typeof raw !== 'object' || raw === null) continue;
+      const equipmentId = typeof (raw as Record<string, unknown>).equipmentId === 'string' ? (raw as Record<string, unknown>).equipmentId as string : '';
+      if (!equipmentId.trim() || seen.has(equipmentId)) continue;
+      const rawQuantity = (raw as Record<string, unknown>).quantity;
+      const quantity = typeof rawQuantity === 'number' && Number.isFinite(rawQuantity) && rawQuantity >= 1 ? Math.floor(rawQuantity) : 1;
+      seen.add(equipmentId);
+      entries.push({ equipmentId, quantity });
+    }
+    if (entries.length > 0) { sets.push('manualEquipment = :manualEquipment'); values[':manualEquipment'] = entries; }
+    else { removes.push('manualEquipment'); }
   }
 
   if (sets.length === 0 && removes.length === 0) return json(400, { error: 'no_fields_to_update' });

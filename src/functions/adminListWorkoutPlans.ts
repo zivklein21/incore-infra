@@ -106,6 +106,7 @@ function toPlanShape(p: WorkoutPlanItem & { PK: string }) {
     workingMethod: p.workingMethod ?? '',
     workoutGoal: p.workoutGoal ?? '',
     timingStructure: p.timingStructure ?? '',
+    category: p.category ?? null,
     sections: [] as ReturnType<typeof toSectionShape>[],
   };
 }

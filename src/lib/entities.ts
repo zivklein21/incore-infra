@@ -34,6 +34,20 @@ export interface ClassItem {
   // returnSessionEquipment.ts, both of which nudge that EquipmentItem's
   // outCount up/down by the stored quantity, not a flat 1.
   trainingTypeId?: string;
+  // Per-equipment-id session-instance overrides (see
+  // adminUpdateSessionInstance.ts) — on top of whatever the Training
+  // Type/assigned Workout Plan already imply (see lib/sessionDetail.ts's
+  // resolveSessionDetail()). An id not already implied by those is added as
+  // extra equipment at the given quantity (same "extra add" convention as
+  // WorkoutPlanBlockItem.manualEquipmentIds used to be, now with a real
+  // quantity instead of an implicit 1); an id ALREADY implied by them has
+  // its neededQuantity replaced by the given quantity for this instance only
+  // — every other implied item keeps its normal computed quantity
+  // untouched. Purely session-instance-specific — never copied onto other
+  // instances of the same recurring template, and lost if that template
+  // later regenerates this instance (same accepted limitation as
+  // adminUpdateSessionInstance.ts's other per-instance overrides).
+  manualEquipment?: { equipmentId: string; quantity: number }[];
   equipmentTaken?: { equipmentId: string; quantity: number }[];
   equipmentReturnedAt?: string;
   // Stamped once checkUnreturnedEquipmentAlerts.ts has raised a SystemAlertItem
@@ -74,6 +88,13 @@ export interface ClassItem {
   testGroupId?: string;
   testGroupName?: string;
   testComponentIds?: string[];
+  // Denormalized from the linked TrainingTypeItem's category at creation
+  // time (see lib/sessionInstance.ts) — same "derived, stored explicitly"
+  // rationale as isTestSession above, so PostWorkoutReportScreen.tsx /
+  // AttendanceTab.tsx can branch on it without a lookup. Drives the
+  // dedicated running post-workout report (RPE + average pace per segment)
+  // instead of the regular Workout Plan measurable-station log.
+  isRunningSession?: boolean;
   // Set once the assigned coach (or admin) marks the session done — see
   // closeSession.ts. Requires every roster entry to have actualAttendance
   // recorded and equipmentTaken to be empty (everything returned) first.
@@ -83,6 +104,8 @@ export interface ClassItem {
   // everywhere else, e.g. getTrainingHistory.ts's corrections).
   closedAt?: string;
   closedBy?: string;
+  /** ISO 8601 — the session's scheduled end instant, denormalized from its RecurringSessionItem template's own endTime (see adminSaveRecurringSession.ts/lib/sessionInstance.ts) at the moment this instance was materialized. Purely informational (display/calendar-export), same as RecurringSessionItem.endTime — closeSession.ts's closedAt is still what actually marks a session done, regardless of whether the clock has passed this. */
+  endDate?: string;
 }
 
 // PK=RECURRINGSESSION#<id>  SK=METADATA
@@ -103,8 +126,10 @@ export interface RecurringSessionItem {
   trainingTypeId: string;
   coachId?: string;
   coachName?: string;
-  dayOfWeek: number; // 0=Sunday..6=Saturday
+  dayOfWeek: number[]; // 0=Sunday..6=Saturday — one or more days this session repeats on (e.g. [2,4] for Tue+Thu), non-empty
   time: string; // "HH:mm", 24h, Asia/Jerusalem — same convention as israelDateStr()
+  /** Optional end time, same "HH:mm" convention as time — purely informational (e.g. shown on the session card, exported to the native calendar), never used to compute anything else; a session's actual conclusion is still marked explicitly via closeSession.ts regardless of whether this is set. */
+  endTime?: string;
   location?: string;
   // Default Workout Plan or Test Group applied to every dated instance this
   // template generates — mutually exclusive, same as ClassItem's own
@@ -227,6 +252,36 @@ export interface GroupItem {
   createdBy: string;
 }
 
+// PK=FORCASUBPRODUCT#<id>  SK=METADATA
+// FORCA-only Subscription Store catalog entry — a purchasable recurring
+// monthly plan, distinct from GroupItem's own price (that's the group's
+// nominal/list price; a subscription product is what's actually sold, and
+// several products can point at the same group, e.g. a discounted custom
+// one alongside the regular one). groupId is the GroupItem the trainee gets
+// mapped into on successful payment (see forcaSubscriptionPayments.ts /
+// forcaBillingAgreements.ts) — every subscription always resolves to a real
+// group, never a runtime guess.
+// visibility mirrors the proven ProductItem.visibility PUBLIC/PRIVATE
+// pattern from StoreManageScreen.tsx, but deliberately does NOT reuse
+// ProductItem.target_group_ids — that field means other subscription
+// *products*, not a FORCA GroupItem (a same-word, different-concept trap).
+// A "custom/partial/pro-rata" product per the FORCA billing spec is simply
+// a PRIVATE product with an admin-set custom price and an explicit
+// targetParentUids list — no separate "type" field needed.
+export interface ForcaSubscriptionProductItem {
+  PK: string; SK: string;
+  name: string;
+  description?: string;
+  price: number;
+  groupId: string;
+  visibility: 'PUBLIC' | 'PRIVATE';
+  // Parent uids (not trainee uids) — only meaningful when visibility === 'PRIVATE'.
+  targetParentUids?: string[];
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
 // A single equipment requirement on a TrainingTypeItem — 'custom' is a
 // fixed quantity the admin types in (e.g. "always 2 stopwatches, however
 // many trainees"); 'per_member' scales with how many members are actually
@@ -249,6 +304,12 @@ export interface TrainingTypeItem {
   name: string;
   durationMinutes?: number;
   equipmentRequirements?: TrainingTypeEquipmentRequirement[];
+  // Optional tag, not a general taxonomy — today the only value is
+  // 'running', which marks every session created from this type as a
+  // running session (see lib/sessionInstance.ts's isRunningSession stamp)
+  // and switches its post-workout flow to the dedicated RPE + average-pace
+  // report instead of the regular Workout Plan log.
+  category?: 'running';
   createdAt: string;
   createdBy: string;
 }
@@ -395,11 +456,223 @@ export interface MerchOrderItem {
   payerName?: string;
 }
 
+// ─── FORCA Subscription & Recurring Billing ────────────────────────────────
+// FORCA-only, lives in the FORCA table exclusively — same "own parallel
+// entities, never threaded through INCORE's TABLE_NAME machinery" reasoning
+// as MerchOrderItem above. See createForcaSubscriptionPaymentPage.ts /
+// lib/forcaSubscriptionPayments.ts / lib/forcaBillingAgreements.ts.
+
+// PK=FORCASUBORDER#<orderId>  SK=METADATA
+// orderId is always generated as `forcasub-<uuid>` — same dispatch-by-prefix
+// trick as MerchOrderItem's `merch-<uuid>`, so hypPaymentCallback.ts can
+// route to lib/forcaSubscriptionPayments.ts without a DB lookup first. Only
+// ever created for the FIRST charge of a subscription (the one that also
+// captures a card token) — every later monthly renewal is charged directly
+// against the token by lib/forcaBillingAgreements.ts and recorded as its own
+// completed order of this same shape (no new "pending" state involved).
+// childUid/childName/payerUid/payerName mirror MerchOrderItem's own
+// parent-pays-for-child fields exactly — see createForcaSubscriptionPaymentPage.ts.
+export interface ForcaSubscriptionOrderItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  orderId: string;
+  userId: string; // the trainee — order stays keyed to her own purchase history
+  status: 'pending' | 'completed' | 'failed';
+  subscriptionProductId: string;
+  productName: string;
+  groupId: string;
+  groupName: string;
+  amount: number;
+  hypTransactionId?: string;
+  hypCCode?: number;
+  billingAgreementId?: string;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt?: string;
+  childUid?: string;
+  childName?: string;
+  payerUid?: string;
+  payerName?: string;
+}
+
+// PK=FORCAAGREEMENT#<agreementId>  SK=METADATA
+// GSI1PK=MEMBER#<userId> GSI1SK=AGREEMENT#<agreementId> — a trainee's own
+// agreement (parent reads her linked child's subscription through this).
+// GSI2PK='FORCAAGREEMENT' GSI2SK=<createdAtIso>#<agreementId> — global
+// chronological listing for a future admin dashboard.
+// GSI3PK='FORCA_AGREEMENT_STATUS#active' GSI3SK=<nextChargeDateIso> —
+// present ONLY while status==='active'; this is what the monthly billing
+// cron (lib/forcaBillingAgreements.ts) queries. Removed on freeze/cancel/
+// failure — same "drop from the index instead of filtering it" pattern as
+// INCORE's HypBillingAgreementItem.
+//
+// Deliberately simpler than HypBillingAgreementItem: no totalPayments/
+// paymentsCompleted/installments concept — a FORCA subscription just runs
+// monthly until frozen or cancelled, per the FORCA billing spec's
+// "unlimited entries per calendar month" (no usage tracking at all, not
+// even an entry count) and "runs until cancelled" requirements.
+//
+// 'frozen': automated billing is paused starting from the next 1st (see
+// setForcaSubscriptionFreeze.ts/adminSetForcaBillingAgreementStatus.ts) —
+// mechanically identical to dropping GSI3, since a charge only ever
+// happens on the 1st in the first place, so there's nothing to interrupt
+// before then.
+// 'cancelled': the token was deleted and this record is kept only as a
+// historical record — profile.membership (the actual access gate, see
+// GroupItem's doc comment) is deliberately left untouched by cancellation,
+// so the trainee's current paid-through period stays valid until it
+// naturally lapses.
+export type ForcaAgreementStatus = 'active' | 'frozen' | 'cancelled' | 'failed';
+
+export interface ForcaBillingAgreementItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  GSI3PK?: string; GSI3SK?: string;
+  agreementId: string;
+  userId: string; // the trainee
+  payerUid: string; // the parent actually being billed
+  payerName: string;
+  status: ForcaAgreementStatus;
+  subscriptionProductId: string;
+  productName: string;
+  groupId: string;
+  groupName: string;
+  token: string;
+  tokenExpiryMonth: number;
+  tokenExpiryYear: number;
+  amountPerCharge: number;
+  nextChargeDate?: string; // always the 1st of a month; present only while status === 'active'
+  consecutiveFailures: number;
+  lastChargeResult?: { at: string; ccode: number; hypTransactionId: string | null; success: boolean };
+  // Set the first time a "no card on file" charge attempt notifies admins —
+  // same gate/reasoning as HypBillingAgreementItem.noCardAdminNotified.
+  noCardAdminNotified?: boolean;
+  sourceOrderId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ─── FORCA Tracker (exercises + tests/quizzes) ─────────────────────────────
 // FORCA-only, lives in the FORCA table exclusively. See adminSaveExercise.ts /
 // adminSaveTestDefinition.ts.
 
-export type ExerciseMeasurementType = 'weight_reps' | 'reps_only' | 'time' | 'band_level' | 'bodyweight_reps' | 'reps_band_level';
+// The original 6 flag-composed shapes ('weight_reps' through 'weight'
+// below) plus 9 further combinations of the same 4 underlying components
+// (weight/bodyweight/reps/bandLevel — see MeasurementFlags/
+// composeMeasurementType below, which is what actually generates/validates
+// these), unlocked so a custom measurement type
+// (MeasurementTypeItem.baseType, see adminSaveMeasurementType.ts) can be any
+// mix of them, not just the 6 originally hand-picked ones. 'time' and
+// 'weight_time' stand apart from that flag system entirely — a distinct,
+// still-fixed pair with no bodyweight/band-level equivalent, unreachable
+// through the 4-component picker (see ExercisesManageScreen.tsx's
+// MeasurementTypesModal on the client, which only exposes those 4).
+export type ExerciseMeasurementType =
+  | 'weight_reps' | 'reps_only' | 'band_level' | 'bodyweight_reps' | 'reps_band_level' | 'weight'
+  | 'weight_band_level' | 'bodyweight_band_level' | 'weight_bodyweight'
+  | 'weight_reps_band_level' | 'bodyweight_reps_band_level' | 'weight_bodyweight_reps'
+  | 'weight_bodyweight_band_level' | 'weight_bodyweight_reps_band_level'
+  | 'time' | 'weight_time';
+
+// The 4 independent components a custom measurement type's baseType is
+// built from (see MeasurementTypesModal's checkboxes) — 'time'/'weight_time'
+// stand outside this system (see ExerciseMeasurementType's own comment) and
+// always decompose to all-false here, which is fine: they're not reachable
+// through the checkbox UI these two functions serve, only through the two
+// fixed legacy literals themselves.
+export interface MeasurementFlags {
+  weight: boolean;
+  bodyweight: boolean;
+  reps: boolean;
+  bandLevel: boolean;
+}
+
+// Purely mechanical token decomposition — every one of the flag-composed
+// literals above is exactly its component names joined by '_' (see
+// composeMeasurementType, the inverse), so splitting on '_' and checking
+// which known tokens showed up round-trips cleanly with no per-value
+// special-casing. 'band_level' is checked as a substring rather than a
+// token because it's itself two tokens ('band','level') once split.
+export function decomposeMeasurementType(t: ExerciseMeasurementType): MeasurementFlags {
+  const tokens = t.split('_');
+  return {
+    weight: tokens.includes('weight'),
+    bodyweight: tokens.includes('bodyweight'),
+    reps: tokens.includes('reps'),
+    bandLevel: t.includes('band_level'),
+  };
+}
+
+// Inverse of decomposeMeasurementType — joins whichever components are set,
+// in a fixed order (weight, bodyweight, reps, band_level) matching every
+// existing stored literal exactly (e.g. {weight,reps} -> 'weight_reps',
+// {bodyweight,reps} -> 'bodyweight_reps'). 'reps' alone is the one case that
+// doesn't already match its legacy literal ('reps_only') by simple joining,
+// so it's special-cased back to that exact string.
+export function composeMeasurementType(f: MeasurementFlags): ExerciseMeasurementType {
+  const parts: string[] = [];
+  if (f.weight) parts.push('weight');
+  if (f.bodyweight) parts.push('bodyweight');
+  if (f.reps) parts.push('reps');
+  if (f.bandLevel) parts.push('band_level');
+  const joined = parts.join('_');
+  return (joined === 'reps' ? 'reps_only' : joined) as ExerciseMeasurementType;
+}
+
+// Every valid flag-composed combination (all 15 non-empty subsets of the 4
+// components) plus the 2 fixed legacy literals that stand outside that
+// system — the full set adminSaveMeasurementType.ts accepts as a custom
+// type's baseType.
+// Whether a log entry's value has every field its exercise's measurementType
+// actually requires — a mixed type (e.g. weight+bodyweight+reps+band level)
+// requires all of weight/reps/bandLevel to be set at once, same idea the
+// original 8-value switch in logExercise.ts/logSessionExercise.ts used to
+// hand-enumerate per literal. time/weight_time stay outside the component
+// system (see ExerciseMeasurementType's own comment) and are checked
+// directly instead.
+export function measurementValueSatisfies(
+  t: ExerciseMeasurementType,
+  value: { weight?: number; reps?: number; timeSeconds?: number; bandLevel?: string },
+): boolean {
+  if (t === 'time') return value.timeSeconds != null;
+  if (t === 'weight_time') return value.weight != null && value.timeSeconds != null;
+  const f = decomposeMeasurementType(t);
+  return (!f.weight || value.weight != null)
+    && (!(f.reps || f.bodyweight) || value.reps != null)
+    && (!f.bandLevel || !!value.bandLevel);
+}
+
+export const ALL_MEASUREMENT_TYPES: ExerciseMeasurementType[] = [
+  ...Array.from({ length: 15 }, (_, i) => {
+    const mask = i + 1; // 1..15 — every non-empty subset of the 4 components
+    return composeMeasurementType({
+      weight: !!(mask & 1), bodyweight: !!(mask & 2), reps: !!(mask & 4), bandLevel: !!(mask & 8),
+    });
+  }),
+  'time', 'weight_time',
+];
+
+// PK=MEASUREMENTTYPE#<id> SK=METADATA — FORCA's admin-managed catalog of
+// CUSTOM measurement-type labels (e.g. "RPE Score", "Distance (m)") layered
+// on top of the fixed ExerciseMeasurementType shapes above. Deliberately not
+// a fully free-form type: every custom entry still maps to one of the 8
+// built-in `baseType` shapes, which is what actually drives log-entry field
+// behavior everywhere (ExerciseLogEntryItem.value, PerformanceScreen.tsx's
+// input form, chart rendering, etc.) — only the admin-facing NAME is custom.
+// This keeps the whole logging/reporting pipeline untouched: an
+// ExerciseDefinitionItem with measurementTypeId set still stores its real
+// measurementType as baseType, so every existing consumer keeps working
+// unmodified; measurementTypeId is purely a display-label pointer, resolved
+// client-side in ExercisesManageScreen.tsx. See adminSaveExercise.ts.
+export interface MeasurementTypeItem {
+  PK: string; SK: string;
+  name: string;
+  baseType: ExerciseMeasurementType;
+  createdAt: string;
+  createdBy: string;
+}
 
 // PK=EXERCISE#<id>  SK=METADATA
 // Admin-defined exercise catalog — mirrors TrainingTypeItem's shape.
@@ -424,6 +697,8 @@ export interface ExerciseDefinitionItem {
   /** Free-text admin grouping (e.g. "Strength", "Mobility") — filters the Exercises list, purely organizational. */
   category?: string;
   measurementType: ExerciseMeasurementType;
+  /** Set only when the admin picked a custom-named measurement type (see MeasurementTypeItem) instead of a bare built-in one — measurementType above always equals that entry's own baseType, so this is purely a display-label pointer, never itself read for logging behavior. */
+  measurementTypeId?: string;
   bandLevels?: string[];
   /** Feeds Workout Plan Builder's automatic equipment aggregation (see
    * adminListWorkoutPlans.ts / lib/workoutPlanEquipment.ts) — a station's
@@ -467,6 +742,30 @@ export interface ExerciseLogEntryItem {
   classId?: string;
   workoutPlanId?: string;
   stationId?: string;
+}
+
+// PK=RUNNINGREPORT#<classId>#<uid>  SK=METADATA
+// One trainee's post-workout self-report for one running-type session
+// (isRunningSession on ClassItem) — perceived exertion (1-10) and average
+// pace per segment/split (free text; pace notation varies too much for a
+// numeric field). Deterministic PK, not an append-only history entry like
+// ExerciseLogEntryItem, since there's exactly one summary per trainee per
+// session: a re-save overwrites rather than accumulating duplicates, and
+// lets the coach's roster view (getSessionPostWorkoutReport.ts) fetch every
+// present member's report with a direct GetCommand instead of a GSI1
+// fan-out + filter (see sessionWorkoutLogStatus.ts for that pattern, which
+// this deliberately avoids). GSI1 (MEMBER#<uid>) is still populated so a
+// future "my running progress over time" view can query across sessions,
+// same shape as getMyExerciseHistory.ts does for ExerciseLogEntryItem.
+export interface RunningReportItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  userId: string;
+  classId: string;
+  perceivedExertion: number;
+  averagePace: string;
+  loggedAt: string;
+  createdAt: string;
 }
 
 // A test's raw grading/attempt value is always a plain number underneath —
@@ -620,6 +919,36 @@ export interface TestAttemptItem {
 // per_member/custom "mode" the way a whole training type has, but a real
 // quantity nonetheless.
 
+// PK=WORKOUTPACKAGE#<id> SK=METADATA — FORCA's admin-managed list of
+// standardized package (מארז) labels offered in the Workout Plan Builder's
+// Package dropdown (WorkoutPlanItem.package below just stores whichever
+// label string was picked — this catalog is what makes the *offered set*
+// admin-editable instead of the old hardcoded PACKAGE_OPTIONS constant).
+// Deleting a package type here does not touch any plan that already used
+// its label — WorkoutPlanItem.package is a denormalized string, same
+// "delete the catalog entry, historical records keep their own copy"
+// convention as ExerciseDefinitionItem/EquipmentItem. FORCA-only.
+export interface WorkoutPackageTypeItem {
+  PK: string; SK: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=WORKOUTMETHOD#<id> SK=METADATA — FORCA's admin-managed list of
+// standardized working-method (שיטת עבודה) sub-type labels offered in the
+// Workout Plan Builder's Working Method dropdown. Same convention as
+// WorkoutPackageTypeItem just above: WorkoutPlanItem.workingMethod stores
+// whichever label string was picked, this catalog only supplies the
+// *offered set*. Deleting an entry here does not touch any plan that
+// already used its label. FORCA-only.
+export interface WorkoutMethodTypeItem {
+  PK: string; SK: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+}
+
 // PK=WORKOUTPLAN#<id>  SK=METADATA
 export interface WorkoutPlanItem {
   PK: string; SK: string;
@@ -630,6 +959,13 @@ export interface WorkoutPlanItem {
   // reads off a schedule, not a value anything computes with).
   workoutNumber?: string;   // מספר אימון
   workoutType?: string;     // סוג אימון — free text, independent of package (e.g. "אימון פונקציונלי")
+  // Structured tag, deliberately separate from the free-text workoutType
+  // field above despite the similar name — mirrors TrainingTypeItem.category.
+  // A plan tagged 'running' turns on the running post-workout report
+  // (isRunningSession) for any session it's assigned to, even one whose own
+  // TrainingType isn't itself tagged running — see lib/sessionInstance.ts /
+  // assignSessionWorkoutPlan.ts, which OR the two sources together.
+  category?: 'running';
   package?: string;         // מארז — standardized options
   workingMethod?: string;   // שיטת עבודה
   workoutGoal?: string;     // מטרת אימון
@@ -652,17 +988,22 @@ export const MANDATORY_CLOSING_SECTION_GUIDELINES =
   'לא לדלג. להסביר שכל אימון מסתיים בסיכום כדי לעבד וללמוד מהעשייה, אחת מהשנייה ומהמאמנת.\n\n' +
   'שאלת סיום לכל מתאמנת: משהו אחד שהצלחת בו היום, משהו שהפתיע אותך או משהו חדש שלמדת.';
 
-export type WorkoutPlanSectionMode = 'stations' | 'sequentialRoute' | 'freeText';
+export type WorkoutPlanSectionMode = 'stations' | 'sequentialRoute' | 'strength' | 'freeText';
 
-// One entry within a 'stations' or 'sequentialRoute'-mode section — numbered
-// by its position (תחנה 1, תחנה 2, ... for 'stations'; שלב 1, שלב 2, ... for
-// 'sequentialRoute'), each independently pulling one OR MORE exercises from
+// One entry within a 'stations', 'sequentialRoute' or 'strength'-mode
+// section — numbered by its position (תחנה 1, תחנה 2, ... for 'stations';
+// שלב 1, שלב 2, ... for 'sequentialRoute'; תרגיל 1, תרגיל 2, ... for
+// 'strength'), each independently pulling one OR MORE exercises from
 // the catalog (interchangeable alternatives a coach can pick between —
 // displayed joined by " / ", e.g. "Squat / Lunge") with one shared optional
-// note. Both modes share this exact same shape — 'sequentialRoute' is purely
-// a display/labeling distinction (an ordered path, e.g. "קונוס 1" -> "בין
-// קונוס 1 ל-2" -> "קונוס 2", rendered with arrow connectors) over the same
-// underlying step data as a 'stations' section. Embedded directly on the
+// note. All three modes share this exact same shape — 'sequentialRoute' is
+// purely a display/labeling distinction (an ordered path, e.g. "קונוס 1" ->
+// "בין קונוס 1 ל-2" -> "קונוס 2", rendered with arrow connectors) over the
+// same underlying step data as a 'stations' section; 'strength' is likewise
+// the same shape, labeled/numbered as תרגיל N instead — its only functional
+// difference from 'stations' is cosmetic labeling, both equally allow the
+// per-station מדידים flag (see WorkoutPlanStation.measurable below), unlike
+// 'sequentialRoute' which never does. Embedded directly on the
 // section item (not a separate DynamoDB row per entry, unlike the earlier
 // WorkoutPlanExerciseItem design this replaced) — simplest storage for what
 // is, at this app's scale, always a short list.
@@ -675,6 +1016,10 @@ export interface WorkoutPlanStation {
   /** Denormalized from ExerciseDefinitionItem at save time (see adminSaveWorkoutPlanBlock.ts), same order as exerciseIds, so a later catalog rename/delete never breaks an existing plan's display — same rationale as every other denormalized *Name field in this file. */
   exerciseNames: string[];
   notes?: string;
+  /** מדידים — marks THIS station (not the whole section) as one a trainee logs results for after the session, against whichever exercise(s) are picked above. Only ever set when the parent section's mode is 'stations' or 'strength' (adminSaveWorkoutPlanBlock.ts strips it for 'sequentialRoute'/'freeText' regardless of what's sent), and only when exerciseIds is non-empty — a free-text station has nothing structured to log. The parent WorkoutPlanBlockItem.measurable is derived from this — true iff at least one of its stations is measurable — kept for backward-compatible block-level filtering in sessionWorkout.ts and friends. */
+  measurable?: boolean;
+  /** Free-text exercise name, admin-typed instead of a catalog pick — only ever set when exerciseIds is empty (mutually exclusive with it, never both). Lets a non-measurable station skip the Exercise Pool entirely, since nothing downstream needs a catalog link for something a trainee never logs against. */
+  freeTextExercise?: string;
 }
 
 // PK=WORKOUTPLAN#<planId>  SK=BLOCK#<id>
@@ -716,7 +1061,7 @@ export interface WorkoutPlanBlockItem {
   coachGuidelines?: string;
   /** True only for the auto-created closing section — adminDeleteWorkoutPlanBlock.ts refuses to delete it. Editable otherwise (the admin may "slightly adjust" its text, per spec), just never removable. */
   locked?: boolean;
-  /** מדידים — admin marks this section as one a trainee should log results for after the session. Only meaningful for a 'stations' section (a 'freeText' section has nothing measurable to log against). See lib/sessionWorkout.ts / logSessionExercise.ts / getSessionWorkoutPlan.ts for the trainee-facing read/write side this gates. */
+  /** מדידים — true iff at least one of this section's own stations is individually flagged measurable (see WorkoutPlanStation.measurable) — computed automatically by adminSaveWorkoutPlanBlock.ts from the stations it's given, never set directly. Only meaningful for a 'stations' or 'strength' section (a 'freeText'/'sequentialRoute' section has nothing measurable to log against). Kept at this granularity too so lib/sessionWorkout.ts's block-level filter (`(mode === 'stations' || mode === 'strength') && measurable === true`) still cheaply narrows down to plans worth reading each station's own flag from — see logSessionExercise.ts / getSessionWorkoutPlan.ts / sessionWorkoutLogStatus.ts for where the real per-station gating happens. */
   measurable?: boolean;
   createdAt: string;
 }
@@ -769,6 +1114,151 @@ export interface SupportInquiryMessageItem {
   isAutoReply?: boolean;
   messageKey?: string;
   createdAt?: string;
+}
+
+// ─── FORCA Chat (trainee/parent ↔ admin or coach) ──────────────────────────
+// FORCA-only, lives in the FORCA table exclusively — same "own parallel
+// entities, never threaded through INCORE's TABLE_NAME machinery" reasoning
+// as MerchOrderItem/ForcaSubscriptionOrderItem. INCORE's own
+// SupportInquiryItem always goes to one fixed admin inbox with no recipient
+// concept at all; FORCA members pick a recipient at send time.
+
+// PK=FORCAINQUIRY#<id>  SK=METADATA
+// GSI1PK=MEMBER#<uid> GSI1SK=FORCAINQUIRY#<createdAtIso>#<id> — a member's
+// own inquiries list. uid here is always the TRAINEE (userId below), same
+// "order stays keyed to the child" convention as MerchOrderItem/
+// ForcaSubscriptionOrderItem — a parent sending on a linked daughter's
+// behalf still shows up in the daughter's own inbox.
+// GSI2PK='FORCAINQUIRY' GSI2SK=<createdAtIso>#<id> — global chronological
+// listing for the admin inbox (getAllForcaInquiries.ts), which — unlike a
+// coach — sees every inquiry regardless of recipientRole.
+//
+// recipientRole is picked once at send time and never changes. When it's
+// 'coach', groupId/groupName are denormalized from the trainee's
+// identity.groupId AT CREATION TIME (not resolved live on every read) —
+// deliberately pinned, so a later group reassignment mid-conversation can't
+// retroactively hide an inquiry from the coach who's already talking to her
+// about it. Visibility is then "any coach currently assigned to that
+// group" (via getCoachAccess()'s groupInAccess()), not one single pinned
+// coach — a trainee's group commonly has more than one coach, and any of
+// them being able to pick up the conversation is more useful than a rigid
+// single owner.
+export interface ForcaSupportInquiryItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  GSI2PK: string; GSI2SK: string;
+  status: 'OPEN' | 'CLOSED';
+  userId: string; // the trainee
+  userDisplayName?: string;
+  userEmail?: string;
+  recipientRole: 'admin' | 'coach';
+  groupId?: string; // set only when recipientRole === 'coach', pinned at creation
+  groupName?: string;
+  subject?: string;
+  lastMessage?: string;
+  lastMessageAt?: string;
+  lastSender?: 'member' | 'admin' | 'coach';
+  createdAt: string;
+  // Set only when a parent sent this on a linked daughter's behalf — same
+  // parent-pays/parent-acts-for-child denormalization convention as
+  // MerchOrderItem's own childUid/childName/payerUid/payerName.
+  childUid?: string;
+  childName?: string;
+  payerUid?: string;
+  payerName?: string;
+}
+
+// PK=FORCAINQUIRY#<id>  SK=MESSAGE#<messageId>
+export interface ForcaSupportInquiryMessageItem {
+  PK: string; SK: string;
+  sender: 'member' | 'admin' | 'coach' | 'system';
+  text: string;
+  messageKey?: string;
+  createdAt: string;
+}
+
+// ─── FORCA Weekly Tasks (Homework) ──────────────────────────────────────────
+// FORCA-only, lives in the FORCA table exclusively — admin-assigned weekly
+// tasks/homework, targeted at either a whole Group (every current member,
+// same dynamic-membership convention as a Recurring Session's auto-roster —
+// see lib/sessionInstance.ts's createSessionInstance()) or an explicit list
+// of individual trainees. A trainee marks her own completion; the coach/
+// admin sees a roster-style "who's done / who hasn't" view scoped to her
+// own group(s) (see getGroupWeeklyTaskStatus.ts) — no separate CoachAccess
+// permission axis for this, any coach assigned to the group can see it,
+// same visibility model ForcaSessionDetailPanel.tsx's own attendance/
+// equipment sections already use unconditionally.
+
+// PK=WEEKLYTASK#<id>  SK=METADATA
+// GSI2PK='WEEKLYTASK' GSI2SK=<deadline>#<id> — the admin's full list, sorted
+// by deadline (adminListWeeklyTasks.ts) without needing a Scan.
+export interface WeeklyTaskItem {
+  PK: string; SK: string;
+  GSI2PK: string; GSI2SK: string;
+  title: string;
+  description?: string;
+  deadline: string; // ISO 8601
+  targetType: 'group' | 'trainees';
+  /** Set only when targetType === 'group' — every member currently in this group is in scope, resolved live (never a frozen snapshot), same as a training session's own auto-roster. */
+  groupId?: string;
+  groupName?: string;
+  /** Set only when targetType === 'trainees' — an explicit hand-picked list, independent of anyone's current group. */
+  traineeIds?: string[];
+  /** Soft-disable — an inactive task stops showing on the trainee's Home dashboard and the coach/admin tracker, but its history (and anyone's already-recorded completion) is kept, same convention as WorkoutPlanItem.active. */
+  active: boolean;
+  /** Measurable task — instead of a plain "done" toggle, the trainee fills in a value (per exerciseIds below) for each attached exercise to complete it, same measurement-type-driven input as a session's Workout Plan stations (see StationLogRecorder.tsx). Mutually exclusive with `running` below and with the plain toggleWeeklyTaskCompletion.ts flow. */
+  measurable: boolean;
+  /** Set only when measurable === true — specific exercises (from the catalog) the trainee logs a value for, one at a time (see logWeeklyTaskExercise.ts). No station/alternatives grouping like a Workout Plan — she logs every one of these directly, and the task auto-completes once all are logged. */
+  exerciseIds?: string[];
+  /** Running task — instead of a plain "done" toggle, the trainee fills in a perceived-exertion + average-pace report to complete it, same shape as a running session's own post-workout report (see RunningSessionReportScreen.tsx / saveRunningReport.ts). Mutually exclusive with `measurable` above — a task is one type or the other, same one-type-per-task shape as a training session's own isRunningSession vs assigned Workout Plan. */
+  running: boolean;
+  createdAt: string;
+  createdBy: string;
+}
+
+// PK=WEEKLYTASK#<taskId>  SK=COMPLETION#<uid>
+// GSI1PK=MEMBER#<uid> GSI1SK=WEEKLYTASKCOMPLETION#<taskId> — a trainee's own
+// completion record, queryable both ways: "every trainee's status for this
+// task" (a Query on PK, begins_with(SK, 'COMPLETION#') — powers
+// getGroupWeeklyTaskStatus.ts) and "this trainee's own status across every
+// task" (the GSI1 side — powers getMyWeeklyTasks.ts). Written only by the
+// trainee herself (toggleWeeklyTaskCompletion.ts for a plain task,
+// logWeeklyTaskExercise.ts for a measurable one, submitWeeklyTaskRunningReport.ts
+// for a running one — see WeeklyTaskItem.measurable/running) — a coach/admin
+// only ever reads this, same "only she can log her own working weight"
+// convention as ExerciseLogEntryItem/logSessionExercise.ts. One row per
+// (task, trainee) pair, created lazily on her first toggle/exercise
+// log/report — its absence just means "not done yet", not an error.
+export interface WeeklyTaskCompletionItem {
+  PK: string; SK: string;
+  GSI1PK: string; GSI1SK: string;
+  taskId: string;
+  userId: string;
+  completed: boolean;
+  completedAt: string | null;
+  /** Set only for a running task (see WeeklyTaskItem.running) — same fields as RunningReportItem, one-shot (not append-only) since a weekly task's own completion IS the report. */
+  perceivedExertion?: number;
+  averagePace?: string;
+}
+
+// PK=WEEKLYTASK#<taskId>  SK=TASKLOG#<uid>#<exerciseId>
+// One row per (task, trainee, exercise) for a measurable WeeklyTaskItem —
+// lets each attached exercise be logged independently (same per-station
+// save pattern as StationLogRecorder.tsx) via logWeeklyTaskExercise.ts,
+// which also checks whether every one of the task's exerciseIds now has a
+// row here for this trainee and, if so, upserts her WeeklyTaskCompletionItem
+// — completion is a side effect of finishing the log, not a separate toggle.
+// measurementType/exerciseName are denormalized at log time, same rationale
+// as ExerciseLogEntryItem's own fields.
+export interface WeeklyTaskExerciseLogItem {
+  PK: string; SK: string;
+  taskId: string;
+  userId: string;
+  exerciseId: string;
+  exerciseName: string;
+  measurementType: ExerciseMeasurementType;
+  value: { weight?: number; reps?: number; timeSeconds?: number; bandLevel?: string };
+  loggedAt: string;
 }
 
 // PK=MAIL#<id>  SK=METADATA — ephemeral: written to trigger an email send,
@@ -910,14 +1400,27 @@ export interface MemberProfileItem {
     medical_clearance_uploaded_at?: string;
     medical_clearance_requested?: boolean;
     medical_clearance_requested_at?: string;
-    // FORCA Orthopedic Medical Form — admin-assigned per trainee (not a
-    // universal onboarding gate like registration_form above), same
-    // requested/submitted shape as medical_clearance_* — see
-    // adminSetOrthopedicFormRequested.ts / submitOrthopedicForm.ts.
+    // FORCA Orthopedic Medical Form (שאלון פציעות ומגבלות גופניות) — a
+    // MANDATORY onboarding step for every FORCA trainee (see
+    // admin.require_orthopedic_form/computeComplianceFlags below and
+    // resolvePostLoginRoute.ts's Registration -> Health -> Orthopedic ->
+    // Parental Authorization -> Policies chain), same parent-fills-it-for-
+    // her pattern as those other steps. orthopedic_form_requested/_at are a
+    // SEPARATE, secondary mechanism layered on top — an admin flagging an
+    // already-onboarded trainee for a one-off re-submission later (e.g.
+    // after an injury update), see adminSetOrthopedicFormRequested.ts; they
+    // don't gate the mandatory first-time submission at all. The
+    // declaration block (trainee/parent name, digital signature, submitted
+    // date) mirrors parental_authorization's own shape below.
     orthopedic_form_requested?: boolean;
     orthopedic_form_requested_at?: string;
     orthopedic_form?: boolean;
     orthopedic_answers?: Record<string, unknown>;
+    orthopedic_submitted_at?: string;
+    orthopedic_trainee_name?: string;
+    orthopedic_parent_name?: string;
+    orthopedic_signature_key?: string; // S3 object key — see health_declaration comment above
+    orthopedic_signature_paths?: string[];
     // FORCA Trainee Dashboard — a trainee self-reports that something about
     // her medical condition has changed since her last clearance (see
     // reportMedicalConditionChange.ts). While true, declareAttendance.ts
@@ -1016,15 +1519,18 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   const admin = profile.admin ?? {};
 
   // A parent_only account (Family Accounts) has no Registration Form or
-  // Health Declaration of her own — those are her linked trainee's, filled
-  // by switching into the child (ActiveProfileContext.switchToChild). This
-  // was already true via admin.require_* being set false at creation for a
-  // FORCA parent (adminCreateUser.ts), but checked directly off accountType
-  // here too so it holds regardless of how/when the account was created.
-  // Policies Agreement is NOT exempted, though — a parent DOES sign her own
-  // (see the FORCA onboarding flow: parent signs Policies + fills the
-  // trainee's Registration/Health; the trainee then signs her own Policies
-  // separately on first login — see resolvePostLoginRoute.ts).
+  // Health Declaration of her own — those are her linked trainee's, and
+  // Health Declaration is filled by the parent switching into the child
+  // (ActiveProfileContext.switchToChild), same as Orthopedic Form/Parental
+  // Authorization. This was already true via admin.require_* being set
+  // false at creation for a FORCA parent (adminCreateUser.ts), but checked
+  // directly off accountType here too so it holds regardless of how/when
+  // the account was created. Policies Agreement is NOT exempted, though —
+  // a parent DOES sign her own (see the FORCA onboarding flow: parent signs
+  // Policies + fills the trainee's Health Declaration/Orthopedic
+  // Form/Parental Authorization; the trainee then signs her own Policies
+  // Agreement and fills her own Registration Form, in that order, on her
+  // first login — see resolvePostLoginRoute.ts).
   const isParentOnly = profile.identity?.accountType === 'parent_only';
 
   const registrationFormFilled = forms.registration_form === true;

@@ -21,6 +21,7 @@ export async function handler(
     .map((e) => ({
       id: e.PK.replace('EXERCISE#', ''),
       name: e.name,
+      category: e.category ?? '',
       measurementType: e.measurementType,
       bandLevels: e.bandLevels ?? [],
     }))

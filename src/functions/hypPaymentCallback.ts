@@ -10,6 +10,7 @@ import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from '../lib/adminNotify';
 import { handleMerchOrderCallback } from '../lib/merchPayments';
+import { handleForcaSubscriptionOrderCallback } from '../lib/forcaSubscriptionPayments';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
@@ -40,6 +41,12 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   // entities.ts's MerchOrderItem comment for the full reasoning.
   if (orderId.startsWith('merch-')) {
     return handleMerchOrderCallback(orderId, event);
+  }
+
+  // Same dispatch-by-prefix trick, for a FORCA subscription's first charge —
+  // see entities.ts's ForcaSubscriptionOrderItem comment.
+  if (orderId.startsWith('forcasub-')) {
+    return handleForcaSubscriptionOrderCallback(orderId, event);
   }
 
   const orderKey = { PK: `ORDER#${orderId}`, SK: 'METADATA' };
@@ -93,6 +100,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
         await notifyAdminsPaymentFailed({
           userId: order.userId,
           userName: member ? getMemberFullName(member) : 'Unknown Member',
+          brand: 'incore',
           transactionType,
           itemName: order.productName,
           amount: order.amount,

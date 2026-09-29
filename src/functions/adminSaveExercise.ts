@@ -4,10 +4,15 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess } from '../lib/coachAccess';
-import type { ExerciseDefinitionItem, ExerciseEquipmentRequirement, ExerciseMeasurementType } from '../lib/entities';
+import { decomposeMeasurementType, type ExerciseDefinitionItem, type ExerciseEquipmentRequirement, type ExerciseMeasurementType, type MeasurementTypeItem } from '../lib/entities';
 
-const MEASUREMENT_TYPES: ExerciseMeasurementType[] = ['weight_reps', 'reps_only', 'time', 'band_level', 'bodyweight_reps', 'reps_band_level'];
-const BAND_LEVEL_TYPES: ExerciseMeasurementType[] = ['band_level', 'reps_band_level'];
+// A raw (non-measurementTypeId) direct assignment still only offers the
+// original 6 flag-composed shapes plus the 2 legacy ones — the wider mixes
+// unlocked by MeasurementTypesModal's checkboxes are reachable only through
+// a custom measurementTypeId, never picked bare (see
+// ExercisesManageScreen.tsx's own built-in quick-pick pills, deliberately
+// left at these 8 same as before).
+const MEASUREMENT_TYPES: ExerciseMeasurementType[] = ['weight_reps', 'reps_only', 'time', 'band_level', 'bodyweight_reps', 'reps_band_level', 'weight', 'weight_time'];
 
 interface EquipmentInput { equipmentId?: unknown; quantity?: unknown }
 
@@ -26,8 +31,13 @@ function resolveEquipment(raw: unknown): ExerciseEquipmentRequirement[] {
 
 // POST /adminSaveExercise
 // Body: { id?: string, name: string, category?: string, measurementType: ExerciseMeasurementType,
-//         bandLevels?: string[], equipment?: { equipmentId: string, quantity?: number }[],
-//         active?: boolean } — omit id to create; quantity defaults to 1
+//         measurementTypeId?: string, bandLevels?: string[], equipment?: { equipmentId: string, quantity?: number }[],
+//         active?: boolean } — omit id to create; quantity defaults to 1.
+// measurementTypeId (optional) points at an admin-managed custom-named
+// measurement type (see entities.ts's MeasurementTypeItem) — when given, its
+// own baseType OVERRIDES whatever measurementType the client sent, so the
+// two can never disagree; measurementType stays required for a plain
+// built-in type (no measurementTypeId).
 // Auth: Cognito JWT, admin or a coach with workoutPlans:'write' — exercises
 // are the building blocks of workout plans, so the same permission governs
 // both catalogs (see WorkoutPlansManageScreen.tsx).
@@ -39,7 +49,7 @@ export async function handler(
   const access = await getCoachAccess(callerUid);
   if (!access || access.permissions.workoutPlans !== 'write') return json(403, { error: 'forbidden' });
 
-  let body: { id?: unknown; name?: unknown; category?: unknown; measurementType?: unknown; bandLevels?: unknown; equipment?: unknown; active?: unknown };
+  let body: { id?: unknown; name?: unknown; category?: unknown; measurementType?: unknown; measurementTypeId?: unknown; bandLevels?: unknown; equipment?: unknown; active?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -49,14 +59,23 @@ export async function handler(
   const name = typeof body.name === 'string' ? body.name.trim() : '';
   if (!name) return json(400, { error: 'missing_name' });
   const category = typeof body.category === 'string' && body.category.trim() ? body.category.trim() : undefined;
-  const measurementType = MEASUREMENT_TYPES.includes(body.measurementType as ExerciseMeasurementType)
+
+  const measurementTypeId = typeof body.measurementTypeId === 'string' && body.measurementTypeId ? body.measurementTypeId : undefined;
+  let measurementType: ExerciseMeasurementType | null = MEASUREMENT_TYPES.includes(body.measurementType as ExerciseMeasurementType)
     ? body.measurementType as ExerciseMeasurementType : null;
+  if (measurementTypeId) {
+    const customRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEASUREMENTTYPE#${measurementTypeId}`, SK: 'METADATA' } }));
+    const custom = customRes.Item as MeasurementTypeItem | undefined;
+    if (!custom) return json(404, { error: 'measurement_type_not_found' });
+    measurementType = custom.baseType; // overrides whatever the client sent — see doc comment above
+  }
   if (!measurementType) return json(400, { error: 'invalid_measurement_type' });
 
-  const bandLevels = BAND_LEVEL_TYPES.includes(measurementType) && Array.isArray(body.bandLevels)
+  const needsBandLevels = decomposeMeasurementType(measurementType).bandLevel;
+  const bandLevels = needsBandLevels && Array.isArray(body.bandLevels)
     ? body.bandLevels.filter((l): l is string => typeof l === 'string' && l.trim().length > 0).map((l) => l.trim())
     : undefined;
-  if (BAND_LEVEL_TYPES.includes(measurementType) && (!bandLevels || bandLevels.length === 0)) {
+  if (needsBandLevels && (!bandLevels || bandLevels.length === 0)) {
     return json(400, { error: 'missing_band_levels' });
   }
   const equipment = resolveEquipment(body.equipment);
@@ -81,6 +100,7 @@ export async function handler(
     name,
     ...(category ? { category } : {}),
     measurementType,
+    ...(measurementTypeId ? { measurementTypeId } : {}),
     ...(bandLevels ? { bandLevels } : {}),
     ...(equipment.length > 0 ? { equipment } : {}),
     active: body.active === true,
