@@ -6,7 +6,7 @@ import { isAdmin } from '../lib/auth';
 import type { ClassItem } from '../lib/entities';
 
 // POST /adminUpdateSessionInstance
-// Body: { classId: string, date?: string, coachId?: string | null, coachName?: string | null, location?: string | null, manualEquipment?: { equipmentId: string, quantity: number }[] | null }
+// Body: { classId: string, date?: string, endDate?: string | null, coachId?: string | null, coachName?: string | null, location?: string | null, manualEquipment?: { equipmentId: string, quantity: number }[] | null }
 // Auth: Cognito JWT, admin-only — same gating as adminSaveRecurringSession.ts.
 // Rescheduling touches who's assigned/when, a scheduling-management action,
 // not a coach's own session-running action (compare sessionInAccess()'s
@@ -31,7 +31,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { classId?: unknown; date?: unknown; coachId?: unknown; coachName?: unknown; location?: unknown; manualEquipment?: unknown };
+  let body: { classId?: unknown; date?: unknown; endDate?: unknown; coachId?: unknown; coachName?: unknown; location?: unknown; manualEquipment?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -55,6 +55,12 @@ export async function handler(
     sets.push('#date = :date');
     names['#date'] = 'date';
     values[':date'] = body.date;
+  }
+  if (body.endDate === null) {
+    removes.push('endDate');
+  } else if (typeof body.endDate === 'string' && body.endDate) {
+    sets.push('endDate = :endDate');
+    values[':endDate'] = body.endDate;
   }
   if (body.coachId === null) {
     removes.push('coachId', 'coachName');

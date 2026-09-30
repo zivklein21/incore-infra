@@ -228,7 +228,7 @@ export async function handler(
   }, callerUid, cognito, userPoolId);
   if ('error' in traineeCreate) return json(traineeCreate.status, { error: traineeCreate.error });
 
-  await sendWelcomeEmail(email, [firstName, lastName].filter(Boolean).join(' '), traineeCreate.initialPassword, brand).catch((err) => {
+  await sendWelcomeEmail(email, [firstName, lastName].filter(Boolean).join(' '), traineeCreate.initialPassword, brand, isCoach).catch((err) => {
     // Non-fatal — the account exists and works even if the email fails.
     console.error('[adminCreateUser] welcome email failed', err);
   });
@@ -383,7 +383,10 @@ const GOOGLE_PLAY_BADGE_URL = 'https://incore-production-uploads.s3.eu-central-1
 // FORCA trainees/parents are addressed in feminine Hebrew throughout the
 // app (see e.g. FormsStatusTab.tsx's copy) — mirrored in the forca copy
 // below; INCORE's existing masculine-default copy is left as-is.
-async function sendWelcomeEmail(email: string, name: string, password: string, brand: 'incore' | 'forca'): Promise<void> {
+// Coaches get this same credentials email, but image-free (see the
+// isCoach param) — plain text/links standing in for the header logo and
+// the two app-store badge images below, no <img> tags at all.
+async function sendWelcomeEmail(email: string, name: string, password: string, brand: 'incore' | 'forca', isCoach = false): Promise<void> {
   const t = getEmailBrandTokens(brand);
   const intro = brand === 'forca'
     ? 'איזה כיף לראות אותך איתנו! אנחנו נרגשים שהצטרפת ל-FORCA.'
@@ -393,6 +396,32 @@ async function sendWelcomeEmail(email: string, name: string, password: string, b
     service: 'gmail',
     auth: { user: 'incoreworkout@gmail.com', pass: process.env.GMAIL_APP_PASSWORD },
   });
+
+  const header = isCoach
+    ? `<div style="padding:24px 30px;text-align:center;border-bottom:1px solid #eeeeee;background-color:${t.headerBg};">
+      <span style="font-size:20px;font-weight:700;color:#ffffff;">${t.senderName}</span>
+    </div>`
+    : `<div style="padding:24px 30px;text-align:center;border-bottom:1px solid #eeeeee;background-color:${t.headerBg};">
+      <img src="${t.logoUrl}" alt="${t.senderName}" height="${t.logoHeight}" style="height:${t.logoHeight}px;width:auto;max-width:220px;border:0;">
+    </div>`;
+
+  const footer = isCoach
+    ? `<div style="background-color:${t.footerBg};padding:30px;text-align:center;">
+      <p style="margin:0 0 6px 0;font-size:17px;font-weight:700;color:${t.accentColor};">הורד את האפליקציה עכשיו</p>
+      <p style="margin:0 0 20px 0;font-size:13px;color:#666;">זמין ל-iPhone וגם לאנדרואיד</p>
+      <a href="${IOS_APP_URL}" style="color:${t.accentColor};font-weight:600;margin:0 10px;" target="_blank" rel="noopener noreferrer">App Store</a>
+      <a href="${ANDROID_APP_URL}" style="color:${t.accentColor};font-weight:600;margin:0 10px;" target="_blank" rel="noopener noreferrer">Google Play</a>
+    </div>`
+    : `<div style="background-color:${t.footerBg};padding:30px;text-align:center;">
+      <p style="margin:0 0 6px 0;font-size:17px;font-weight:700;color:${t.accentColor};">הורד את האפליקציה עכשיו</p>
+      <p style="margin:0 0 20px 0;font-size:13px;color:#666;">זמין ל-iPhone וגם לאנדרואיד</p>
+      <a href="${ANDROID_APP_URL}" style="display:inline-block;margin:0 6px;" target="_blank" rel="noopener noreferrer">
+        <img src="${GOOGLE_PLAY_BADGE_URL}" alt="הורד מ-Google Play" height="48" style="height:48px;width:auto;border:0;">
+      </a>
+      <a href="${IOS_APP_URL}" style="display:inline-block;margin:0 6px;" target="_blank" rel="noopener noreferrer">
+        <img src="${APP_STORE_BADGE_URL}" alt="הורד מה-App Store" height="48" style="height:48px;width:auto;border:0;">
+      </a>
+    </div>`;
 
   await transporter.sendMail({
     from: `"${t.senderName}" <incoreworkout@gmail.com>`,
@@ -404,9 +433,7 @@ async function sendWelcomeEmail(email: string, name: string, password: string, b
 <html lang="he" dir="rtl"><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background-color:#f4f7f9;font-family:'Segoe UI',Tahoma,Geneva,Verdana,sans-serif;direction:rtl;">
   <div style="max-width:600px;margin:20px auto;background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 4px 10px rgba(0,0,0,0.05);">
-    <div style="padding:24px 30px;text-align:center;border-bottom:1px solid #eeeeee;background-color:${t.headerBg};">
-      <img src="${t.logoUrl}" alt="${t.senderName}" height="${t.logoHeight}" style="height:${t.logoHeight}px;width:auto;max-width:220px;border:0;">
-    </div>
+    ${header}
     <div style="padding:40px 30px;color:#333333;line-height:1.6;text-align:right;">
       <h2 style="color:#2c3e50;margin-top:0;">שלום ${name},</h2>
       <p style="margin:0 0 16px 0;">${intro}</p>
@@ -417,16 +444,7 @@ async function sendWelcomeEmail(email: string, name: string, password: string, b
       </div>
       <p style="font-size:0.9em;color:#666;">* ליתר ביטחון, אנו ממליצים להחליף את הסיסמה הזמנית לאחר הכניסה הראשונה.</p>
     </div>
-    <div style="background-color:${t.footerBg};padding:30px;text-align:center;">
-      <p style="margin:0 0 6px 0;font-size:17px;font-weight:700;color:${t.accentColor};">הורד את האפליקציה עכשיו</p>
-      <p style="margin:0 0 20px 0;font-size:13px;color:#666;">זמין ל-iPhone וגם לאנדרואיד</p>
-      <a href="${ANDROID_APP_URL}" style="display:inline-block;margin:0 6px;" target="_blank" rel="noopener noreferrer">
-        <img src="${GOOGLE_PLAY_BADGE_URL}" alt="הורד מ-Google Play" height="48" style="height:48px;width:auto;border:0;">
-      </a>
-      <a href="${IOS_APP_URL}" style="display:inline-block;margin:0 6px;" target="_blank" rel="noopener noreferrer">
-        <img src="${APP_STORE_BADGE_URL}" alt="הורד מה-App Store" height="48" style="height:48px;width:auto;border:0;">
-      </a>
-    </div>
+    ${footer}
   </div>
 </body></html>`,
   });

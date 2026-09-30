@@ -72,6 +72,10 @@ export async function sendTemplateBroadcast(
   triggeredBy: string,
   brand: 'incore' | 'forca' = 'incore',
   audience: BroadcastAudience = 'both',
+  // Narrows to one FORCA Group (GroupItem — see adminSaveGroup.ts), on top of
+  // whatever the audience filter above already narrowed to. null/undefined
+  // is unfiltered, same "skip the extra work" convention as audience:'both'.
+  groupId?: string | null,
 ): Promise<{ success: boolean; dispatchedCount: number; error?: string }> {
   const tableName = tableForBrand(brand);
   const templateRes = await ddb.send(new GetCommand({
@@ -93,6 +97,10 @@ export async function sendTemplateBroadcast(
     const { parentUids, childUids } = await getFamilyLinkSets(tableName);
     const targetUids = audience === 'children' ? childUids : parentUids;
     traineeProfiles = traineeProfiles.filter((p) => targetUids.has(p.PK.replace('MEMBER#', '')));
+  }
+
+  if (groupId) {
+    traineeProfiles = traineeProfiles.filter((p) => p.identity?.groupId === groupId);
   }
 
   if (traineeProfiles.length === 0) {

@@ -15,6 +15,7 @@ locals {
     adminBulkSetForcaBillingAgreementStatus = { method = "POST" } # FORCA Subscriptions Management: Freeze All/Unfreeze All
     adminCancelRegistration                 = { method = "POST" }
     adminCancelSessionInstance              = { method = "POST" } # FORCA: cancel one dated session instance from the Monthly Calendar, independent of its recurring template
+    adminCancelSessionInstanceSeries        = { method = "POST" } # FORCA: cancel this and every not-yet-occurred instance of a recurring session's series
     adminChangeHypBillingAgreementPlan      = { method = "POST" }
     adminChargeHypAgreementNow              = { method = "POST" }
     adminCheckEmailAvailable                = { method = "ANY" }
@@ -26,6 +27,7 @@ locals {
     adminDeleteCoach                        = { method = "POST" } # FORCA Coach feature
     adminDeleteEquipment                    = { method = "POST" } # FORCA Coach feature
     adminDeleteExercise                     = { method = "POST" } # FORCA Tracker feature
+    adminDeleteExerciseLogEntry             = { method = "POST" } # FORCA Tracker feature: admin edit/delete of a trainee's logged history entry
     adminDeleteExtraTraining                = { method = "POST" } # FORCA Extra Training feature
     adminDeleteMeasurementType               = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
     adminDeleteForcaSubscriptionProduct     = { method = "POST" } # FORCA Subscription & Recurring Billing feature
@@ -48,6 +50,7 @@ locals {
     adminDeleteWorkoutPlanBlock             = { method = "POST" } # FORCA Workout Plan builder
     adminEvictFutureRegistrations           = { method = "POST" }
     adminGenerateMonthInstances             = { method = "POST" } # FORCA Monthly Calendar: bulk-push a full month of recurring-session instances at once
+    adminGetWeeklyTaskStatus                = { method = "GET" }  # FORCA Weekly Tasks feature: per-task "who's done, who hasn't" follow-up, either target type
     adminGetDashboardMetrics                = { method = "ANY" }  # Admin Portal: Dashboard
     adminGetLambdaLogs                      = { method = "ANY" }  # Admin Portal: Logs Viewer
     adminGetMemberFamilyInfo                = { method = "ANY" }  # Family Accounts: MemberDetailsScreen's Family card
@@ -125,6 +128,7 @@ locals {
     adminSetOrthopedicFormRequested         = { method = "POST" } # FORCA Orthopedic Medical Form: flag a trainee as needing to fill it out
     adminUnlinkFamilyMember                 = { method = "POST" } # Family Accounts: remove a parent/child link
     adminUpdateCoachPersonal                = { method = "POST" } # FORCA Coach feature
+    adminUpdateExerciseLogEntry             = { method = "POST" } # FORCA Tracker feature: admin edit/delete of a trainee's logged history entry
     adminUpdateMemberCredit                 = { method = "POST" }
     adminUpdateMembership                   = { method = "POST" }
     adminUpdateMemberMembershipBadge        = { method = "POST" }
@@ -132,6 +136,7 @@ locals {
     adminUpdateMemberWallet                 = { method = "POST" }
     adminUpdatePendingMembership            = { method = "POST" }
     adminUpdateSessionInstance              = { method = "POST" } # FORCA: edit one dated session instance independently of its recurring template
+    adminUpdateSessionInstanceSeries        = { method = "POST" } # FORCA: edit this and every not-yet-occurred instance of a recurring session's series
     adminUpdateTableItem                    = { method = "POST" } # Admin Portal: Data Viewer
     adminWhoAmI                             = { method = "ANY" }  # Admin Portal: auth-gate check
     assignSessionTestGroup                  = { method = "POST" } # FORCA Test Session: link a Test Group (+ optional sub-tests) to one dated session, coach with testsGrading:'write' or admin
@@ -145,10 +150,12 @@ locals {
     closeSupportInquiry                     = { method = "POST" }
     createClass                             = { method = "POST" }
     createForcaSubscriptionPaymentPage      = { method = "POST" } # FORCA Subscription & Recurring Billing feature
+    createForcaSubscriptionTokenPurchase    = { method = "POST" } # FORCA Subscription & Recurring Billing feature — saved-card checkout
     createForcaSupportInquiry               = { method = "POST" } # FORCA Chat feature
     createHypCardUpdatePage                 = { method = "POST" }
     createHypPaymentPage                    = { method = "POST" }
     createHypTokenPurchase                  = { method = "POST" }
+    createForcaMerchTokenPurchase            = { method = "POST" } # FORCA Merch Store feature — saved-card checkout
     createMerchPaymentPage                  = { method = "POST" } # FORCA Merch Store feature
     createSupportInquiry                    = { method = "POST" }
     createTrainingSession                   = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
@@ -170,6 +177,7 @@ locals {
     getCancellationPolicySettings           = { method = "ANY" }
     getChildAttendanceHistory               = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
     getChildExerciseHistory                 = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
+    getChildWeeklyTaskHistory               = { method = "GET" }  # FORCA Tracker feature: parent-session, no identity switch
     getChildOrders                          = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
     getChildProfile                         = { method = "GET" }  # FORCA Child Switcher: parent-session, no identity switch
     getChildRunningReports                  = { method = "GET" }  # FORCA Tracker feature: parent-session, no identity switch
@@ -191,6 +199,7 @@ locals {
     getFileUrl                              = { method = "ANY" }
     getForcaInquiryMessages                 = { method = "ANY" } # FORCA Chat feature
     getForcaMerchProducts                   = { method = "GET" } # FORCA Merch Store feature
+    getForcaOrderStatus                     = { method = "GET" } # FORCA payment redirect reliability — status poll fallback
     getForcaSubscriptionProductsForParent   = { method = "ANY" } # FORCA Subscription & Recurring Billing feature
     getGroupWeeklyTaskStatus                = { method = "ANY" } # FORCA Weekly Tasks: coach/admin group completion tracker
     getHypOrderStatus                       = { method = "ANY" }
@@ -200,12 +209,14 @@ locals {
     getMemberDetail                         = { method = "ANY" }
     getMeasurementTypes                     = { method = "ANY" } # FORCA Exercise Pool: custom measurement type source
     getMemberExerciseHistory                = { method = "GET" } # FORCA Tracker feature
+    getMemberWeeklyTaskHistory              = { method = "GET" } # FORCA Tracker feature
     getMemberMembership                     = { method = "ANY" }
     getMemberMessages                       = { method = "ANY" }
     getMemberOrders                         = { method = "GET" } # Backoffice Trainee Profile: Purchase History tab
     getMyAttendanceHistory                  = { method = "GET" } # FORCA Profile feature: trainee's own attendance history
     getMyBillingAgreement                   = { method = "ANY" }
     getMyExerciseHistory                    = { method = "GET" } # FORCA Tracker feature
+    getMyWeeklyTaskHistory                  = { method = "GET" } # FORCA Tracker feature
     getMyForcaChildSubscription             = { method = "ANY" } # FORCA Subscription & Recurring Billing feature
     getMyForcaInquiries                     = { method = "ANY" } # FORCA Chat feature
     getMyInquiries                          = { method = "ANY" }
@@ -218,6 +229,7 @@ locals {
     getNotificationTimingSettings           = { method = "ANY" }
     getOrthopedicFormConfig                 = { method = "ANY" } # FORCA Orthopedic Medical Form builder
     getPaymentPolicySettings                = { method = "ANY" }
+    getPendingMerchDeliveries               = { method = "GET" } # FORCA Merch delivery: coach's pending hand-overs, scoped to her groups
     getProducts                             = { method = "ANY" }
     getProfile                              = { method = "ANY" }
     getRegistrationFormConfig               = { method = "ANY" }
@@ -242,6 +254,7 @@ locals {
     logWeeklyTaskExercise                   = { method = "POST" } # FORCA Weekly Tasks: trainee logs one exercise value on a measurable task
     markActualAttendance                    = { method = "POST" } # FORCA Coach feature: the coach's only write action
     markAdminNotificationRead               = { method = "POST" }
+    markMerchOrderDelivered                 = { method = "POST" } # FORCA Merch delivery: coach marks a paid order handed over at a session
     renewSubscriptionWithToken              = { method = "POST" }
     reportMedicalConditionChange            = { method = "POST" } # FORCA Trainee Dashboard: self-report, locks declareAttendance.ts's 'yes' path until cleared
     resizeProfilePhoto                      = { method = "POST" }

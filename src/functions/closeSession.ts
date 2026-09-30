@@ -74,14 +74,23 @@ export async function handler(
     ExpressionAttributeValues: { ':now': nowIso, ':uid': callerUid },
   }));
 
-  const sessionDate = new Date(session.date);
-  const resolved = await resolveTemplate(
-    'POST_WORKOUT_REPORT_DUE',
-    'he',
-    { class_type: session.className ?? '', class_time: fmtTime(sessionDate), class_date: fmtDate(sessionDate, 'he') },
-    'forca',
-  );
-  const reportPrompt = resolved ? { title: resolved.title, body: resolved.body } : DEFAULT_REPORT_PROMPT;
+  // Only a test session or a running session actually has a post-workout
+  // report to fill in (see ClassItem.isTestSession/isRunningSession) — a
+  // plain session (even one with a Workout Plan assigned) has nothing to
+  // report here, so this used to pop the "fill in a report?" prompt on
+  // every single close regardless of session type. reportPrompt is now
+  // null for those, and the coach app skips the alert entirely.
+  let reportPrompt: { title: string; body: string } | null = null;
+  if (session.isTestSession || session.isRunningSession) {
+    const sessionDate = new Date(session.date);
+    const resolved = await resolveTemplate(
+      'POST_WORKOUT_REPORT_DUE',
+      'he',
+      { class_type: session.className ?? '', class_time: fmtTime(sessionDate), class_date: fmtDate(sessionDate, 'he') },
+      'forca',
+    );
+    reportPrompt = resolved ? { title: resolved.title, body: resolved.body } : DEFAULT_REPORT_PROMPT;
+  }
 
   return json(200, { success: true, closedAt: nowIso, reportPrompt });
 }

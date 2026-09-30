@@ -454,6 +454,23 @@ export interface MerchOrderItem {
   childName?: string;
   payerUid?: string;
   payerName?: string;
+  // Physical hand-off tracking — a merch order is paid online but handed to
+  // the trainee in person by her coach at a session. Set to 'pending' by
+  // lib/merchPayments.ts the moment an order completes, flipped to
+  // 'delivered' by markMerchOrderDelivered.ts. Absent on orders completed
+  // before this existed (treated as already handled, never surfaced to a
+  // coach — see GSI3 below for why that's automatic, no backfill needed).
+  //
+  // GSI3PK='FORCA_MERCH_DELIVERY#pending' GSI3SK=<userId>#<createdAtIso>#<orderId>
+  // — present ONLY while deliveryStatus==='pending' (same sparse "drop from
+  // the index instead of filtering it" pattern as ForcaBillingAgreementItem's
+  // own GSI3), removed on delivery or refund. This is what
+  // getPendingMerchDeliveries.ts queries to build the coach's "bring to the
+  // next session" list.
+  deliveryStatus?: 'pending' | 'delivered';
+  deliveredAt?: string;
+  deliveredBy?: string;
+  deliveredByName?: string;
 }
 
 // ─── FORCA Subscription & Recurring Billing ────────────────────────────────

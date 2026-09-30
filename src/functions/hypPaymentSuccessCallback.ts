@@ -4,6 +4,8 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { HypOrderItem } from '../lib/entities';
 import { verifyHypTransaction } from '../lib/hypClient';
 import { applyHypPaymentSuccess, markOrderFailedAndNotifyAdmins } from '../lib/hypPaymentGrant';
+import { handleMerchOrderCallback } from '../lib/merchPayments';
+import { handleForcaSubscriptionOrderCallback } from '../lib/forcaSubscriptionPayments';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
@@ -25,6 +27,21 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (!orderId) {
     console.error('[hypPaymentSuccessCallback] missing Order param in redirect');
     return redirectTo('error');
+  }
+
+  // HYP's Success URL is one fixed merchant-portal setting shared by every
+  // order type (there's no per-transaction callback param — see
+  // hypClient.ts's createHypSignedPaymentUrl), so a merch/FORCA-subscription
+  // order's approval redirect lands here too, not just this file's own
+  // INCORE ORDER# lookup below. Same dispatch-by-prefix hypPaymentCallback.ts
+  // (the legacy combined endpoint) already does — missing here meant every
+  // merch/forcasub order's approval redirect fell through to "unknown order"
+  // and reported back as a failure despite HYP having actually charged it.
+  if (orderId.startsWith('merch-')) {
+    return handleMerchOrderCallback(orderId, event);
+  }
+  if (orderId.startsWith('forcasub-')) {
+    return handleForcaSubscriptionOrderCallback(orderId, event);
   }
 
   const orderKey = { PK: `ORDER#${orderId}`, SK: 'METADATA' };

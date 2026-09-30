@@ -10,6 +10,7 @@
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { recordSystemAlert } from '../lib/alerts';
+import { notifyAdmins } from '../lib/adminNotify';
 import type { ClassItem, EquipmentItem, TrainingTypeItem } from '../lib/entities';
 
 export async function handler(): Promise<void> {
@@ -60,6 +61,27 @@ export async function handler(): Promise<void> {
       message: `Equipment not returned after "${session.className ?? 'training session'}": ${equipmentSummaries.join(', ')}`,
       context: { classId, className: session.className, equipmentTaken: taken },
     });
+
+    // recordSystemAlert above only reaches the Admin Portal's internal
+    // system-health feed — this also puts it in front of the actual FORCA
+    // admin, in her own notification inbox + push, same as every other
+    // admin-facing alert (payment failures, orthopedic flags — see
+    // adminNotify.ts). Caught locally, unlike recordSystemAlert (which
+    // already self-catches) — a push/DB hiccup on one session shouldn't
+    // stop the batch from still stamping and moving on to the rest.
+    try {
+      await notifyAdmins({
+        type: 'FORCA_EQUIPMENT_NOT_RETURNED',
+        priority: 'NORMAL',
+        brand: 'forca',
+        pushTitle: 'ציוד לא הוחזר',
+        message: `האימון "${session.className ?? 'אימון'}" הסתיים והציוד הבא עדיין לא סומן כהוחזר: ${equipmentSummaries.join(', ')}.`,
+        extra: { classId },
+        pushData: { screen: 'TrainingHistoryScreen', classId },
+      });
+    } catch (err) {
+      console.error('[checkUnreturnedEquipmentAlerts] notifyAdmins failed:', err);
+    }
 
     await ddb.send(new UpdateCommand({
       TableName: FORCA_TABLE_NAME,

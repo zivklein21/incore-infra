@@ -1,31 +1,24 @@
-import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { randomUUID } from 'crypto';
+import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { getMemberFirstLastName, getMemberFullName, getMemberIdNumber, buildHypInfo } from '../lib/hypOrders';
-import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
+import { getMemberFullName, buildHypInfo, getMemberIdNumber, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
+import { chargeHypToken } from '../lib/hypClient';
 import { verifyFamilyLink } from '../lib/familyLinks';
+import { applyForcaSubscriptionCharge } from '../lib/forcaSubscriptionPayments';
 import type { ForcaSubscriptionOrderItem, ForcaSubscriptionProductItem, GroupItem, MemberProfileItem } from '../lib/entities';
 
-// POST /createForcaSubscriptionPaymentPage
+// POST /createForcaSubscriptionTokenPurchase
 // Auth: Cognito JWT (any signed-in FORCA member)
 // Body: { subscriptionProductId: string, childUid: string }
-// Response: { paymentUrl: string, orderId: string }
+// Response: { success: true } | 402 { success: false, error: 'charge_failed', ccode }
 //
-// Subscriptions are purchasable ONLY through a parent account for a linked
-// trainee — see the FORCA billing spec's "Parent-Only Subscription
-// Purchasing" requirement. Unlike createMerchPaymentPage.ts, childUid is
-// REQUIRED here, never optional self-checkout. Family-link authorized
-// (verifyFamilyLink), and the HYP charge is always billed to the PARENT's
-// own profile (ClientName/email/cell/UserId), never the trainee's — same
-// convention as createMerchPaymentPage.ts, see its own comment.
-//
-// This is a one-time (tash=1) charge for the first month only. The card
-// token this purchase captures is saved by
-// lib/forcaSubscriptionPayments.ts's handleForcaSubscriptionOrderCallback()
-// once HYP confirms the charge, which is also where the recurring
-// ForcaBillingAgreementItem gets created for every following month.
+// The saved-card counterpart to createForcaSubscriptionPaymentPage.ts — same
+// validation, but charges the PAYER's already-saved HYP token directly (see
+// createHypTokenPurchase.ts, INCORE's equivalent) instead of opening a
+// hosted page. No redirect/webview involved: the charge either succeeds or
+// fails synchronously, right here.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -61,15 +54,16 @@ export async function handler(
   if (product.visibility === 'PRIVATE' && !(product.targetParentUids ?? []).includes(callerUid)) return json(403, { error: 'forbidden' });
   if (!(product.price >= 0)) return json(400, { error: 'invalid_price' });
 
+  const savedToken = payer.payment?.hypToken;
+  const savedExpiryMonth = payer.payment?.hypTokenExpiryMonth;
+  const savedExpiryYear = payer.payment?.hypTokenExpiryYear;
+  if (!savedToken || !savedExpiryMonth || !savedExpiryYear) return json(400, { error: 'no_saved_token' });
+
   const groupRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `GROUP#${product.groupId}`, SK: 'METADATA' } }));
   const group = groupRes.Item as GroupItem | undefined;
   if (!group) return json(404, { error: 'group_not_found' });
 
-  const { firstName: clientFirstName, lastName: clientLastName } = getMemberFirstLastName(payer);
-  const email = payer.identity?.email || payer.email || '';
-  const cell = payer.identity?.phone || payer.phone || '';
   const childName = getMemberFullName(child);
-
   const orderId = `forcasub-${randomUUID()}`;
   const nowIso = new Date().toISOString();
   const order: ForcaSubscriptionOrderItem = {
@@ -96,36 +90,49 @@ export async function handler(
   };
   await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: order }));
 
+  let chargeResult;
   try {
-    const paymentUrl = await createHypSignedPaymentUrl({
-      order: orderId,
+    chargeResult = await chargeHypToken({
+      token: savedToken,
+      expiryMonth: savedExpiryMonth,
+      expiryYear: savedExpiryYear,
       amount: product.price,
-      tash: 1,
-      clientName: clientFirstName,
-      clientLName: clientLastName || undefined,
-      email: email || undefined,
-      cell: cell || undefined,
-      // A FORCA parent never fills a Health Declaration (that's the
-      // trainee's own form), so she never has a real ID number on file —
-      // omit it entirely rather than send a fake-looking placeholder.
-      userId: getMemberIdNumber(payer) || undefined,
+      // action=soft (charge a saved token) is a different HYP endpoint from
+      // action=APISign — every other chargeHypToken caller in this codebase
+      // (chargeOneForcaAgreement, createHypTokenPurchase.ts) sends the
+      // placeholder here rather than omitting it, unlike the hosted-page
+      // SIGN call this doesn't go through.
+      userId: getMemberIdNumber(payer) || HYP_NO_ID_PLACEHOLDER,
+      clientName: getMemberFullName(payer),
       info: buildHypInfo(product.name, `שם הילדה: ${childName}`),
-      pageLang: 'HEB',
+      email: payer.identity?.email || payer.email || undefined,
       sendReceipt: true,
     });
-    return json(200, { paymentUrl, orderId, amountCharged: product.price });
   } catch (err: any) {
-    console.error('[createForcaSubscriptionPaymentPage] HYP SIGN call failed:', err);
+    console.error(`[createForcaSubscriptionTokenPurchase] order=${orderId} charge threw:`, err);
+    chargeResult = { success: false, ccode: -1 };
+  }
+
+  if (!chargeResult.success) {
     await ddb.send(new UpdateCommand({
       TableName: FORCA_TABLE_NAME,
       Key: { PK: `FORCASUBORDER#${orderId}`, SK: 'METADATA' },
-      UpdateExpression: 'SET #status = :failed, updatedAt = :now',
+      UpdateExpression: 'SET #status = :failed, hypCCode = :ccode, updatedAt = :now',
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':failed': 'failed', ':now': new Date().toISOString() },
+      ExpressionAttributeValues: { ':failed': 'failed', ':ccode': chargeResult.ccode, ':now': new Date().toISOString() },
     }));
-    if (err instanceof HypSignError) {
-      return json(502, { error: 'hyp_sign_failed', ccode: err.ccode, hypFields: err.fields });
-    }
-    return json(502, { error: 'hyp_sign_failed' });
+    return json(402, { success: false, error: 'charge_failed', ccode: chargeResult.ccode });
   }
+
+  const { billingAgreementId } = await applyForcaSubscriptionCharge(
+    order,
+    orderId,
+    chargeResult.transactionId ?? '',
+    chargeResult.ccode,
+    { token: savedToken, expiryMonth: savedExpiryMonth, expiryYear: savedExpiryYear },
+    { cacheOnPayerProfile: false },
+  );
+
+  console.log(`[createForcaSubscriptionTokenPurchase] order=${orderId} user=${childUid} completed agreement=${billingAgreementId ?? 'none'}`);
+  return json(200, { success: true, orderId, amountCharged: product.price });
 }

@@ -39,6 +39,8 @@ export async function handler(
     createdAt: o.createdAt,
     refundedAmount: o.refundedAmount ?? null,
     refundedAt: o.refundedAt ?? null,
+    deliveryStatus: o.deliveryStatus ?? null,
+    deliveredAt: o.deliveredAt ?? null,
   }));
 
   return json(200, { orders });
