@@ -42,7 +42,14 @@ export async function handler(
   // parent_only account viewing her own profile has her own real billing to
   // see, and an admin (viewing anyone, including herself) needs the full
   // picture.
-  if (memberId === callerUid && response.brand === 'forca' && response.role === 'member') {
+  //
+  // BUG (fixed): a parent_only account is ALSO created with role: 'member'
+  // (see adminCreateUser.ts's createMemberAccount call for the parent) —
+  // `role` alone doesn't distinguish her from a real trainee, so this used
+  // to strip HER OWN real payment.hasSavedCard too, hiding the Saved
+  // Card/New Card checkout toggle for every parent who actually had one.
+  // accountType is the field that actually tells them apart.
+  if (memberId === callerUid && response.brand === 'forca' && response.role === 'member' && response.accountType !== 'parent_only') {
     response.groupPrice = null;
     response.subscriptionStatus = null;
     response.subscriptionAmountPerCharge = null;

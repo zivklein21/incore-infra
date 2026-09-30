@@ -75,17 +75,24 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
   for (const session of sessionItems) (session.manualEquipment ?? []).forEach((m) => equipmentIdsNeeded.add(m.equipmentId));
   const equipmentById = new Map<string, { name: string; availableQuantity: number }>();
   if (equipmentIdsNeeded.size > 0) {
-    const equipmentRes = await ddb.send(new ScanCommand({
-      TableName: FORCA_TABLE_NAME,
-      FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
-      ExpressionAttributeValues: { ':prefix': 'EQUIPMENT#', ':metadata': 'METADATA' },
-    }));
-    for (const e of (equipmentRes.Items ?? []) as EquipmentItem[]) {
-      equipmentById.set(e.PK.replace('EQUIPMENT#', ''), {
-        name: e.name ?? '',
-        availableQuantity: (e.quantity ?? 0) - (e.outCount ?? 0),
-      });
-    }
+    // Paginated — a Scan reads at most 1MB per page BEFORE the filter is
+    // applied, so a single page silently misses equipment on a big table.
+    let lastKey: Record<string, unknown> | undefined;
+    do {
+      const equipmentRes = await ddb.send(new ScanCommand({
+        TableName: FORCA_TABLE_NAME,
+        FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
+        ExpressionAttributeValues: { ':prefix': 'EQUIPMENT#', ':metadata': 'METADATA' },
+        ExclusiveStartKey: lastKey,
+      }));
+      for (const e of (equipmentRes.Items ?? []) as EquipmentItem[]) {
+        equipmentById.set(e.PK.replace('EQUIPMENT#', ''), {
+          name: e.name ?? '',
+          availableQuantity: (e.quantity ?? 0) - (e.outCount ?? 0),
+        });
+      }
+      lastKey = equipmentRes.LastEvaluatedKey;
+    } while (lastKey);
   }
 
   return { trainingTypesById, groupNameById, equipmentById, planEquipmentByPlanId, profileById };
@@ -105,6 +112,10 @@ export interface RosterEntryDetail {
 export interface SessionDetail {
   classId: string;
   date: string;
+  /** Scheduled end instant, denormalized from the recurring template's own
+   * endTime at materialization — see ClassItem.endDate's own comment. Only
+   * set when that template had an endTime configured. */
+  endDate: string | null;
   className: string;
   groupId: string;
   groupName: string;
@@ -123,6 +134,14 @@ export interface SessionDetail {
   testGroupId: string | null;
   testGroupName: string | null;
   testComponentIds: string[] | null;
+  isRunningSession: boolean;
+  /** Links this instance back to its RecurringSessionItem template (see
+   * lib/sessionInstance.ts's createSessionInstance()) — null for a one-off
+   * session created without a template. Lets the admin edit/delete sheets
+   * offer a "this and all future occurrences" scope, not just this one
+   * instance — see adminUpdateSessionInstanceSeries.ts/
+   * adminCancelSessionInstanceSeries.ts. */
+  recurringSessionId: string | null;
   roster: RosterEntryDetail[];
 }
 
@@ -157,15 +176,21 @@ export async function resolveSessionDetail(
   roster.sort((a, b) => a.name.localeCompare(b.name));
 
   const trainingType = session.trainingTypeId ? lookups.trainingTypesById.get(session.trainingTypeId) : undefined;
-  const requiredEquipment = (trainingType?.equipmentRequirements ?? []).map((r) => {
+  // An equipmentId with no EQUIPMENT# item (deleted from the catalog but
+  // still referenced by a Training Type / Workout Plan / override) is
+  // skipped everywhere below — otherwise it renders as a nameless
+  // "Missing — only 0 available" row that can never be satisfied.
+  const requiredEquipment: SessionDetail['requiredEquipment'] = [];
+  for (const r of trainingType?.equipmentRequirements ?? []) {
     const equipment = lookups.equipmentById.get(r.equipmentId);
-    return {
+    if (!equipment) continue;
+    requiredEquipment.push({
       id: r.equipmentId,
-      name: equipment?.name ?? '',
+      name: equipment.name,
       neededQuantity: r.mode === 'custom' ? (r.customQuantity ?? 0) : roster.length,
-      availableQuantity: equipment?.availableQuantity ?? 0,
-    };
-  });
+      availableQuantity: equipment.availableQuantity,
+    });
+  }
 
   // The assigned Workout Plan's own required equipment, on top of whatever
   // the Training Type already lists — same checkout-tracked pack list, not
@@ -181,11 +206,12 @@ export async function resolveSessionDetail(
     for (const [equipmentId, neededQuantity] of lookups.planEquipmentByPlanId.get(session.workoutPlanId) ?? []) {
       if (existingIds.has(equipmentId)) continue;
       const equipment = lookups.equipmentById.get(equipmentId);
+      if (!equipment) continue;
       requiredEquipment.push({
         id: equipmentId,
-        name: equipment?.name ?? '',
+        name: equipment.name,
         neededQuantity,
-        availableQuantity: equipment?.availableQuantity ?? 0,
+        availableQuantity: equipment.availableQuantity,
       });
     }
   }
@@ -206,11 +232,12 @@ export async function resolveSessionDetail(
         continue;
       }
       const equipment = lookups.equipmentById.get(equipmentId);
+      if (!equipment) continue;
       const added = {
         id: equipmentId,
-        name: equipment?.name ?? '',
+        name: equipment.name,
         neededQuantity: quantity,
-        availableQuantity: equipment?.availableQuantity ?? 0,
+        availableQuantity: equipment.availableQuantity,
       };
       requiredEquipment.push(added);
       requiredById.set(equipmentId, added);
@@ -220,6 +247,7 @@ export async function resolveSessionDetail(
   return {
     classId,
     date: session.date,
+    endDate: session.endDate ?? null,
     className: session.className ?? '',
     groupId: session.groupId ?? '',
     groupName: session.groupId ? (lookups.groupNameById.get(session.groupId) ?? '') : '',
@@ -242,6 +270,8 @@ export async function resolveSessionDetail(
     testGroupId: access.permissions.testsGrading === 'none' ? null : (session.testGroupId ?? null),
     testGroupName: access.permissions.testsGrading === 'none' ? null : (session.testGroupName ?? null),
     testComponentIds: access.permissions.testsGrading === 'none' ? null : (session.testComponentIds ?? null),
+    isRunningSession: session.isRunningSession === true,
+    recurringSessionId: session.recurringSessionId ?? null,
     roster,
   };
 }

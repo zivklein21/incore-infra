@@ -15,6 +15,161 @@ import { recordSystemAlert } from './alerts';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
+// Shared by both purchase paths for a FORCA subscription's first charge —
+// the fresh-hosted-page flow below (handleForcaSubscriptionOrderCallback,
+// which captures a brand new token via getHypToken) and the saved-card
+// flow (createForcaSubscriptionTokenPurchase.ts, which already has a token
+// and charges it directly, no hosted page). Both need the exact same
+// "create the recurring agreement + grant this month's access" outcome —
+// keeping it in one place means a fix here (like the #token reserved-
+// keyword aliasing below) can't silently drift between the two paths.
+export async function applyForcaSubscriptionCharge(
+  order: ForcaSubscriptionOrderItem,
+  orderId: string,
+  hypTransactionId: string,
+  ccode: number,
+  token: { token: string; expiryMonth: number; expiryYear: number } | null,
+  opts: { cacheOnPayerProfile: boolean; cardBrand?: string | null } = { cacheOnPayerProfile: true },
+): Promise<{ billingAgreementId?: string }> {
+  const nowIso = new Date().toISOString();
+  let billingAgreementId: string | undefined;
+
+  if (!token) {
+    console.warn(`[forcaSubscriptionPayments] no token for order ${orderId}, transId=${hypTransactionId} — no recurring agreement created`);
+    await recordSystemAlert({
+      severity: 'critical',
+      source: 'forcaSubscriptionPayments',
+      message: `FORCA subscription order ${orderId} charged successfully but card tokenization failed — no recurring agreement was created, needs manual follow-up with the parent`,
+      context: { orderId, userId: order.userId, payerUid: order.payerUid },
+    });
+  } else {
+    // A trainee re-subscribing (new group, or just re-buying) must never
+    // end up with two open agreements both billing monthly — cancel
+    // whatever old one is still active/frozen first, same "stale
+    // agreement supersession" INCORE's own hypPaymentCallback.ts does.
+    const staleRes = await ddb.send(new QueryCommand({
+      TableName: FORCA_TABLE_NAME,
+      IndexName: 'GSI1',
+      KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
+      FilterExpression: '#status IN (:active, :frozen)',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':pk': `MEMBER#${order.userId}`, ':prefix': 'AGREEMENT#', ':active': 'active', ':frozen': 'frozen' },
+    }));
+    const staleAgreements = (staleRes.Items ?? []) as ForcaBillingAgreementItem[];
+    await Promise.all(staleAgreements.map((stale) =>
+      ddb.send(new UpdateCommand({
+        TableName: FORCA_TABLE_NAME,
+        Key: { PK: stale.PK, SK: stale.SK },
+        // `token` is a DynamoDB reserved keyword — must be aliased or this
+        // always fails with a ValidationException (see the identical fix
+        // in lib/forcaBillingAgreements.ts's setForcaAgreementStatus).
+        UpdateExpression: 'SET #status = :cancelled, updatedAt = :now, #token = :empty REMOVE GSI3PK, GSI3SK, nextChargeDate',
+        ExpressionAttributeNames: { '#status': 'status', '#token': 'token' },
+        ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': nowIso, ':empty': '' },
+      })),
+    ));
+
+    const agreementId = randomUUID();
+    billingAgreementId = agreementId;
+    const nextChargeDate = firstOfNextMonth(new Date());
+
+    const agreement: ForcaBillingAgreementItem = {
+      PK: `FORCAAGREEMENT#${agreementId}`,
+      SK: 'METADATA',
+      GSI1PK: `MEMBER#${order.userId}`,
+      GSI1SK: `AGREEMENT#${agreementId}`,
+      GSI2PK: 'FORCAAGREEMENT',
+      GSI2SK: `${nowIso}#${agreementId}`,
+      GSI3PK: 'FORCA_AGREEMENT_STATUS#active',
+      GSI3SK: nextChargeDate.toISOString(),
+      agreementId,
+      userId: order.userId,
+      payerUid: order.payerUid ?? order.userId,
+      payerName: order.payerName ?? '',
+      status: 'active',
+      subscriptionProductId: order.subscriptionProductId,
+      productName: order.productName,
+      groupId: order.groupId,
+      groupName: order.groupName,
+      token: token.token,
+      tokenExpiryMonth: token.expiryMonth,
+      tokenExpiryYear: token.expiryYear,
+      amountPerCharge: order.amount,
+      nextChargeDate: nextChargeDate.toISOString(),
+      consecutiveFailures: 0,
+      sourceOrderId: orderId,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: agreement }));
+
+    if (opts.cacheOnPayerProfile) {
+      // Cache the card on the PAYER's own profile (she owns the card, even
+      // though the agreement itself is keyed to the trainee) — reference/
+      // display only; each agreement's own token is what's actually charged.
+      // Skipped for the saved-card path: the card is already cached there,
+      // that's precisely why this charge had a token to use.
+      const payerUid = order.payerUid ?? order.userId;
+      const payerRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${payerUid}`, SK: 'PROFILE' } }));
+      const currentPayment = (payerRes.Item as MemberProfileItem | undefined)?.payment;
+      await ddb.send(new UpdateCommand({
+        TableName: FORCA_TABLE_NAME,
+        Key: { PK: `MEMBER#${payerUid}`, SK: 'PROFILE' },
+        UpdateExpression: 'SET payment = :p',
+        ExpressionAttributeValues: {
+          ':p': {
+            ...currentPayment,
+            hypToken: token.token,
+            hypTokenExpiryMonth: token.expiryMonth,
+            hypTokenExpiryYear: token.expiryYear,
+            hypTokenUpdatedAt: nowIso,
+            hasSavedCard: true,
+            ...(opts.cardBrand ? { cardBrand: opts.cardBrand } : {}),
+          },
+        },
+      }));
+    }
+  }
+
+  // ── Grant access — group mapping + the same membership-window shape
+  // adminGrantForcaMembership.ts writes, see GroupItem's doc comment. This
+  // happens whether or not tokenization above succeeded: the parent paid
+  // for this month, so the trainee gets it regardless.
+  await ddb.send(new UpdateCommand({
+    TableName: FORCA_TABLE_NAME,
+    Key: { PK: `MEMBER#${order.userId}`, SK: 'PROFILE' },
+    // identity is a DynamoDB reserved keyword — see adminAssignGroup.ts's
+    // #identity alias for the same issue.
+    UpdateExpression: 'SET #identity.groupId = :gid, membership = :membership',
+    ExpressionAttributeNames: { '#identity': 'identity' },
+    ExpressionAttributeValues: {
+      ':gid': order.groupId,
+      ':membership': {
+        title: order.groupName,
+        start: nowIso,
+        end: endOfMonth(new Date()).toISOString(),
+        grantedBy: billingAgreementId ? `subscription:${billingAgreementId}` : `subscription:${orderId}`,
+        grantedAt: nowIso,
+      },
+    },
+  }));
+
+  await ddb.send(new UpdateCommand({
+    TableName: FORCA_TABLE_NAME,
+    Key: { PK: `FORCASUBORDER#${orderId}`, SK: 'METADATA' },
+    UpdateExpression: 'SET #status = :completed, hypTransactionId = :tid, hypCCode = :ccode, verifiedAt = :now, updatedAt = :now'
+      + (billingAgreementId ? ', billingAgreementId = :bid' : ''),
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: {
+      ':completed': 'completed', ':tid': hypTransactionId, ':ccode': ccode, ':now': nowIso,
+      ...(billingAgreementId ? { ':bid': billingAgreementId } : {}),
+    },
+  }));
+
+  console.log(`[forcaSubscriptionPayments] order=${orderId} user=${order.userId} completed transId=${hypTransactionId} agreement=${billingAgreementId ?? 'none'}`);
+  return { billingAgreementId };
+}
+
 export async function handleForcaSubscriptionOrderCallback(
   orderId: string,
   event: APIGatewayProxyEventV2,
@@ -68,136 +223,9 @@ export async function handleForcaSubscriptionOrderCallback(
     // agreement can be created, so this is flagged for manual admin
     // follow-up rather than silently dropped.
     const token = await getHypToken(hypTransactionId);
-    let billingAgreementId: string | undefined;
+    const cardBrand = token ? await inquireCardBrand(hypTransactionId) : null;
 
-    if (!token) {
-      console.warn(`[forcaSubscriptionPayments] getToken failed for order ${orderId}, transId=${hypTransactionId} — no recurring agreement created`);
-      await recordSystemAlert({
-        severity: 'critical',
-        source: 'forcaSubscriptionPayments',
-        message: `FORCA subscription order ${orderId} charged successfully but card tokenization failed — no recurring agreement was created, needs manual follow-up with the parent`,
-        context: { orderId, userId: order.userId, payerUid: order.payerUid },
-      });
-    } else {
-      const cardBrand = await inquireCardBrand(hypTransactionId);
-
-      // A trainee re-subscribing (new group, or just re-buying) must never
-      // end up with two open agreements both billing monthly — cancel
-      // whatever old one is still active/frozen first, same "stale
-      // agreement supersession" INCORE's own hypPaymentCallback.ts does.
-      const staleRes = await ddb.send(new QueryCommand({
-        TableName: FORCA_TABLE_NAME,
-        IndexName: 'GSI1',
-        KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
-        FilterExpression: '#status IN (:active, :frozen)',
-        ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':pk': `MEMBER#${order.userId}`, ':prefix': 'AGREEMENT#', ':active': 'active', ':frozen': 'frozen' },
-      }));
-      const staleAgreements = (staleRes.Items ?? []) as ForcaBillingAgreementItem[];
-      await Promise.all(staleAgreements.map((stale) =>
-        ddb.send(new UpdateCommand({
-          TableName: FORCA_TABLE_NAME,
-          Key: { PK: stale.PK, SK: stale.SK },
-          UpdateExpression: 'SET #status = :cancelled, updatedAt = :now, token = :empty REMOVE GSI3PK, GSI3SK, nextChargeDate',
-          ExpressionAttributeNames: { '#status': 'status' },
-          ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': nowIso, ':empty': '' },
-        })),
-      ));
-
-      const agreementId = randomUUID();
-      billingAgreementId = agreementId;
-      const nextChargeDate = firstOfNextMonth(new Date());
-
-      const agreement: ForcaBillingAgreementItem = {
-        PK: `FORCAAGREEMENT#${agreementId}`,
-        SK: 'METADATA',
-        GSI1PK: `MEMBER#${order.userId}`,
-        GSI1SK: `AGREEMENT#${agreementId}`,
-        GSI2PK: 'FORCAAGREEMENT',
-        GSI2SK: `${nowIso}#${agreementId}`,
-        GSI3PK: 'FORCA_AGREEMENT_STATUS#active',
-        GSI3SK: nextChargeDate.toISOString(),
-        agreementId,
-        userId: order.userId,
-        payerUid: order.payerUid ?? order.userId,
-        payerName: order.payerName ?? '',
-        status: 'active',
-        subscriptionProductId: order.subscriptionProductId,
-        productName: order.productName,
-        groupId: order.groupId,
-        groupName: order.groupName,
-        token: token.token,
-        tokenExpiryMonth: token.expiryMonth,
-        tokenExpiryYear: token.expiryYear,
-        amountPerCharge: order.amount,
-        nextChargeDate: nextChargeDate.toISOString(),
-        consecutiveFailures: 0,
-        sourceOrderId: orderId,
-        createdAt: nowIso,
-        updatedAt: nowIso,
-      };
-      await ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item: agreement }));
-
-      // Cache the card on the PAYER's own profile (she owns the card, even
-      // though the agreement itself is keyed to the trainee) — reference/
-      // display only; each agreement's own token is what's actually charged.
-      const payerUid = order.payerUid ?? order.userId;
-      const payerRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${payerUid}`, SK: 'PROFILE' } }));
-      const currentPayment = (payerRes.Item as MemberProfileItem | undefined)?.payment;
-      await ddb.send(new UpdateCommand({
-        TableName: FORCA_TABLE_NAME,
-        Key: { PK: `MEMBER#${payerUid}`, SK: 'PROFILE' },
-        UpdateExpression: 'SET payment = :p',
-        ExpressionAttributeValues: {
-          ':p': {
-            ...currentPayment,
-            hypToken: token.token,
-            hypTokenExpiryMonth: token.expiryMonth,
-            hypTokenExpiryYear: token.expiryYear,
-            hypTokenUpdatedAt: nowIso,
-            hasSavedCard: true,
-            ...(cardBrand ? { cardBrand } : {}),
-          },
-        },
-      }));
-    }
-
-    // ── Grant access — group mapping + the same membership-window shape
-    // adminGrantForcaMembership.ts writes, see GroupItem's doc comment. This
-    // happens whether or not tokenization above succeeded: the parent paid
-    // for this month, so the trainee gets it regardless.
-    await ddb.send(new UpdateCommand({
-      TableName: FORCA_TABLE_NAME,
-      Key: { PK: `MEMBER#${order.userId}`, SK: 'PROFILE' },
-      // identity is a DynamoDB reserved keyword — see adminAssignGroup.ts's
-      // #identity alias for the same issue.
-      UpdateExpression: 'SET #identity.groupId = :gid, membership = :membership',
-      ExpressionAttributeNames: { '#identity': 'identity' },
-      ExpressionAttributeValues: {
-        ':gid': order.groupId,
-        ':membership': {
-          title: order.groupName,
-          start: nowIso,
-          end: endOfMonth(new Date()).toISOString(),
-          grantedBy: billingAgreementId ? `subscription:${billingAgreementId}` : `subscription:${orderId}`,
-          grantedAt: nowIso,
-        },
-      },
-    }));
-
-    await ddb.send(new UpdateCommand({
-      TableName: FORCA_TABLE_NAME,
-      Key: orderKey,
-      UpdateExpression: 'SET #status = :completed, hypTransactionId = :tid, hypCCode = :ccode, verifiedAt = :now, updatedAt = :now'
-        + (billingAgreementId ? ', billingAgreementId = :bid' : ''),
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':completed': 'completed', ':tid': hypTransactionId, ':ccode': ccode, ':now': nowIso,
-        ...(billingAgreementId ? { ':bid': billingAgreementId } : {}),
-      },
-    }));
-
-    console.log(`[forcaSubscriptionPayments] order=${orderId} user=${order.userId} completed transId=${hypTransactionId} agreement=${billingAgreementId ?? 'none'}`);
+    await applyForcaSubscriptionCharge(order, orderId, hypTransactionId, ccode, token, { cacheOnPayerProfile: true, cardBrand });
     return redirectTo('success');
   } catch (err: any) {
     console.error(`[forcaSubscriptionPayments] error processing order ${orderId}:`, err);

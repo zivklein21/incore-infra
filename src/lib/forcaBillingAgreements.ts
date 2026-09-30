@@ -265,8 +265,10 @@ export async function setForcaAgreementStatus(
     await ddb.send(new UpdateCommand({
       TableName: FORCA_TABLE_NAME,
       Key: key,
-      UpdateExpression: 'SET #status = :status, updatedAt = :now, token = :empty REMOVE GSI3PK, GSI3SK, nextChargeDate',
-      ExpressionAttributeNames: { '#status': 'status' },
+      // `token` is a DynamoDB reserved keyword — must be aliased or every
+      // cancel here fails with a ValidationException.
+      UpdateExpression: 'SET #status = :status, updatedAt = :now, #token = :empty REMOVE GSI3PK, GSI3SK, nextChargeDate',
+      ExpressionAttributeNames: { '#status': 'status', '#token': 'token' },
       ExpressionAttributeValues: { ':status': status, ':now': nowIso, ':empty': '' },
     }));
   }

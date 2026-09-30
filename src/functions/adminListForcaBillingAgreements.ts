@@ -36,7 +36,24 @@ export async function handler(
     lastKey = res.LastEvaluatedKey;
   } while (lastKey);
 
-  const agreements = await Promise.all(items.map(async (a) => {
+  // One row per member, not one per agreement ever created — re-subscribing
+  // cancels the old agreement and creates a brand new one (see
+  // forcaSubscriptionPayments.ts's stale-agreement supersession), so a
+  // member with any history otherwise shows up multiple times, her old
+  // cancelled agreements cluttering the list alongside her current one.
+  // `items` is already newest-first (GSI2SK sorts by creation time,
+  // ScanIndexForward: false), so keeping just the first one seen per
+  // userId always keeps her most recent agreement — which, since a new
+  // agreement always supersedes/cancels whatever came before it, is also
+  // always her current one.
+  const seenMembers = new Set<string>();
+  const latestPerMember = items.filter((a) => {
+    if (seenMembers.has(a.userId)) return false;
+    seenMembers.add(a.userId);
+    return true;
+  });
+
+  const agreements = await Promise.all(latestPerMember.map(async (a) => {
     const memberRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${a.userId}`, SK: 'PROFILE' } }));
     const member = memberRes.Item as MemberProfileItem | undefined;
     const memberName = member?.identity?.name || member?.name || 'Unknown';

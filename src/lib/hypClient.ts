@@ -151,7 +151,12 @@ export interface CreatePaymentPageParams {
   clientLName?: string;
   email?: string;
   cell?: string;
-  userId: string;
+  // Omit when the payer has no real ID number on file rather than pass a
+  // fake-looking placeholder — see createForcaSubscriptionPaymentPage.ts's
+  // own comment, the one caller that actually needs this (a FORCA parent
+  // never fills a Health Declaration, so getMemberIdNumber(payer) is always
+  // empty for her).
+  userId?: string;
   info?: string;
   pageLang?: 'HEB' | 'ENG';
   // See receiptParams() above — opts into HYP emailing an automatic invoice.
@@ -182,7 +187,7 @@ export async function createHypSignedPaymentUrl(params: CreatePaymentPageParams)
     ...(params.cell ? { cell: params.cell } : {}),
     ...(params.info ? { Info: params.info } : {}),
     ...receiptParams(params.email, params.sendReceipt),
-    UserId: params.userId,
+    ...(params.userId ? { UserId: params.userId } : {}),
     Tash: params.tash,
     ...(params.tash > 1 ? { TashType: params.tashType ?? 1 } : {}),
     Coin: 1,

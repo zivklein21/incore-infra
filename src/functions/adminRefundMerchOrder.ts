@@ -50,7 +50,9 @@ export async function handler(
   await ddb.send(new UpdateCommand({
     TableName: FORCA_TABLE_NAME,
     Key: key,
-    UpdateExpression: 'SET #status = :refunded, refundedAmount = :amt, refundedAt = :now, refundedBy = :by, updatedAt = :now',
+    // REMOVE GSI3 — a refunded order must drop off the coach's
+    // pending-delivery list (getPendingMerchDeliveries.ts).
+    UpdateExpression: 'SET #status = :refunded, refundedAmount = :amt, refundedAt = :now, refundedBy = :by, updatedAt = :now REMOVE GSI3PK, GSI3SK',
     ExpressionAttributeNames: { '#status': 'status' },
     ExpressionAttributeValues: { ':refunded': 'refunded', ':amt': refundAmount, ':now': new Date().toISOString(), ':by': callerUid },
   }));

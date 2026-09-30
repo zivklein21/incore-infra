@@ -15,6 +15,64 @@ import { recordSystemAlert } from './alerts';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
+// Sparse GSI3 partition for completed-but-not-yet-handed-over orders — see
+// entities.ts's MerchOrderItem deliveryStatus comment.
+export const MERCH_PENDING_DELIVERY_GSI3PK = 'FORCA_MERCH_DELIVERY#pending';
+
+// Shared by both purchase paths for a merch order — the hosted-page flow
+// below (handleMerchOrderCallback) and the saved-card flow
+// (createForcaMerchTokenPurchase.ts, no hosted page at all). Both need the
+// exact same "decrement stock + mark completed + enter the pending-delivery
+// index" outcome once HYP has genuinely charged the card.
+export async function applyMerchOrderCharge(
+  order: MerchOrderItem,
+  orderId: string,
+  hypTransactionId: string,
+  ccode: number,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const orderKey = { PK: `MERCHORDER#${orderId}`, SK: 'METADATA' };
+
+  // One decrement per line item — a cart order can span several
+  // different products/variants (see entities.ts's MerchOrderItem).
+  const failedItems = (await Promise.all(order.items.map(async (item) => {
+    const ok = await decrementVariantStock(item.merchProductId, item.merchVariantId, item.quantity);
+    return ok ? null : item;
+  }))).filter((item) => item !== null);
+
+  if (failedItems.length > 0) {
+    // Payment already succeeded with HYP at this point — never leave that
+    // silently untracked. An admin needs to manually resolve this (refund
+    // or restock elsewhere), same severity as this file's other failure
+    // paths that page admins. One alert for the whole order, listing every
+    // affected line item, rather than one alert per item.
+    await recordSystemAlert({
+      severity: 'critical',
+      source: 'merchPayments',
+      message: `Merch order ${orderId} charged successfully but ${failedItems.length} line item(s) could not be decremented (sold out or deleted) — needs manual resolution`,
+      context: { orderId, userId: order.userId, failedItems },
+    });
+  }
+
+  // Also enters the coach's pending-delivery index (entities.ts's
+  // MerchOrderItem GSI3) — the item still has to be physically handed
+  // over at a session, see getPendingMerchDeliveries.ts.
+  await ddb.send(new UpdateCommand({
+    TableName: FORCA_TABLE_NAME,
+    Key: orderKey,
+    UpdateExpression: 'SET #status = :completed, hypTransactionId = :tid, hypCCode = :ccode, verifiedAt = :now, updatedAt = :now, deliveryStatus = :pendingDelivery, GSI3PK = :g3pk, GSI3SK = :g3sk',
+    ExpressionAttributeNames: { '#status': 'status' },
+    ExpressionAttributeValues: {
+      ':completed': 'completed', ':tid': hypTransactionId, ':ccode': ccode, ':now': nowIso,
+      ':pendingDelivery': 'pending',
+      ':g3pk': MERCH_PENDING_DELIVERY_GSI3PK,
+      ':g3sk': `${order.userId}#${order.createdAt}#${orderId}`,
+    },
+  }));
+
+  console.log(`[merchPayments] order=${orderId} user=${order.userId} completed transId=${hypTransactionId}`);
+}
+
 export async function handleMerchOrderCallback(
   orderId: string,
   event: APIGatewayProxyEventV2,
@@ -61,37 +119,7 @@ export async function handleMerchOrderCallback(
     }
 
     const hypTransactionId = fields.Id ?? q.Id ?? '';
-
-    // One decrement per line item — a cart order can span several
-    // different products/variants (see entities.ts's MerchOrderItem).
-    const failedItems = (await Promise.all(order.items.map(async (item) => {
-      const ok = await decrementVariantStock(item.merchProductId, item.merchVariantId, item.quantity);
-      return ok ? null : item;
-    }))).filter((item) => item !== null);
-
-    if (failedItems.length > 0) {
-      // Payment already succeeded with HYP at this point — never leave that
-      // silently untracked. An admin needs to manually resolve this (refund
-      // or restock elsewhere), same severity as this file's other failure
-      // paths that page admins. One alert for the whole order, listing every
-      // affected line item, rather than one alert per item.
-      await recordSystemAlert({
-        severity: 'critical',
-        source: 'merchPayments',
-        message: `Merch order ${orderId} charged successfully but ${failedItems.length} line item(s) could not be decremented (sold out or deleted) — needs manual resolution`,
-        context: { orderId, userId: order.userId, failedItems },
-      });
-    }
-
-    await ddb.send(new UpdateCommand({
-      TableName: FORCA_TABLE_NAME,
-      Key: orderKey,
-      UpdateExpression: 'SET #status = :completed, hypTransactionId = :tid, hypCCode = :ccode, verifiedAt = :now, updatedAt = :now',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':completed': 'completed', ':tid': hypTransactionId, ':ccode': ccode, ':now': nowIso },
-    }));
-
-    console.log(`[merchPayments] order=${orderId} user=${order.userId} completed transId=${hypTransactionId}`);
+    await applyMerchOrderCharge(order, orderId, hypTransactionId, ccode);
     return redirectTo('success');
   } catch (err: any) {
     console.error(`[merchPayments] error processing order ${orderId}:`, err);

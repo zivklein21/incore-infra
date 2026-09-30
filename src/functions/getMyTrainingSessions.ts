@@ -74,6 +74,7 @@ export async function handler(
     return {
       classId: r.classId,
       date: session.date,
+      endDate: session.endDate ?? null,
       className: session.className ?? '',
       location: session.location ?? null,
       coachName: session.coachName ?? null,

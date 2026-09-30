@@ -1,10 +1,10 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, groupInAccess } from '../lib/coachAccess';
 import { resolveMemberProfile } from '../lib/memberLookup';
-import type { ExerciseLogEntryItem } from '../lib/entities';
+import type { ExerciseDefinitionItem, ExerciseLogEntryItem } from '../lib/entities';
 
 // GET or POST /getMemberExerciseHistory
 // Query/body: { memberId: string, exerciseId?: string }
@@ -58,5 +58,32 @@ export async function handler(
     }))
     .sort((a, b) => a.loggedAt.localeCompare(b.loggedAt));
 
-  return json(200, { entries });
+  // Catalog info (category, bandLevels) for every exercise she has an entry
+  // for — entries only carry a denormalized name/measurementType snapshot
+  // from log time, not the catalog's category/bandLevels, so the admin/coach
+  // edit UI (band-level pill selector, muscle-group grouping) needs this
+  // looked up separately. Bounded by the member's own distinct exercise
+  // count, not the whole catalog.
+  const exerciseIds = [...new Set(entries.map((e) => e.exerciseId))];
+  const exerciseItems = await Promise.all(
+    exerciseIds.map((id) => ddb.send(new GetCommand({
+      TableName: FORCA_TABLE_NAME,
+      Key: { PK: `EXERCISE#${id}`, SK: 'METADATA' },
+    }))),
+  );
+  const exercises = exerciseItems
+    .map((res, idx) => {
+      const item = res.Item as ExerciseDefinitionItem | undefined;
+      if (!item) return null;
+      return {
+        id: exerciseIds[idx],
+        name: item.name,
+        category: item.category ?? '',
+        measurementType: item.measurementType,
+        bandLevels: item.bandLevels ?? [],
+      };
+    })
+    .filter((e): e is NonNullable<typeof e> => e !== null);
+
+  return json(200, { entries, exercises });
 }

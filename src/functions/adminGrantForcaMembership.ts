@@ -48,6 +48,9 @@ export async function handler(
   const res = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: key }));
   const profile = res.Item as MemberProfileItem | undefined;
   if (!profile) return json(404, { error: 'member_not_found' });
+  // A parent_only account never attends sessions herself — the membership
+  // belongs on each linked child's own profile instead.
+  if (profile.identity?.accountType === 'parent_only') return json(400, { error: 'parent_account_not_allowed' });
 
   const membership = {
     title,

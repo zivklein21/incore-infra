@@ -4,6 +4,8 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { HypOrderItem } from '../lib/entities';
 import { verifyHypTransaction } from '../lib/hypClient';
 import { markOrderFailedAndNotifyAdmins } from '../lib/hypPaymentGrant';
+import { handleMerchOrderCallback } from '../lib/merchPayments';
+import { handleForcaSubscriptionOrderCallback } from '../lib/forcaSubscriptionPayments';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
 
@@ -29,6 +31,16 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (!orderId) {
     console.error('[hypPaymentFailureCallback] missing Order param in redirect');
     return redirectTo('error');
+  }
+
+  // Same dispatch-by-prefix as hypPaymentSuccessCallback.ts's own — see its
+  // comment. A merch/FORCA-subscription order that gets declined lands on
+  // this Failed-Transaction URL just as much as a legacy INCORE one does.
+  if (orderId.startsWith('merch-')) {
+    return handleMerchOrderCallback(orderId, event);
+  }
+  if (orderId.startsWith('forcasub-')) {
+    return handleForcaSubscriptionOrderCallback(orderId, event);
   }
 
   const orderKey = { PK: `ORDER#${orderId}`, SK: 'METADATA' };

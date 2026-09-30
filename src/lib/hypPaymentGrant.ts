@@ -219,7 +219,9 @@ export async function applyHypPaymentSuccess(
       ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: a.PK, SK: a.SK },
-        UpdateExpression: 'SET token = :t, tokenExpiryMonth = :em, tokenExpiryYear = :ey, updatedAt = :now',
+        // `token` is a DynamoDB reserved keyword — must be aliased.
+        UpdateExpression: 'SET #token = :t, tokenExpiryMonth = :em, tokenExpiryYear = :ey, updatedAt = :now',
+        ExpressionAttributeNames: { '#token': 'token' },
         ExpressionAttributeValues: { ':t': token.token, ':em': token.expiryMonth, ':ey': token.expiryYear, ':now': nowIso },
       })),
     ));
