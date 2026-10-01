@@ -4,7 +4,7 @@
 import { ScanCommand, GetCommand, UpdateCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { MembershipItem, SupportInquiryItem } from '../lib/entities';
-import { monthKey, endOfMonth, getEffectiveMonthlyLimit } from '../lib/entities';
+import { monthKey, endOfMonth } from '../lib/entities';
 
 export async function handler(): Promise<void> {
   const now = new Date();
@@ -52,9 +52,12 @@ export async function handler(): Promise<void> {
       if (!fresh || fresh.status !== 'ACTIVE') { skipped++; continue; }
       if (fresh.monthEndProcessed?.[currentMonth]) { skipped++; continue; }
 
-      const monthlyLimit = fresh.monthlyLimit ?? 0;
-      const totalUsed = fresh.usage?.totalMonthlyUsed ?? 0;
-      const remaining = Math.max(0, getEffectiveMonthlyLimit(fresh) - totalUsed);
+      // Month-end no longer turns unused sessions into credit — that happens
+      // only in the Thursday job (weekendSessionsRoutine), once per week, so a
+      // week spanning the month end (e.g. Sun 27/9–Sat 3/10) is settled once,
+      // on its Thursday, and never twice. Usage is left as-is: the Thursday
+      // job still needs it to settle that last week. Sessions left on a
+      // closed membership are simply gone (shown as 0 left in the app).
       const newMonthEndProcessed = { ...fresh.monthEndProcessed, [currentMonth]: true };
 
       // A custom-duration membership (e.g. a 6-week admin migration bridge)
@@ -70,50 +73,37 @@ export async function handler(): Promise<void> {
       if (stillActive) {
         // Condition B — keep ACTIVE. There's no fresh MembershipItem created
         // for it next month like a normal subscription gets (it's the same
-        // item for its whole custom period), so its own usage counters are
-        // reset in place instead, same as a new month's item would start.
-        memUpdateExpr = 'SET monthEndProcessed = :mep, updatedAt = :now, #usage = :freshUsage, weeklyUsage = :emptyWeekly';
-        memValues[':freshUsage'] = { totalMonthlyUsed: 0, legalCancellationsUsed: 0, lateCancellationsUsed: 0 };
-        memValues[':emptyWeekly'] = {};
+        // item for its whole custom period), so its monthly counters are reset
+        // in place instead. weeklyUsage is kept: weeks are keyed by their own
+        // date, and a week spanning the month end still needs last month's part.
+        memUpdateExpr = 'SET monthEndProcessed = :mep, updatedAt = :now, #usage = :freshUsage';
+        memValues[':freshUsage'] = { totalMonthlyUsed: 0, legalCancellationsUsed: 0, lateCancellationsUsed: 0, rolledToCredit: 0 };
+        rolledOver++;
       } else if (isCustomMigration) {
         // Condition A — past its own endDate (or missing one): close it out.
-        memUpdateExpr = 'SET monthEndProcessed = :mep, #status = :expired, updatedAt = :now, #usage.totalMonthlyUsed = :cap';
+        memUpdateExpr = 'SET monthEndProcessed = :mep, #status = :expired, updatedAt = :now';
         memValues[':expired'] = 'expired';
-        memValues[':cap'] = monthlyLimit;
+        locked++;
       } else {
-        // Regular subscription — unchanged.
-        memUpdateExpr = 'SET monthEndProcessed = :mep, updatedAt = :now, #usage.totalMonthlyUsed = :cap';
-        memValues[':cap'] = monthlyLimit;
+        // Regular subscription — closed by billing (renewal replaces it, a
+        // failed charge expires it); here it's only marked processed.
+        memUpdateExpr = 'SET monthEndProcessed = :mep, updatedAt = :now';
+        locked++;
       }
 
+      const names: Record<string, string> = {};
+      if (memUpdateExpr.includes('#status')) names['#status'] = 'status';
+      if (memUpdateExpr.includes('#usage')) names['#usage'] = 'usage';
       const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [{
         Update: {
           TableName: TABLE_NAME,
           Key: { PK: mem.PK, SK: mem.SK },
           UpdateExpression: memUpdateExpr,
-          ExpressionAttributeNames: { '#status': 'status', '#usage': 'usage' },
+          // DynamoDB rejects unused names/values — only what this branch uses.
+          ...(Object.keys(names).length ? { ExpressionAttributeNames: names } : {}),
           ExpressionAttributeValues: memValues,
         },
       }];
-
-      if (remaining > 0) {
-        transactItems.push({
-          Update: {
-            TableName: TABLE_NAME,
-            Key: { PK: `MEMBER#${memberId}`, SK: 'WALLET#PRIMARY' },
-            UpdateExpression: 'ADD extraPunches :remaining SET updatedAt = :now',
-            ExpressionAttributeValues: { ':remaining': remaining, ':now': nowIso },
-          },
-        });
-        rolledOver++;
-        if (stillActive) {
-          console.log(`[monthEndRollover] Membership ${mem.membershipId} remains ACTIVE. Rollover granted (${remaining} slots), cancellation counters reset.`);
-        } else {
-          console.log(`[monthEndRollover] ${memberId}: rolling over ${remaining} unused slots (used ${totalUsed}/${monthlyLimit})`);
-        }
-      } else {
-        locked++;
-      }
 
       await ddb.send(new TransactWriteCommand({ TransactItems: transactItems }));
 
@@ -136,7 +126,7 @@ export async function handler(): Promise<void> {
     }
   }
 
-  console.log(`[monthEndRollover] month=${currentMonth} done — rolledOver=${rolledOver} locked=${locked} skipped=${skipped} errors=${errors}`);
+  console.log(`[monthEndRollover] month=${currentMonth} done — continuing=${rolledOver} closed=${locked} skipped=${skipped} errors=${errors}`);
 
   // Auto-close all open support inquiries at month end.
   try {

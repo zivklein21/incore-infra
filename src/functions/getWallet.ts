@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { WalletItem, PunchCardItem } from '../lib/entities';
+import { creditExpiries } from '../lib/walletCredit';
 
 // GET or POST /getWallet?memberId=xxx
 // Auth: Cognito JWT. Defaults to the caller's own wallet; passing a
@@ -49,5 +50,5 @@ export async function handler(
     source: c.source,
   }));
 
-  return json(200, { extraPunches: wallet?.extraPunches ?? 0, adminPunchCards });
+  return json(200, { extraPunches: wallet?.extraPunches ?? 0, creditExpiries: creditExpiries(wallet), adminPunchCards });
 }

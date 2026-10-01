@@ -1,5 +1,4 @@
-import { GetCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from './dynamo';
+import { findRegistrationMembership } from './registrationMembership';
 import type { ClassItem, MembershipItem, RegistrationItem } from './entities';
 
 export const CANCEL_WINDOW_HOURS = 24;
@@ -42,11 +41,9 @@ export async function evaluateCancellationPolicy(
   let allowedLegal = 2;
 
   if (!isWalletSource && regData.membershipId) {
-    const membershipRes = await ddb.send(new GetCommand({
-      TableName: TABLE_NAME,
-      Key: { PK: `MEMBER#${uid}`, SK: `MEMBERSHIP#${regData.targetMonth}#${regData.membershipId}` },
-    }));
-    const membership = membershipRes.Item as MembershipItem | undefined;
+    // By the membership's own filing month — a bridge filed under an earlier
+    // month was never found here, so every cancellation of it was "late".
+    const membership: MembershipItem | undefined = (await findRegistrationMembership(uid, regData))?.item;
     if (membership) {
       allowedLegal = membership.allowedLegalCancellationsPerMonth ?? 2;
       isQuotaOk = (membership.usage?.legalCancellationsUsed ?? 0) < allowedLegal;

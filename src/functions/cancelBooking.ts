@@ -3,10 +3,12 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import type { ClassItem, RegistrationItem, MemberProfileItem, MembershipItem } from '../lib/entities';
+import type { ClassItem, RegistrationItem, MemberProfileItem } from '../lib/entities';
 import { evaluateCancellationPolicy } from '../lib/cancellationPolicy';
 import { notifyAdmins } from '../lib/adminNotify';
 import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
+import { findRegistrationMembership } from '../lib/registrationMembership';
+import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
 
 // POST /cancelBooking
 // Body: { classId: string, cancellationReason?: string }
@@ -16,13 +18,10 @@ import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
 // rationale (evaluateCancellationPolicy in lib/cancellationPolicy.ts is the
 // ported version, shared with cancelPolicyPreview).
 //
-// NOTE ported as-is from the original: a LEGAL cancellation credits
-// wallet.extraPunches +1 unconditionally (even for MEMBERSHIP-sourced
-// bookings, on top of restoring the membership slot), and for ADMIN_CARD
-// specifically ALSO credits the originating punch card +1 — i.e. both the
-// flat wallet counter and the card get credited. That looks like it may be
-// an intentional "bonus" or a pre-existing double-credit; flagged, not
-// changed, per the instruction to preserve business logic exactly.
+// A LEGAL cancellation refunds the session to its own source only
+// (membership slot, punch card, or wallet credit). The original port also
+// credited wallet.extraPunches +1 on every legal cancellation, on top of
+// restoring the source — a double credit, removed 2026-10.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -58,9 +57,6 @@ export async function handler(
   const policy = await evaluateCancellationPolicy(uid, regData, classItem);
   const cancelStatus = policy.isLegal ? 'LEGALLY_CANCELLED' : 'LATE_CANCELLED';
   const isMembershipBased = regData.consumedFrom === 'MEMBERSHIP' || regData.consumedFrom === 'FUTURE_SUBSCRIPTION';
-  const membershipKey = regData.membershipId
-    ? { PK: `MEMBER#${uid}`, SK: `MEMBERSHIP#${regData.targetMonth}#${regData.membershipId}` }
-    : null;
 
   // Pre-check whether the specific admin card still exists, so the credit
   // step below can be included/omitted the same way the original's
@@ -79,11 +75,18 @@ export async function handler(
   // ValidationException that aborts the WHOLE transaction, blocking the
   // member from cancelling their own booking at all. Skip the membership
   // counter update rather than let a bookkeeping field take down the cancel.
+  //
+  // The membership is looked up by its own filing month, not the booking's —
+  // see findRegistrationMembership (a cross-month migration bridge otherwise
+  // never gets its slot back).
+  let membershipKey: { PK: string; SK: string } | null = null;
   let membershipUsable = false;
-  if (membershipKey && isMembershipBased) {
-    const membershipRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: membershipKey }));
-    const membership = membershipRes.Item as MembershipItem | undefined;
-    membershipUsable = !!membership?.usage && !!membership.weeklyUsage;
+  if (isMembershipBased) {
+    const found = await findRegistrationMembership(uid, regData);
+    if (found) {
+      membershipKey = found.key;
+      membershipUsable = !!found.item.usage && !!found.item.weeklyUsage;
+    }
   }
 
   const nowIso = new Date().toISOString();
@@ -139,14 +142,18 @@ export async function handler(
       });
     }
 
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: walletKey,
-        UpdateExpression: 'ADD extraPunches :one SET updatedAt = :now',
-        ExpressionAttributeValues: { ':one': 1, ':now': nowIso },
-      },
-    });
+    // The session goes back to where it was paid from — and only there. A
+    // membership slot is NOT also credited to the wallet: if it isn't made
+    // up, the Thursday job rolls it into credit (within the monthly cap).
+    // The wallet only gets it back when the wallet paid for it, or when the
+    // punch card it came from has since been deleted. ADMIN_CARD with no
+    // adminCardId is a free admin add — nothing was paid, nothing comes back.
+    const refundToWallet = regData.consumedFrom === 'EXTRA_PUNCH'
+      || (regData.consumedFrom === 'ADMIN_CARD' && !!regData.adminCardId && !adminCardExists);
+    if (refundToWallet) {
+      await ensureCreditBuckets(uid);
+      transactItems.push(addCreditItem(uid, 1, nowIso));
+    }
 
     if (regData.consumedFrom === 'ADMIN_CARD' && regData.adminCardId && adminCardExists) {
       transactItems.push({
@@ -170,7 +177,7 @@ export async function handler(
           ? 'ADD #usage.lateCancellationsUsed :one, weeklyUsage.#wk :negOne SET updatedAt = :now'
           : 'ADD #usage.lateCancellationsUsed :one SET updatedAt = :now',
         ExpressionAttributeNames: wKey ? { '#wk': wKey, '#usage': 'usage' } : { '#usage': 'usage' },
-        ExpressionAttributeValues: { ':one': 1, ':negOne': -1, ':now': nowIso },
+        ExpressionAttributeValues: wKey ? { ':one': 1, ':negOne': -1, ':now': nowIso } : { ':one': 1, ':now': nowIso },
       },
     });
   }

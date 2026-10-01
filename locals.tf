@@ -329,6 +329,7 @@ locals {
   # exactly rather than requiring manual UTC/DST conversion.
   scheduled_functions = {
     expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
+    expireWalletCredits            = "cron(20 0 1 * ? *)"      # 00:20 on the 1st — credit lapses a month after the month it was earned
     activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
     clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st

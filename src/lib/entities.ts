@@ -1092,7 +1092,9 @@ export interface MembershipItem {
   monthlyLimit: number;
   weeklyLimit: number;
   allowedLegalCancellationsPerMonth: number;
-  usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number };
+  // rolledToCredit: unused sessions already moved into wallet credit this
+  // month (Thursday job + month-end together), capped at MAX_MONTHLY_ROLLOVER.
+  usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number; rolledToCredit?: number };
   weeklyUsage: Record<string, number>;
   // Admin manual balance nudge (+/-), applied on top of monthlyLimit without
   // touching the contracted total or usage history — see getEffectiveMonthlyLimit.
@@ -1753,6 +1755,11 @@ export interface ProductItem {
 export interface WalletItem {
   PK: string; SK: string;
   extraPunches: number;
+  // How many of extraPunches were earned in each month ('YYYY-MM'). Credit
+  // expires at the end of the month after the one it was earned in (terms of
+  // service) — see lib/walletCredit.ts and expireWalletCredits.ts. Credit
+  // older than this field (sum < extraPunches) is untracked and never expires.
+  creditBuckets?: Record<string, number>;
 }
 
 // PK=MEMBER#<parentUid>  SK=FAMILY#<childUid>
@@ -1829,6 +1836,31 @@ export function monthKey(date: Date): string {
 
 export function getEffectiveMonthlyLimit(m: MembershipItem): number {
   return m.monthlyLimit + (m.manualAdjustment ?? 0);
+}
+
+// At most this many unused membership sessions become wallet credit per
+// membership month — the Thursday job and month-end rollover share the cap.
+export const MAX_MONTHLY_ROLLOVER = 2;
+
+export function rolloverRoomLeft(m: MembershipItem): number {
+  return Math.max(0, MAX_MONTHLY_ROLLOVER - (m.usage?.rolledToCredit ?? 0));
+}
+
+// A week has ONE weekly limit even when it spans two months (e.g. Sun 30 Aug
+// – Sat 5 Sep): each class counts on its own month's membership, so that
+// week's usage is split across two records and has to be summed. Records that
+// share a membershipId are copies of the same migration bridge filed under
+// several months (the copy carries the original's weeklyUsage), so those take
+// the max instead of being added twice.
+export function weeklyUsedAcrossMemberships(memberships: MembershipItem[], weekKey: string): number {
+  const byId = new Map<string, number>();
+  for (const m of memberships) {
+    const used = m.weeklyUsage?.[weekKey] ?? 0;
+    byId.set(m.membershipId, Math.max(byId.get(m.membershipId) ?? 0, used));
+  }
+  let total = 0;
+  for (const used of byId.values()) total += used;
+  return total;
 }
 
 export function computeWeekKey(date: Date): string {

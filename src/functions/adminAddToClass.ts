@@ -4,7 +4,9 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass, type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem } from '../lib/entities';
+import { monthKey, computeWeekKey, israelDateStr, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships, type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem } from '../lib/entities';
+import { spendCreditItem } from '../lib/walletCredit';
+import { membershipForClass } from '../lib/registrationMembership';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
@@ -112,35 +114,58 @@ export async function handler(
   let activeMembership: MembershipItem | undefined;
   let consumedFrom: ConsumedFrom = 'ADMIN_CARD'; // free admin override unless one of the branches below sets a real source
   let adminCardId = '';
+  let wallet: WalletItem | undefined;
 
   if (deductSession) {
-    // Not status=ACTIVE-only: a PENDING membership (future-dated grant not yet
-    // flipped by the nightly activatePendingMemberships cron) whose own
-    // start/end window already covers this class should count too — same
-    // eligibility rule bookClass.ts/getActiveMembership.ts use, so an admin
-    // manually adding someone isn't blocked by a cron that hasn't run yet.
+    // Same record self-booking (bookClass.ts) charges — the class's own
+    // month, or an earlier bridge covering it — and the same limits. The old
+    // "newest ACTIVE record of any month" pick charged September classes to
+    // a still-ACTIVE August record, checked no monthly limit, and with no
+    // membership at all added the class for free while marking it MEMBERSHIP.
     const membRes = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
       ExpressionAttributeValues: { ':pk': `MEMBER#${userId}`, ':prefix': 'MEMBERSHIP#' },
     }));
-    const usableMemberships = ((membRes.Items ?? []) as (MembershipItem & { createdAt?: string })[])
-      .filter((m) => isMembershipUsableForClass(m, classDate))
-      .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
-    activeMembership = usableMemberships[0];
+    const allMemberships = (membRes.Items ?? []) as MembershipItem[];
+    activeMembership = membershipForClass(allMemberships, classDate, targetMonth, true) ?? undefined;
     membershipId = activeMembership?.membershipId ?? '';
 
-    if (activeMembership) {
-      const weeklyLimit = activeMembership.weeklyLimit ?? 0;
-      const bookedThisWeek = activeMembership.weeklyUsage?.[wKey] ?? 0;
-      if (weeklyLimit > 0 && bookedThisWeek >= weeklyLimit) {
-        return json(200, {
-          warning: 'WEEKLY_QUOTA_EXCEEDED',
-          message: 'למתאמן נגמרה המכסה השבועית',
-          bookedThisWeek,
-          weeklyLimit,
-        });
-      }
+    // All three come back as WEEKLY_QUOTA_EXCEEDED (what older app versions
+    // already handle — they offer "use credit" / "add free"), with `quota`
+    // telling the newer app which limit it actually was.
+    if (!activeMembership) {
+      return json(200, {
+        warning: 'WEEKLY_QUOTA_EXCEEDED',
+        quota: 'no_membership',
+        message: 'למתאמנת אין מנוי בתוקף לתאריך האימון',
+        bookedThisWeek: 0,
+        weeklyLimit: 0,
+      });
+    }
+    const weeklyLimit = activeMembership.weeklyLimit ?? 0;
+    const bookedThisWeek = weeklyUsedAcrossMemberships(allMemberships, wKey);
+    if (weeklyLimit > 0 && bookedThisWeek >= weeklyLimit) {
+      return json(200, {
+        warning: 'WEEKLY_QUOTA_EXCEEDED',
+        quota: 'weekly',
+        message: 'למתאמן נגמרה המכסה השבועית',
+        bookedThisWeek,
+        weeklyLimit,
+      });
+    }
+    const monthlyLimit = getEffectiveMonthlyLimit(activeMembership);
+    const bookedThisMonth = activeMembership.usage?.totalMonthlyUsed ?? 0;
+    if (bookedThisMonth >= monthlyLimit) {
+      return json(200, {
+        warning: 'WEEKLY_QUOTA_EXCEEDED',
+        quota: 'monthly',
+        message: 'למתאמנת נגמרה המכסה החודשית',
+        bookedThisWeek,
+        weeklyLimit,
+        bookedThisMonth,
+        monthlyLimit,
+      });
     }
     consumedFrom = 'MEMBERSHIP';
   } else if (useWalletCredit) {
@@ -152,7 +177,8 @@ export async function handler(
         ExpressionAttributeValues: { ':pk': `MEMBER#${userId}`, ':prefix': 'PUNCHCARD#' },
       })),
     ]);
-    const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
+    wallet = walletRes.Item as WalletItem | undefined;
+    const extraPunches = wallet?.extraPunches ?? 0;
     const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
     if (extraPunches > 0) {
@@ -227,15 +253,8 @@ export async function handler(
   let balanceItemIndex = -1;
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${userId}`, SK: 'WALLET#PRIMARY' },
-        UpdateExpression: 'ADD extraPunches :negOne',
-        ConditionExpression: 'extraPunches > :zero',
-        ExpressionAttributeValues: { ':negOne': -1, ':zero': 0 },
-      },
-    });
+    // Oldest (soonest-to-expire) credit first — see lib/walletCredit.ts.
+    transactItems.push(spendCreditItem(userId, wallet, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD' && adminCardId) {
     balanceItemIndex = transactItems.length;
     transactItems.push({
