@@ -112,27 +112,40 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
     const currentTargetMonthDate = agreement.targetMonth ? new Date(`${agreement.targetMonth}-01`) : new Date();
     const newNextChargeDate = firstOfNextMonth(new Date());
 
+    // DynamoDB rejects any ExpressionAttributeValues key the expression
+    // doesn't reference, so each branch passes only the values it uses.
+    const common = {
+      ':pc': paymentsCompleted,
+      ':zero': 0,
+      ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: result.transactionId ?? null, success: true },
+      ':now': nowIso,
+    };
+    const ongoing = {
+      ...common,
+      ':active': 'active',
+      ':ncd': newNextChargeDate.toISOString(),
+      ':g3pk': 'AGREEMENT_STATUS#active',
+      ':g3sk': newNextChargeDate.toISOString(),
+    };
+
     await ddb.send(new UpdateCommand({
       TableName: TABLE_NAME,
       Key: { PK: agreement.PK, SK: agreement.SK },
-      UpdateExpression: completed
-        ? 'SET paymentsCompleted = :pc, #status = :completed, consecutiveFailures = :zero, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK'
-        : (agreement.kind === 'subscription'
-          ? 'SET paymentsCompleted = :pc, #status = :active, consecutiveFailures = :zero, nextChargeDate = :ncd, targetMonth = :tm, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :g3sk'
-          : 'SET paymentsCompleted = :pc, #status = :active, consecutiveFailures = :zero, nextChargeDate = :ncd, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :g3sk'),
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: {
-        ':pc': paymentsCompleted,
-        ':completed': 'completed',
-        ':active': 'active',
-        ':zero': 0,
-        ':ncd': newNextChargeDate.toISOString(),
-        ':tm': monthKey(addMonths(currentTargetMonthDate, 1)),
-        ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: result.transactionId ?? null, success: true },
-        ':now': nowIso,
-        ':g3pk': 'AGREEMENT_STATUS#active',
-        ':g3sk': newNextChargeDate.toISOString(),
-      },
+      ...(completed
+        ? {
+          UpdateExpression: 'SET paymentsCompleted = :pc, #status = :completed, consecutiveFailures = :zero, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK',
+          ExpressionAttributeValues: { ...common, ':completed': 'completed' },
+        }
+        : agreement.kind === 'subscription'
+          ? {
+            UpdateExpression: 'SET paymentsCompleted = :pc, #status = :active, consecutiveFailures = :zero, nextChargeDate = :ncd, targetMonth = :tm, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :g3sk',
+            ExpressionAttributeValues: { ...ongoing, ':tm': monthKey(addMonths(currentTargetMonthDate, 1)) },
+          }
+          : {
+            UpdateExpression: 'SET paymentsCompleted = :pc, #status = :active, consecutiveFailures = :zero, nextChargeDate = :ncd, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :g3sk',
+            ExpressionAttributeValues: ongoing,
+          }),
     }));
   } else {
     if (agreement.kind === 'subscription' && agreement.targetMonth) {
@@ -202,18 +215,27 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: agreement.PK, SK: agreement.SK },
-        UpdateExpression: giveUp
-          ? 'SET consecutiveFailures = :cf, #status = :failed, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK'
-          : 'SET consecutiveFailures = :cf, #status = :active, nextChargeDate = :now, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :now',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':cf': consecutiveFailures,
-          ':failed': 'failed',
-          ':active': 'active',
-          ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
-          ':now': nowIso,
-          ':g3pk': 'AGREEMENT_STATUS#active',
-        },
+        ...(giveUp
+          ? {
+            UpdateExpression: 'SET consecutiveFailures = :cf, #status = :failed, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK',
+            ExpressionAttributeValues: {
+              ':cf': consecutiveFailures,
+              ':failed': 'failed',
+              ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
+              ':now': nowIso,
+            },
+          }
+          : {
+            UpdateExpression: 'SET consecutiveFailures = :cf, #status = :active, nextChargeDate = :now, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :now',
+            ExpressionAttributeValues: {
+              ':cf': consecutiveFailures,
+              ':active': 'active',
+              ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
+              ':now': nowIso,
+              ':g3pk': 'AGREEMENT_STATUS#active',
+            },
+          }),
       }));
     }
   }
@@ -234,8 +256,14 @@ export async function runHypBillingCycle(): Promise<{ processed: number; succeed
   let succeeded = 0;
   let failed = 0;
   for (const agreement of due) {
-    const { success } = await chargeOneAgreement(agreement);
-    if (success) succeeded++; else failed++;
+    // One bad agreement must never abort the rest of the cycle.
+    try {
+      const { success } = await chargeOneAgreement(agreement);
+      if (success) succeeded++; else failed++;
+    } catch (err: any) {
+      console.error(`[chargeHypBillingAgreements] agreement=${agreement.agreementId} user=${agreement.userId} threw:`, err);
+      failed++;
+    }
   }
 
   console.log(`[chargeHypBillingAgreements] processed=${due.length} succeeded=${succeeded} failed=${failed}`);
