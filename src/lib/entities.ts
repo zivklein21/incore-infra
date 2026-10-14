@@ -1747,6 +1747,10 @@ export interface ProductItem {
   popular?: boolean;
   priority_book?: boolean;
   allowed_class_ids?: string[];
+  // Store product lifetime, set in StoreManageScreen: true = זמני (deleted
+  // from the table by handlePaymentSuccess once it's purchased), absent/
+  // false = קבוע (stays in the store).
+  isTemporary?: boolean;
   createdAt?: string;
 }
 

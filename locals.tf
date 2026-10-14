@@ -23,6 +23,7 @@ locals {
     adminClearMemberSavedCard               = { method = "POST" }
     adminClearMemberships                   = { method = "POST" }
     adminCreateUser                         = { method = "POST" } # IAM-privileged (AdminCreateUser) — see handler comment
+    adminCreateMembershipOverride           = { method = "POST" } # INCORE: admin manual subscription override (supersedes current)
     adminDeleteClassType                    = { method = "POST" }
     adminDeleteCoach                        = { method = "POST" } # FORCA Coach feature
     adminDeleteEquipment                    = { method = "POST" } # FORCA Coach feature

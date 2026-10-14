@@ -55,6 +55,7 @@ export async function handler(
   if (typeof body.popular === 'boolean') item.popular = body.popular;
   if (typeof body.priority_book === 'boolean') item.priority_book = body.priority_book;
   if (Array.isArray(body.allowed_class_ids)) item.allowed_class_ids = body.allowed_class_ids;
+  if (typeof body.isTemporary === 'boolean') item.isTemporary = body.isTemporary;
   if (isNew) item.createdAt = new Date().toISOString();
 
   const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;

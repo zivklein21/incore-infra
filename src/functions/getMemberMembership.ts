@@ -12,6 +12,7 @@ const STATUS_PRIORITY: Record<string, number> = { ACTIVE: 0, PENDING: 1, PAST_DU
 
 type FullMembershipItem = MembershipItem & {
   productId?: string; productName?: string; startDate?: string; endDate?: string; createdAt?: string;
+  isManuallyCreated?: boolean;
 };
 
 export function pickActive(items: FullMembershipItem[]): FullMembershipItem | null {
@@ -36,20 +37,30 @@ export async function buildMembershipResponse(item: FullMembershipItem) {
     productData = res.Item as ProductItem | undefined;
   }
 
+  // An admin repair (adminCreateMembershipOverride.ts) carries its own name
+  // and limits on purpose — the limits are what bookClass enforces, so show
+  // those rather than the linked product's defaults. It may have no
+  // productId at all, so it still has to read as a subscription.
+  const limitsSource = item.isManuallyCreated ? undefined : productData;
+  const productName = item.isManuallyCreated
+    ? (item.productName || productData?.name || '')
+    : (productData?.name ?? item.productName ?? '');
+
   return {
     membershipId: item.membershipId,
     productId: item.productId ?? '',
-    productName: productData?.name ?? item.productName ?? '',
-    productType: item.type === 'CUSTOM_MIGRATION' ? 'CUSTOM_MIGRATION' : (productData?.type ?? ''),
+    productName,
+    productType: item.type === 'CUSTOM_MIGRATION' ? 'CUSTOM_MIGRATION'
+      : (productData?.type ?? (item.isManuallyCreated ? 'subscription' : '')),
     price: productData?.price ?? 0,
     status: item.status ?? 'ACTIVE',
     monthlyUsed: item.usage?.totalMonthlyUsed ?? 0,
     legalCancellationsUsed: item.usage?.legalCancellationsUsed ?? 0,
     lateCancellationsUsed: item.usage?.lateCancellationsUsed ?? 0,
-    monthlyLimit: productData?.monthlyLimit ?? item.monthlyLimit ?? 0,
+    monthlyLimit: limitsSource?.monthlyLimit ?? item.monthlyLimit ?? 0,
     manualAdjustment: item.manualAdjustment ?? 0,
-    weeklyLimit: productData?.weeklyLimit ?? item.weeklyLimit ?? 0,
-    allowedLegalCancellationsPerMonth: productData?.allowedLegalCancellationsPerMonth ?? item.allowedLegalCancellationsPerMonth ?? 0,
+    weeklyLimit: limitsSource?.weeklyLimit ?? item.weeklyLimit ?? 0,
+    allowedLegalCancellationsPerMonth: limitsSource?.allowedLegalCancellationsPerMonth ?? item.allowedLegalCancellationsPerMonth ?? 0,
     isAutoRenew: item.isAutoRenew === true,
     startDate: item.startDate ?? null,
     endDate: item.endDate ?? null,

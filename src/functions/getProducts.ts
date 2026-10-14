@@ -53,6 +53,7 @@ export async function handler(
     popular: p.popular ?? false,
     priority_book: p.priority_book ?? false,
     allowed_class_ids: p.allowed_class_ids ?? [],
+    isTemporary: p.isTemporary ?? false,
   }));
 
   return json(200, { products });
