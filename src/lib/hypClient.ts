@@ -163,9 +163,20 @@ export interface CreatePaymentPageParams {
   sendReceipt?: boolean;
 }
 
+// Never log these from a HYP request/response echo: an APISign response
+// echoes back what we sent (incl. the payer's UserId = ID number), and a
+// getToken response carries the reusable card token itself.
+const REDACTED_HYP_FIELDS = new Set(['UserId', 'Token', 'CC', 'Tz', 'L4digit', 'cell', 'email', 'ClientName', 'ClientLName']);
+
+export function redactHypFields(fields: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(fields)) out[k] = REDACTED_HYP_FIELDS.has(k) && v ? '[redacted]' : v;
+  return out;
+}
+
 export class HypSignError extends Error {
   constructor(public readonly ccode: number, public readonly fields: Record<string, string>) {
-    super(`HYP SIGN failed: CCode=${ccode} ${JSON.stringify(fields)}`);
+    super(`HYP SIGN failed: CCode=${ccode} ${JSON.stringify(redactHypFields(fields))}`);
   }
 }
 
@@ -242,7 +253,7 @@ export async function getHypToken(transId: string): Promise<HypToken | null> {
   const creds = await getHypCredentials();
   const { fields } = await callHyp({ action: 'getToken', Masof: creds.masof, PassP: creds.passP, TransId: transId });
 
-  console.log(`[getHypToken] transId=${transId} raw fields:`, JSON.stringify(fields));
+  console.log(`[getHypToken] transId=${transId} raw fields:`, JSON.stringify(redactHypFields(fields)));
 
   if (ccodeOf(fields) !== 0 || !fields.Token) return null;
 
@@ -305,6 +316,7 @@ export async function chargeHypToken(params: ChargeTokenParams): Promise<ChargeT
   });
 
   const ccode = ccodeOf(fields);
+  if (ccode !== 0) console.warn('[chargeHypToken] HYP soft charge declined, raw fields:', JSON.stringify(redactHypFields(fields)));
   return { success: ccode === 0, ccode, transactionId: fields.Id, authCode: fields.ACode };
 }
 

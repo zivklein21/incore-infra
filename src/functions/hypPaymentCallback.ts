@@ -4,7 +4,7 @@ import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { HypOrderItem, MemberProfileItem, ProductItem } from '../lib/entities';
 import { monthKey, firstOfNextMonth } from '../lib/entities';
-import { verifyHypTransaction, getHypToken, inquireCardBrand, refundHypTransaction } from '../lib/hypClient';
+import { verifyHypTransaction, getHypToken, inquireCardBrand, refundHypTransaction, redactHypFields } from '../lib/hypClient';
 import { getPolicySettings, getMemberFullName } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
@@ -68,8 +68,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     const { verified, fields } = await verifyHypTransaction(event.rawQueryString);
     const ccode = Number(fields.CCode ?? q.CCode);
 
-    console.log(`[hypPaymentCallback] order=${orderId} raw redirect query:`, JSON.stringify(q));
-    console.log(`[hypPaymentCallback] order=${orderId} raw VERIFY fields:`, JSON.stringify(fields));
+    console.log(`[hypPaymentCallback] order=${orderId} raw redirect query:`, JSON.stringify(redactHypFields(q as Record<string, string>)));
+    console.log(`[hypPaymentCallback] order=${orderId} raw VERIFY fields:`, JSON.stringify(redactHypFields(fields)));
 
     const nowIso = new Date().toISOString();
 

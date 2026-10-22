@@ -5,7 +5,7 @@ import { getUid, json } from '../lib/http';
 import type { MemberProfileItem } from '../lib/entities';
 import { getMemberFirstLastName, getMemberIdNumber, HYP_NO_ID_PLACEHOLDER, newOrderKey } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
-import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
+import { createHypSignedPaymentUrl, HypSignError, redactHypFields } from '../lib/hypClient';
 
 // POST /createHypCardUpdatePage
 // Auth: Cognito JWT
@@ -73,7 +73,7 @@ export async function handler(
       ExpressionAttributeValues: { ':failed': 'failed', ':now': new Date().toISOString() },
     }));
     if (err instanceof HypSignError) {
-      return json(502, { error: 'hyp_sign_failed', ccode: err.ccode, hypFields: err.fields });
+      return json(502, { error: 'hyp_sign_failed', ccode: err.ccode, hypFields: redactHypFields(err.fields) });
     }
     return json(502, { error: 'hyp_sign_failed' });
   }
