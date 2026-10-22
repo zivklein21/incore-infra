@@ -91,3 +91,40 @@ export function creditExpiries(wallet: WalletItem | undefined): { amount: number
   if (untracked > 0) out.push({ amount: untracked, expiresOn: null });
   return out;
 }
+
+// An admin setting a member's balance by hand (adminUpdateMemberWallet.ts).
+// Existing batches keep their own expiry: an increase goes into `month`'s
+// bucket; a decrease comes out of the oldest (soonest-to-expire, lapsed
+// first) buckets, then out of untracked legacy credit. Buckets are also
+// trimmed (oldest first) so they never add up to more than the new balance —
+// which repairs a wallet whose buckets drifted from extraPunches.
+export function adjustCreditBuckets(
+  buckets: Record<string, number> | undefined,
+  oldBalance: number,
+  newBalance: number,
+  month: string,
+): Record<string, number> {
+  if (newBalance <= 0) return {};
+  const out: Record<string, number> = Object.fromEntries(
+    Object.entries(buckets ?? {}).filter(([, n]) => n > 0),
+  );
+  const delta = newBalance - oldBalance;
+  if (delta > 0) out[month] = (out[month] ?? 0) + delta;
+  const takeOldest = (amount: number) => {
+    for (const m of Object.keys(out).sort()) {
+      if (amount <= 0) break;
+      const take = Math.min(out[m], amount);
+      out[m] -= take;
+      amount -= take;
+      if (out[m] === 0) delete out[m];
+    }
+  };
+  if (delta < 0) {
+    // Tracked (expiring) credit goes first; untracked never expires, so it's kept longest.
+    const tracked = Object.values(out).reduce((sum, n) => sum + n, 0);
+    takeOldest(Math.min(-delta, tracked));
+  }
+  const total = Object.values(out).reduce((sum, n) => sum + n, 0);
+  if (total > newBalance) takeOldest(total - newBalance);
+  return out;
+}

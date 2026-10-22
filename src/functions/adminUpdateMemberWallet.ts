@@ -1,15 +1,17 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { monthKey } from '../lib/entities';
+import { monthKey, type WalletItem } from '../lib/entities';
+import { adjustCreditBuckets, walletKey } from '../lib/walletCredit';
 
 // POST /adminUpdateMemberWallet
 // Body: { memberId: string, extraPunches: number }
 // Auth: Cognito JWT, caller must be admin
 //
-// Directly sets the WalletItem's extraPunches counter (PK=MEMBER#<uid>,
+// Sets the WalletItem's extraPunches counter (PK=MEMBER#<uid>,
 // SK=WALLET#PRIMARY, see getWallet.ts/bookClass.ts) — previously this value
 // was only ever mutated by bookClass.ts's own ADD extraPunches :negOne on
 // consumption, with no admin-facing way to edit or reset it. Overwrites the
@@ -36,20 +38,34 @@ export async function handler(
   if (!memberId) return json(400, { error: 'missing_fields', required: ['memberId'] });
   if (!Number.isFinite(extraPunches) || extraPunches < 0) return json(400, { error: 'invalid_extra_punches' });
 
-  // A manually set balance counts as earned this month for expiry purposes
-  // (creditBuckets — see lib/walletCredit.ts), replacing any older buckets.
-  const res = await ddb.send(new UpdateCommand({
-    TableName: TABLE_NAME,
-    Key: { PK: `MEMBER#${memberId}`, SK: 'WALLET#PRIMARY' },
-    UpdateExpression: 'SET extraPunches = :n, creditBuckets = :buckets, updatedAt = :now',
-    ExpressionAttributeValues: {
-      ':n': extraPunches,
-      ':buckets': extraPunches > 0 ? { [monthKey(new Date())]: extraPunches } : {},
-      ':now': new Date().toISOString(),
-    },
-    ReturnValues: 'UPDATED_OLD',
-  }));
+  // Existing batches keep their expiry — only the difference is applied
+  // (see adjustCreditBuckets). Conditional on the balance read, so a booking
+  // spending credit at the same moment isn't overwritten; retried on a race.
+  let oldBalance = 0;
+  for (let attempt = 0; ; attempt++) {
+    const current = (await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: walletKey(memberId) }))).Item as WalletItem | undefined;
+    oldBalance = current?.extraPunches ?? 0;
+    const buckets = adjustCreditBuckets(current?.creditBuckets, oldBalance, extraPunches, monthKey(new Date()));
+    try {
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE_NAME,
+        Key: walletKey(memberId),
+        UpdateExpression: 'SET extraPunches = :n, creditBuckets = :buckets, updatedAt = :now',
+        ConditionExpression: current && typeof current.extraPunches === 'number' ? 'extraPunches = :old' : 'attribute_not_exists(extraPunches)',
+        ExpressionAttributeValues: {
+          ':n': extraPunches,
+          ':buckets': buckets,
+          ':now': new Date().toISOString(),
+          ...(current && typeof current.extraPunches === 'number' ? { ':old': oldBalance } : {}),
+        },
+      }));
+      break;
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException && attempt < 2) continue;
+      throw err;
+    }
+  }
 
-  console.log(`[adminUpdateMemberWallet] admin=${adminUid} member=${memberId} extraPunches=${res.Attributes?.extraPunches ?? 0}->${extraPunches}`);
+  console.log(`[adminUpdateMemberWallet] admin=${adminUid} member=${memberId} extraPunches=${oldBalance}->${extraPunches}`);
   return json(200, { success: true });
 }
