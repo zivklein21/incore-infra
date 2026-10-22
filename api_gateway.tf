@@ -21,6 +21,13 @@ resource "aws_apigatewayv2_stage" "api_stage" {
   api_id      = aws_apigatewayv2_api.incore_api.id
   name        = "$default"
   auto_deploy = true
+
+  # Access logging (-> /aws/apigateway/incore-api) was enabled directly in the
+  # AWS console, never in Terraform — without this, every apply would
+  # silently switch it back off.
+  lifecycle {
+    ignore_changes = [access_log_settings]
+  }
 }
 
 # Create the Cognito Authorizer to secure our API endpoints
