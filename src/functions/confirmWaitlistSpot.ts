@@ -4,8 +4,9 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import type { ClassItem, MembershipItem, WalletItem, PunchCardItem } from '../lib/entities';
-import { monthKey, computeWeekKey, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
+import { monthKey, computeWeekKey, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships } from '../lib/entities';
 import { spendCreditItem } from '../lib/walletCredit';
+import { membershipForClass } from '../lib/registrationMembership';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
@@ -63,12 +64,17 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const targetMonth = monthKey(classDate);
   const wKey = computeWeekKey(classDate);
 
+  // Same record and limits as self-booking (bookClass.ts): all of the
+  // member's memberships, so a bridge filed under an earlier month that
+  // covers this class is found, and a week spanning two months has one
+  // weekly limit (weeklyUsedAcrossMemberships).
   const membershipsRes = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': `MEMBERSHIP#${targetMonth}#` },
+    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'MEMBERSHIP#' },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
+  const allMemberships = (membershipsRes.Items ?? []) as MembershipItem[];
+  const membership = membershipForClass(allMemberships, classDate, targetMonth, true);
 
   const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
@@ -78,7 +84,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   let adminCardId = '';
 
   if (membership) {
-    const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
+    const weeklyUsed = weeklyUsedAcrossMemberships(allMemberships, wKey);
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
     const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
@@ -146,11 +152,13 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     },
   ];
 
-  if (membershipId && consumedFrom === 'MEMBERSHIP') {
+  if (membershipId && consumedFrom === 'MEMBERSHIP' && membership) {
     transactItems.push({
       Update: {
         TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${memberId}`, SK: `MEMBERSHIP#${targetMonth}#${membershipId}` },
+        // The membership's own filing month (a bridge can be filed under an
+        // earlier month than the class) — same as bookClass.ts.
+        Key: { PK: `MEMBER#${memberId}`, SK: `MEMBERSHIP#${membership.targetMonth}#${membershipId}` },
         // usage is a DynamoDB reserved keyword — bare here it fails every call.
         UpdateExpression: 'ADD #usage.totalMonthlyUsed :one, weeklyUsage.#wk :one SET updatedAt = :now',
         ExpressionAttributeNames: { '#wk': wKey, '#usage': 'usage' },
