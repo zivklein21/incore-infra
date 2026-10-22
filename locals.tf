@@ -204,6 +204,7 @@ locals {
     getForcaSubscriptionProductsForParent   = { method = "ANY" } # FORCA Subscription & Recurring Billing feature
     getGroupWeeklyTaskStatus                = { method = "ANY" } # FORCA Weekly Tasks: coach/admin group completion tracker
     getHypOrderStatus                       = { method = "ANY" }
+    incoreWorkoutApi                        = { method = "POST" } # INCORE Exercise Catalog + Workout Journal: one Lambda behind incore_workout_routes below (integration-quota workaround)
     getInquiryMessages                      = { method = "ANY" }
     getMemberBookingSources                 = { method = "ANY" }
     getMemberCancellations                  = { method = "ANY" }
@@ -312,6 +313,24 @@ locals {
     testMembershipReminder           = { method = "GET" }  # manual test/debug endpoint
     triggerWaitlistOffer             = { method = "POST" } # SECURITY: no auth in original
     verifyOtp                        = { method = "POST" } # pre-login forgot-password flow
+  }
+
+  # INCORE Exercise Catalog + Workout Journal endpoints. Each is its own
+  # route but they all SHARE incoreWorkoutApi's single integration (see
+  # api_gateway.tf's aws_apigatewayv2_route.incore_workout and
+  # incoreWorkoutApi.ts) — this API is at AWS's hard cap of 300
+  # integrations, one per standalone Lambda, so new endpoints can't each be
+  # their own function anymore. All JWT-authenticated. GET/POST only (not
+  # ANY), so none needs a dedicated OPTIONS preflight route either.
+  incore_workout_routes = {
+    adminDeleteIncoreExercise = "POST" # admin: delete a catalog exercise
+    adminListIncoreExercises  = "GET"  # admin: catalog incl. drafts
+    adminSaveIncoreExercise   = "POST" # admin: create/edit (name, description, image, muscle group, metric combination)
+    adminSeedIncoreExercises  = "POST" # admin: import the starter library (idempotent)
+    deleteMyWorkoutLog        = "POST" # trainee: delete one of their own logs
+    getIncoreExercises        = "GET"  # trainee: active catalog exercises
+    getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
+    saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

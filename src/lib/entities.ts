@@ -1898,3 +1898,111 @@ export function addMonths(date: Date, months: number): Date {
 export function firstOfNextMonth(from: Date): Date {
   return new Date(from.getFullYear(), from.getMonth() + 1, 1, 0, 0, 0, 0);
 }
+
+// ─── INCORE Exercise Catalog + Workout Journal ─────────────────────────────
+// INCORE-only, lives in the INCORE table (TABLE_NAME) exclusively — a
+// separate model from FORCA's ExerciseDefinitionItem/ExerciseLogEntryItem
+// rather than a brand flag on them (same absolute-separation rule as every
+// other FORCA/INCORE pair, see dynamo.ts). Also a different measurement
+// model: FORCA composes a fixed set of string literals ('weight_reps',
+// 'weight_bodyweight_reps_band_level', ...), which can't express time +
+// distance or an admin-named metric; INCORE instead stores an ordered list
+// of metric components, any combination of which is valid. See
+// lib/incoreExercises.ts for validation and adminSaveIncoreExercise.ts.
+
+export type IncoreMuscleGroup =
+  | 'chest' | 'back' | 'shoulders' | 'biceps' | 'triceps' | 'quads'
+  | 'hamstrings' | 'adductors' | 'glutes' | 'calves' | 'core' | 'forearms' | 'cardio';
+
+export type IncoreMetricKind = 'weight' | 'reps' | 'time' | 'distance' | 'band' | 'custom';
+
+// One measured component of an exercise. key is what a logged set's values
+// are keyed by (built-ins use their own kind as key, e.g. 'weight'; customs
+// get a generated 'c_...' key) so renaming a custom metric's label never
+// orphans already-logged values. unit is fixed for weight ('kg'), reps
+// ('reps') and time ('sec' — always stored as total seconds); admin-chosen
+// for distance ('m'/'km') and custom (free text, e.g. "RPE", "level").
+// lowerIsBetter flips "best"/PR detection for e.g. a timed run.
+// 'band' (resistance band level) stores a logged value as the 0-based index
+// into levels, which the admin orders lightest -> heaviest — so a higher
+// value is always a heavier band and charts/PR detection need no special
+// case. Logs snapshot metrics (levels included), so renaming or reordering
+// levels later never reinterprets an old entry.
+export interface IncoreExerciseMetric {
+  key: string;
+  kind: IncoreMetricKind;
+  label?: string;
+  unit: string;
+  lowerIsBetter?: boolean;
+  /** 'band' only — level labels, lightest first. */
+  levels?: string[];
+}
+
+// PK=INCOREEXERCISE SK=EX#<id>
+// The whole catalog shares one partition so listing it is a single Query —
+// not a Scan with a filter like FORCA's adminListExercises.ts, which would
+// have to page through the entire (much larger) INCORE table. The catalog
+// is admin-authored and small (low hundreds of rows), far below any
+// partition throughput concern. Ids of the starter library (adminSeedIncoreExercises.ts) are the same
+// slugs incore-app's bundled src/data/exercises.ts used, so workouts a
+// trainee logged on-device before this catalog existed can be migrated
+// onto it 1:1 (see incore-app's useWorkoutJournal.ts).
+export interface IncoreExerciseItem {
+  PK: string; SK: string;
+  name: string;
+  nameEn?: string;
+  description?: string;
+  /** Primary group — always muscleGroups[0]. Kept as its own field so every
+   *  single-group reader (badges, older log snapshots) keeps working. */
+  muscleGroup: IncoreMuscleGroup;
+  /** Every group the exercise works, primary first. Absent on exercises
+   *  saved before multi-group support — read as [muscleGroup]. */
+  muscleGroups?: IncoreMuscleGroup[];
+  /** S3 key under exercise-images/ — resolved to a short-lived signed URL on every read. */
+  imageKey?: string;
+  /** S3 key (.gif) under exercise-images/ — an animated demo of the movement, shown first in the trainee's preview. Same signed-URL handling as imageKey. */
+  gifKey?: string;
+  /** Ordered — metrics[0] is the exercise's primary metric (the Progress Graphs default). */
+  metrics: IncoreExerciseMetric[];
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+}
+
+// One exercise performed inside a logged workout. exerciseName/muscleGroup/
+// metrics are snapshotted at save time so a later catalog edit or delete
+// never reinterprets or breaks old entries (same rationale as
+// ExerciseLogEntryItem.measurementType). Each set maps metric key -> value.
+export interface IncoreWorkoutLogExercise {
+  exerciseId: string;
+  exerciseName: string;
+  muscleGroup: IncoreMuscleGroup;
+  /** Snapshot of the exercise's muscleGroups (absent on older logs). */
+  muscleGroups?: IncoreMuscleGroup[];
+  metrics: IncoreExerciseMetric[];
+  sets: Record<string, number>[];
+}
+
+// PK=MEMBER#<uid> SK=WORKOUTLOG#<id>
+// Lives in the member's own partition (next to PROFILE/CANCEL#/MEMBERSHIP#)
+// so a member's whole journal is a single Query, no GSI needed. A log tied to a
+// booked class uses the deterministic id `cls_<classId>` — re-logging the
+// same class overwrites instead of duplicating, and getMyWorkoutJournal.ts
+// uses it to tell which past classes are still unlogged. A free (non-class)
+// workout gets a random id.
+export interface IncoreWorkoutLogItem {
+  PK: string; SK: string;
+  userId: string;
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string;
+  title?: string;
+  classId?: string;
+  className?: string;
+  exercises: IncoreWorkoutLogExercise[];
+  /** Set by the one-time on-device history import, so re-running it is idempotent. */
+  importedFrom?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
