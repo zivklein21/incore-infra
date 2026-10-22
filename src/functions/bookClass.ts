@@ -3,7 +3,9 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
+import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships } from '../lib/entities';
+import { spendCreditItem } from '../lib/walletCredit';
+import { membershipForClass } from '../lib/registrationMembership';
 
 // ─── Entity key design (DynamoDB single-table) ─────────────────────────────
 //
@@ -133,13 +135,17 @@ export async function handler(
   const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
+  // All of the member's memberships (a handful per member) — the weekly
+  // limit below needs every month's record, not just queryMonth's.
   const queryMonth = isFutureBooking ? currentMonth : classTargetMonth;
   const membershipsRes = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': `MEMBERSHIP#${queryMonth}#` },
+    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'MEMBERSHIP#' },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
+  const allMemberships = (membershipsRes.Items ?? []) as MembershipItem[];
+  // Filed under the class's month — or an earlier bridge that covers it.
+  const membership = membershipForClass(allMemberships, classDate, queryMonth, !isFutureBooking);
 
   // A membership whose real endDate already reaches the class date isn't
   // actually "future" from the member's own plan's point of view — it's
@@ -190,7 +196,9 @@ export async function handler(
     consumedFrom = 'FUTURE_SUBSCRIPTION';
     membershipId = membership.membershipId;
   } else if (membership) {
-    const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
+    // Across every membership record — a week spanning two months still has
+    // one weekly limit (see weeklyUsedAcrossMemberships).
+    const weeklyUsed = weeklyUsedAcrossMemberships(allMemberships, wKey);
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
     const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
@@ -328,15 +336,8 @@ export async function handler(
   let balanceItemIndex = -1;
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${uid}`, SK: 'WALLET#PRIMARY' },
-        UpdateExpression: 'ADD extraPunches :negOne SET updatedAt = :now',
-        ConditionExpression: 'extraPunches > :zero',
-        ExpressionAttributeValues: { ':negOne': -1, ':zero': 0, ':now': nowIso },
-      },
-    });
+    // Oldest (soonest-to-expire) credit first — see lib/walletCredit.ts.
+    transactItems.push(spendCreditItem(uid, walletRes.Item as WalletItem | undefined, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD') {
     balanceItemIndex = transactItems.length;
     transactItems.push({

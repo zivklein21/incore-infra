@@ -356,6 +356,7 @@ locals {
   # exactly rather than requiring manual UTC/DST conversion.
   scheduled_functions = {
     expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
+    expireWalletCredits            = "cron(20 0 1 * ? *)"      # 00:20 on the 1st — credit lapses a month after the month it was earned
     activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
     clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
@@ -374,6 +375,13 @@ locals {
 
   # DynamoDB Streams consumers — every one of these must filter internally
   # by PK/SK since the stream carries change events for the whole table.
+  # Scheduled functions whose schedule exists but is DISABLED (eventbridge.tf)
+  # — deployed and invocable by hand, never fired automatically.
+  # expireWalletCredits: not until wallets' creditBuckets are reconciled with
+  # extraPunches (old code ran 2026-10-14..; see expireWalletCredits.ts) and
+  # a dry run has been reviewed.
+  disabled_schedules = ["expireWalletCredits"]
+
   stream_functions = [
     "processMail",
     "onMemberDeleted",

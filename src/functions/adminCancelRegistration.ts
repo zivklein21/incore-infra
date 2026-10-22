@@ -4,8 +4,10 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { RegistrationItem, ClassItem, MembershipItem } from '../lib/entities';
+import type { RegistrationItem, ClassItem } from '../lib/entities';
 import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
+import { findRegistrationMembership } from '../lib/registrationMembership';
+import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
 
 // POST /adminCancelRegistration
 // Body: { userId, classId, refundTo: 'none' | 'wallet' | 'membership' }
@@ -85,26 +87,22 @@ export async function handler(
   ];
 
   if (refundTo === 'wallet') {
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: walletKey,
-        UpdateExpression: 'ADD extraPunches :one SET updatedAt = :now',
-        ExpressionAttributeValues: { ':one': 1, ':now': nowIso },
-      },
-    });
+    await ensureCreditBuckets(userId);
+    transactItems.push(addCreditItem(userId, 1, nowIso));
   }
 
   if (refundTo === 'membership' && regData.membershipId) {
-    const membershipKey = { PK: `MEMBER#${userId}`, SK: `MEMBERSHIP#${regData.targetMonth}#${regData.membershipId}` };
+    // Looked up by the membership's own filing month, not the booking's —
+    // see findRegistrationMembership.
+    const found = await findRegistrationMembership(userId, regData);
+    const membershipKey = found?.key;
+    const membership = found?.item;
     // ADD on usage.* / weeklyUsage.* requires those maps to already exist on
     // the item — a legacy/imported membership record missing either would
     // throw a ValidationException that aborts the WHOLE transaction, blocking
     // the admin from removing the member at all. Skip the membership counter
     // update rather than let a bookkeeping field take down the removal.
-    const membershipRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: membershipKey }));
-    const membership = membershipRes.Item as MembershipItem | undefined;
-    if (membership?.usage && membership.weeklyUsage) {
+    if (membershipKey && membership?.usage && membership.weeklyUsage) {
       const wKey = regData.weekKey;
       transactItems.push({
         Update: {

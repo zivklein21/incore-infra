@@ -5,6 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { CancellationItem } from '../lib/entities';
+import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
 
 // POST /adminRemoveLegalCancellation
 // Body: { userId, classId, refundTo?: 'wallet' | 'membership' }
@@ -65,14 +66,8 @@ export async function handler(
       });
     }
     if (refundTo === 'wallet') {
-      transactItems.push({
-        Update: {
-          TableName: TABLE_NAME,
-          Key: { PK: `MEMBER#${userId}`, SK: 'WALLET#PRIMARY' },
-          UpdateExpression: 'ADD extraPunches :one SET updatedAt = :now',
-          ExpressionAttributeValues: { ':one': 1, ':now': nowIso },
-        },
-      });
+      await ensureCreditBuckets(userId);
+      transactItems.push(addCreditItem(userId, 1, nowIso));
     }
   } else if (isMembership && cancelItem.membershipId) {
     transactItems.push({

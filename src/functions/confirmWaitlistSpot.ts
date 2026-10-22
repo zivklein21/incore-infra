@@ -5,6 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import type { ClassItem, MembershipItem, WalletItem, PunchCardItem } from '../lib/entities';
 import { monthKey, computeWeekKey, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
+import { spendCreditItem } from '../lib/walletCredit';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
@@ -161,15 +162,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   let balanceItemIndex = -1;
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: walletKey,
-        UpdateExpression: 'ADD extraPunches :negOne SET updatedAt = :now',
-        ConditionExpression: 'extraPunches > :zero',
-        ExpressionAttributeValues: { ':negOne': -1, ':zero': 0, ':now': nowIso },
-      },
-    });
+    // Oldest (soonest-to-expire) credit first — see lib/walletCredit.ts.
+    transactItems.push(spendCreditItem(memberId, walletRes.Item as WalletItem | undefined, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD') {
     balanceItemIndex = transactItems.length;
     transactItems.push({
