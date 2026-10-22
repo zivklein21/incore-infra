@@ -331,6 +331,10 @@ locals {
     getIncoreExercises        = "GET"  # trainee: active catalog exercises
     getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
     saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
+    # Manage → Forms → Form Templates (custom admin-built templates; same shared integration)
+    adminListFormTemplates    = "GET"  # admin: list custom form templates for a brand
+    adminSaveFormTemplate     = "POST" # admin: create/edit a custom form template (name + sections)
+    adminDeleteFormTemplate   = "POST" # admin: delete a custom form template
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
