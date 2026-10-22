@@ -11,6 +11,8 @@ import { handler as deleteMyWorkoutLog } from '../lib/incoreWorkout/deleteMyWork
 import { handler as adminListFormTemplates } from '../lib/formTemplates/adminListFormTemplates';
 import { handler as adminSaveFormTemplate } from '../lib/formTemplates/adminSaveFormTemplate';
 import { handler as adminDeleteFormTemplate } from '../lib/formTemplates/adminDeleteFormTemplate';
+import { handler as adminGetSignupFlowConfig } from '../lib/signupFlow/adminGetSignupFlowConfig';
+import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSaveSignupFlowConfig';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -29,6 +31,9 @@ const HANDLERS: Record<string, Handler> = {
   adminListFormTemplates,
   adminSaveFormTemplate,
   adminDeleteFormTemplate,
+  // Manage → Forms → First Sign-up Order.
+  adminGetSignupFlowConfig,
+  adminSaveSignupFlowConfig,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

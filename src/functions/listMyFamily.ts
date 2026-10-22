@@ -7,6 +7,7 @@ import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { computeComplianceFlags, deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from '../lib/entities';
+import { applySignupFlow, loadSignupFlow, type Brand, type SignupFlowStep } from '../lib/signupFlow/shared';
 
 const PHOTO_URL_EXPIRY_SECONDS = 900;
 
@@ -36,6 +37,14 @@ export async function handler(
   }));
   const links = (linksRes.Items ?? []) as FamilyLinkItem[];
 
+  // One First Sign-up Order read per brand, shared by every linked child —
+  // same per-brand gating getProfile applies (profileResponse.ts).
+  const flowByBrand = new Map<Brand, Promise<SignupFlowStep[]>>();
+  const flowFor = (brand: Brand) => {
+    if (!flowByBrand.has(brand)) flowByBrand.set(brand, loadSignupFlow(brand));
+    return flowByBrand.get(brand)!;
+  };
+
   const children = await Promise.all(links.map(async (link) => {
     // Same table as the parent — createFamilyLink() only allows same-table links.
     const childRes = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${link.childUid}`, SK: 'PROFILE' } }));
@@ -55,7 +64,7 @@ export async function handler(
       photoUrl,
       membershipStatus: deriveStatus(profile.membership?.status),
       brand: profile.identity?.brand ?? 'incore',
-      ...computeComplianceFlags(profile),
+      ...applySignupFlow(computeComplianceFlags(profile), await flowFor(profile.identity?.brand ?? 'incore')).flags,
     };
   }));
 

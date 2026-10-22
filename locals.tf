@@ -335,6 +335,9 @@ locals {
     adminListFormTemplates    = "GET"  # admin: list custom form templates for a brand
     adminSaveFormTemplate     = "POST" # admin: create/edit a custom form template (name + sections)
     adminDeleteFormTemplate   = "POST" # admin: delete a custom form template
+    # Manage → Forms → First Sign-up Order (same shared integration)
+    adminGetSignupFlowConfig  = "GET"  # admin: a brand's onboarding form order + include/exclude
+    adminSaveSignupFlowConfig = "POST" # admin: save that order
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
