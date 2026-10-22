@@ -376,11 +376,11 @@ locals {
   # DynamoDB Streams consumers — every one of these must filter internally
   # by PK/SK since the stream carries change events for the whole table.
   # Scheduled functions whose schedule exists but is DISABLED (eventbridge.tf)
-  # — deployed and invocable by hand, never fired automatically.
-  # expireWalletCredits: not until wallets' creditBuckets are reconciled with
-  # extraPunches (old code ran 2026-10-14..; see expireWalletCredits.ts) and
-  # a dry run has been reviewed.
-  disabled_schedules = ["expireWalletCredits"]
+  # — deployed and invocable by hand, never fired automatically. Empty:
+  # expireWalletCredits was enabled 2026-10-22 after its Nov 1 / Dec 1 dry
+  # runs removed nothing (launch grace period) and every wallet's buckets
+  # matched its balance.
+  disabled_schedules = []
 
   stream_functions = [
     "processMail",
