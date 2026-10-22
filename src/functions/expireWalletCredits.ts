@@ -1,8 +1,9 @@
 // EventBridge Scheduled Rule — unix-cron "20 0 1 * *" (00:20 on the 1st), Asia/Jerusalem.
 //
 // Terms of service: unused-session credit is valid until the end of the month
-// after the one it was earned in. Removes every lapsed creditBuckets entry
-// (earned before last month) from WALLET#PRIMARY and subtracts it from
+// after the one it was earned in (credit earned up to Nov 2026: until Dec 31,
+// 2026 — launch grace period, see walletCredit.bucketExpiresOn). Removes every lapsed creditBuckets entry
+// (past its expiry date) from WALLET#PRIMARY and subtracts it from
 // extraPunches — see lib/walletCredit.ts for how buckets are kept.
 //
 // Each wallet is updated with a condition on its current bucket values, so a
@@ -20,6 +21,7 @@ import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { WalletItem } from '../lib/entities';
 import { expiredBuckets } from '../lib/walletCredit';
+import { israelDateStr } from '../lib/entities';
 
 interface ExpiryPreview {
   memberId: string;
@@ -29,8 +31,13 @@ interface ExpiryPreview {
   bucketsExceedBalance: boolean;
 }
 
-export async function handler(event?: { dryRun?: boolean }): Promise<{ dryRun: boolean; members: number; credits: number; errors: number; previews?: ExpiryPreview[] }> {
+export async function handler(event?: { dryRun?: boolean; asOf?: string }): Promise<{ dryRun: boolean; members: number; credits: number; errors: number; previews?: ExpiryPreview[] }> {
   const dryRun = event?.dryRun === true;
+  // Dry run only: evaluate as of another day, e.g. {"dryRun":true,"asOf":"2026-12-01"}
+  // to preview a future 1st-of-month run. Ignored for real runs.
+  const asOf = dryRun && typeof event?.asOf === 'string' && !Number.isNaN(new Date(`${event.asOf}T00:30:00+02:00`).getTime())
+    ? new Date(`${event.asOf}T00:30:00+02:00`)
+    : new Date();
   const wallets: WalletItem[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
@@ -48,7 +55,7 @@ export async function handler(event?: { dryRun?: boolean }): Promise<{ dryRun: b
   const previews: ExpiryPreview[] = [];
 
   for (const wallet of wallets) {
-    const lapsed = expiredBuckets(wallet);
+    const lapsed = expiredBuckets(wallet, asOf);
     const months = Object.keys(lapsed);
     if (months.length === 0) continue;
 
@@ -91,6 +98,6 @@ export async function handler(event?: { dryRun?: boolean }): Promise<{ dryRun: b
     }
   }
 
-  console.log(`[expireWalletCredits] ${dryRun ? 'DRY RUN ' : ''}done — members=${expiredMembers} credits=${expiredTotal} errors=${errors}`);
+  console.log(`[expireWalletCredits] ${dryRun ? `DRY RUN as of ${israelDateStr(asOf)} ` : ''}done — members=${expiredMembers} credits=${expiredTotal} errors=${errors}`);
   return { dryRun, members: expiredMembers, credits: expiredTotal, errors, ...(dryRun ? { previews } : {}) };
 }

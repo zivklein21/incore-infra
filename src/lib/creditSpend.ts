@@ -1,7 +1,7 @@
 import type { TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import { TABLE_NAME } from './dynamo';
 import { israelDateStr, monthKey, type PunchCardItem, type WalletItem } from './entities';
-import { addCreditItem, walletKey } from './walletCredit';
+import { addCreditItem, bucketExpiresOn, walletKey } from './walletCredit';
 
 // Which credit pays for a class, and where a refunded credit goes back to.
 // Shared by bookClass.ts, adminAddToClass.ts and confirmWaitlistSpot.ts
@@ -27,14 +27,8 @@ export const UNTRACKED_BUCKET = 'untracked';
 
 export const CREDITS_EXPIRED_MESSAGE = 'הקרדיטים שלך פגו תוקף';
 
-/** Last valid day ('YYYY-MM-DD') of credit earned in `month` ('YYYY-MM'): the last day of the following month. */
-export function bucketExpiresOn(month: string): string {
-  const [y, m] = month.split('-').map(Number);
-  const nextY = m === 12 ? y + 1 : y;
-  const nextM = m === 12 ? 1 : m + 1;
-  const lastDay = new Date(Date.UTC(nextY, nextM, 0)).getUTCDate();
-  return `${nextY}-${String(nextM).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}`;
-}
+// Expiry of a wallet month batch (incl. the launch grace period) — walletCredit.ts.
+export { bucketExpiresOn };
 
 export type CreditChoice =
   | { consumedFrom: 'EXTRA_PUNCH'; creditBucket: string } // a 'YYYY-MM' month or UNTRACKED_BUCKET
