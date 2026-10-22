@@ -5,7 +5,8 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { CancellationItem } from '../lib/entities';
-import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
+import { ensureCreditBuckets } from '../lib/walletCredit';
+import { refundCreditItem } from '../lib/creditSpend';
 
 // POST /adminRemoveLegalCancellation
 // Body: { userId, classId, refundTo?: 'wallet' | 'membership' }
@@ -67,7 +68,7 @@ export async function handler(
     }
     if (refundTo === 'wallet') {
       await ensureCreditBuckets(userId);
-      transactItems.push(addCreditItem(userId, 1, nowIso));
+      transactItems.push(refundCreditItem(userId, cancelItem.creditBucket, nowIso));
     }
   } else if (isMembership && cancelItem.membershipId) {
     transactItems.push({

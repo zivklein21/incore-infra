@@ -8,7 +8,8 @@ import { evaluateCancellationPolicy } from '../lib/cancellationPolicy';
 import { notifyAdmins } from '../lib/adminNotify';
 import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
 import { findRegistrationMembership } from '../lib/registrationMembership';
-import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
+import { ensureCreditBuckets } from '../lib/walletCredit';
+import { refundCreditItem } from '../lib/creditSpend';
 
 // POST /cancelBooking
 // Body: { classId: string, cancellationReason?: string }
@@ -96,6 +97,7 @@ export async function handler(
     classId,
     status: cancelStatus,
     consumedFrom: regData.consumedFrom ?? '',
+    creditBucket: regData.creditBucket ?? null,
     membershipId: regData.membershipId ?? '',
     adminCardId: regData.adminCardId ?? null,
     weekKey: regData.weekKey ?? null,
@@ -152,7 +154,8 @@ export async function handler(
       || (regData.consumedFrom === 'ADMIN_CARD' && !!regData.adminCardId && !adminCardExists);
     if (refundToWallet) {
       await ensureCreditBuckets(uid);
-      transactItems.push(addCreditItem(uid, 1, nowIso));
+      // Back to the batch it was paid from, keeping that batch's expiry (creditSpend.ts).
+      transactItems.push(refundCreditItem(uid, regData.creditBucket, nowIso));
     }
 
     if (regData.consumedFrom === 'ADMIN_CARD' && regData.adminCardId && adminCardExists) {

@@ -5,7 +5,8 @@ import { oldImage } from '../lib/dynamoStream';
 import { deriveMemberName, type ClassItem, type RegistrationItem } from '../lib/entities';
 import { extractMemberIds, writeNotification, getMemberProfile } from '../lib/classNotifications';
 import { resolveTemplate, getMemberLang, fmtTime, fmtDate, type TemplateVars } from '../lib/templateResolver';
-import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
+import { ensureCreditBuckets } from '../lib/walletCredit';
+import { refundCreditItem } from '../lib/creditSpend';
 
 // DynamoDB Stream trigger — fires on REMOVE of a PK=CLASS#<id> SK=METADATA
 // item. Deleting the class item does NOT cascade-delete its Registration
@@ -77,6 +78,7 @@ async function refundBookedRegistrations(classId: string): Promise<void> {
       classId,
       status: 'ADMIN_CANCELLED',
       consumedFrom: reg.consumedFrom ?? '',
+      creditBucket: reg.creditBucket ?? null,
       membershipId: reg.membershipId ?? '',
       adminCardId: reg.adminCardId ?? null,
       weekKey: reg.weekKey ?? null,
@@ -94,7 +96,7 @@ async function refundBookedRegistrations(classId: string): Promise<void> {
 
     if (refundTo === 'wallet') {
       await ensureCreditBuckets(uid);
-      transactItems.push(addCreditItem(uid, 1, nowIso));
+      transactItems.push(refundCreditItem(uid, reg.creditBucket, nowIso));
     } else if (refundTo === 'membership' && reg.membershipId) {
       const wKey = reg.weekKey;
       transactItems.push({

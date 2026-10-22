@@ -7,7 +7,8 @@ import { isAdmin } from '../lib/auth';
 import type { RegistrationItem, ClassItem } from '../lib/entities';
 import { maybeSendSoleAttendeeAlert } from '../lib/soleAttendeeAlert';
 import { findRegistrationMembership } from '../lib/registrationMembership';
-import { ensureCreditBuckets, addCreditItem } from '../lib/walletCredit';
+import { ensureCreditBuckets } from '../lib/walletCredit';
+import { refundCreditItem } from '../lib/creditSpend';
 
 // POST /adminCancelRegistration
 // Body: { userId, classId, refundTo: 'none' | 'wallet' | 'membership' }
@@ -56,6 +57,7 @@ export async function handler(
     classId,
     status: 'ADMIN_CANCELLED',
     consumedFrom: regData.consumedFrom ?? '',
+    creditBucket: regData.creditBucket ?? null,
     membershipId: regData.membershipId ?? '',
     adminCardId: regData.adminCardId ?? null,
     weekKey: regData.weekKey ?? null,
@@ -88,7 +90,7 @@ export async function handler(
 
   if (refundTo === 'wallet') {
     await ensureCreditBuckets(userId);
-    transactItems.push(addCreditItem(userId, 1, nowIso));
+    transactItems.push(refundCreditItem(userId, regData.creditBucket, nowIso));
   }
 
   if (refundTo === 'membership' && regData.membershipId) {

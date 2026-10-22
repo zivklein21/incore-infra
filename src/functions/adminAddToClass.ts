@@ -5,7 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { monthKey, computeWeekKey, israelDateStr, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships, type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem } from '../lib/entities';
-import { spendCreditItem } from '../lib/walletCredit';
+import { chooseCredit, spendFromBucketItem, CREDITS_EXPIRED_MESSAGE } from '../lib/creditSpend';
 import { membershipForClass } from '../lib/registrationMembership';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
@@ -14,14 +14,6 @@ type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 // helper (each handler keeps its own small local copy rather than sharing
 // one lib function — see those two files): prefer the oldest-first ordering
 // implied by the query, first non-expired card with punches left.
-function findAvailableAdminCard(cards: PunchCardItem[], classDate: Date): PunchCardItem | null {
-  return cards.find((c) => {
-    if (c.remainingPunches <= 0) return false;
-    if (c.expiryDate && new Date(c.expiryDate) < classDate) return false;
-    return true;
-  }) ?? null;
-}
-
 // POST /adminAddToClass
 // Body: { classId, userId, deductSession: boolean, skipSameDayCheck?: boolean, useWalletCredit?: boolean }
 // Auth: Cognito JWT, caller must be admin
@@ -114,6 +106,7 @@ export async function handler(
   let activeMembership: MembershipItem | undefined;
   let consumedFrom: ConsumedFrom = 'ADMIN_CARD'; // free admin override unless one of the branches below sets a real source
   let adminCardId = '';
+  let creditBucket = ''; // wallet batch an EXTRA_PUNCH add was paid from (refunds go back to it)
   let wallet: WalletItem | undefined;
 
   if (deductSession) {
@@ -178,17 +171,18 @@ export async function handler(
       })),
     ]);
     wallet = walletRes.Item as WalletItem | undefined;
-    const extraPunches = wallet?.extraPunches ?? 0;
     const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
-    if (extraPunches > 0) {
-      consumedFrom = 'EXTRA_PUNCH';
-    } else {
-      const card = findAvailableAdminCard(adminPunchCards, classDate);
-      if (!card) return json(400, { error: 'no_credits' });
-      consumedFrom = 'ADMIN_CARD';
-      adminCardId = card.cardId;
+    // Soonest-expiring credit still valid on the class date (lib/creditSpend.ts).
+    const choice = chooseCredit(wallet, adminPunchCards, classDate);
+    if ('error' in choice) {
+      return json(400, choice.error === 'credits_expired'
+        ? { error: 'credits_expired', message: CREDITS_EXPIRED_MESSAGE }
+        : { error: 'no_credits' });
     }
+    consumedFrom = choice.consumedFrom;
+    if (choice.consumedFrom === 'ADMIN_CARD') adminCardId = choice.adminCardId;
+    else creditBucket = choice.creditBucket;
   }
 
   const nowIso = new Date().toISOString();
@@ -210,6 +204,7 @@ export async function handler(
     registeredAt: nowIso,
   };
   if (adminCardId) registrationPayload.adminCardId = adminCardId;
+  if (creditBucket) registrationPayload.creditBucket = creditBucket;
 
   const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [
     {
@@ -254,7 +249,7 @@ export async function handler(
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
     // Oldest (soonest-to-expire) credit first — see lib/walletCredit.ts.
-    transactItems.push(spendCreditItem(userId, wallet, nowIso));
+    transactItems.push(spendFromBucketItem(userId, wallet, creditBucket, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD' && adminCardId) {
     balanceItemIndex = transactItems.length;
     transactItems.push({

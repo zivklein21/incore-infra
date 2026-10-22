@@ -212,6 +212,8 @@ export interface RegistrationItem {
   targetMonth: string;
   weekKey?: string;
   adminCardId?: string;
+  /** Wallet batch an EXTRA_PUNCH booking was paid from ('YYYY-MM' | 'untracked') — see lib/creditSpend.ts. Absent on bookings made before it was recorded. */
+  creditBucket?: string | null;
   reminderSent?: boolean;
   reminderSentAt?: string;
   // Denormalized display name for trial (guest) registrations, i.e.
@@ -1296,6 +1298,8 @@ export interface CancellationItem {
   consumedFrom: string;
   membershipId: string;
   adminCardId?: string | null;
+  /** Wallet batch an EXTRA_PUNCH booking was paid from ('YYYY-MM' | 'untracked'), copied from the registration — refunds return it there (lib/creditSpend.ts). */
+  creditBucket?: string | null;
   weekKey?: string | null;
   targetMonth: string;
   cancelledAt: string; // ISO 8601

@@ -39,28 +39,8 @@ export function addCreditItem(uid: string, amount: number, nowIso: string, month
   };
 }
 
-// Transaction item that spends one credit — from the oldest non-empty month
-// bucket when there is one (untracked legacy credit otherwise). Fails the
-// transaction (ConditionalCheckFailed) when the wallet is empty.
-export function spendCreditItem(uid: string, wallet: WalletItem | undefined, nowIso: string): TransactItem {
-  const oldest = Object.entries(wallet?.creditBuckets ?? {})
-    .filter(([, n]) => n > 0)
-    .sort(([a], [b]) => a.localeCompare(b))[0]?.[0];
-  return {
-    Update: {
-      TableName: TABLE_NAME,
-      Key: walletKey(uid),
-      UpdateExpression: oldest
-        ? 'ADD extraPunches :negOne, creditBuckets.#m :negOne SET updatedAt = :now'
-        : 'ADD extraPunches :negOne SET updatedAt = :now',
-      ConditionExpression: oldest
-        ? 'extraPunches > :zero AND creditBuckets.#m > :zero'
-        : 'extraPunches > :zero',
-      ...(oldest ? { ExpressionAttributeNames: { '#m': oldest } } : {}),
-      ExpressionAttributeValues: { ':negOne': -1, ':zero': 0, ':now': nowIso },
-    },
-  };
-}
+// Spending (soonest-expiring valid batch, lapsed skipped) lives in
+// lib/creditSpend.ts (chooseCredit / spendFromBucketItem).
 
 // Buckets that have lapsed as of `now`: earned before last month.
 export function expiredBuckets(wallet: WalletItem, now: Date = new Date()): Record<string, number> {

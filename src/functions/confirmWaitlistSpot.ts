@@ -5,18 +5,10 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import type { ClassItem, MembershipItem, WalletItem, PunchCardItem } from '../lib/entities';
 import { monthKey, computeWeekKey, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships } from '../lib/entities';
-import { spendCreditItem } from '../lib/walletCredit';
+import { chooseCredit, spendFromBucketItem, CREDITS_EXPIRED_MESSAGE } from '../lib/creditSpend';
 import { membershipForClass } from '../lib/registrationMembership';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
-
-function findAvailableAdminCard(cards: PunchCardItem[], classDate: Date): PunchCardItem | null {
-  return cards.find((c) => {
-    if (c.remainingPunches <= 0) return false;
-    if (c.expiryDate && new Date(c.expiryDate) < classDate) return false;
-    return true;
-  }) ?? null;
-}
 
 // POST /confirmWaitlistSpot
 // Body: { memberId, classId }
@@ -76,12 +68,13 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const allMemberships = (membershipsRes.Items ?? []) as MembershipItem[];
   const membership = membershipForClass(allMemberships, classDate, targetMonth, true);
 
-  const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
+  const walletItem = walletRes.Item as WalletItem | undefined;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
   let consumedFrom: ConsumedFrom;
   let membershipId = '';
   let adminCardId = '';
+  let creditBucket = ''; // wallet batch an EXTRA_PUNCH booking was paid from (refunds go back to it)
 
   if (membership) {
     const weeklyUsed = weeklyUsedAcrossMemberships(allMemberships, wKey);
@@ -92,21 +85,29 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     if (withinWeekly && withinMonthly) {
       consumedFrom = 'MEMBERSHIP';
       membershipId = membership.membershipId;
-    } else if (extraPunches > 0) {
-      consumedFrom = 'EXTRA_PUNCH';
-      membershipId = membership.membershipId;
     } else {
-      const card = findAvailableAdminCard(adminPunchCards, classDate);
-      if (!card) return json(403, { error: 'no_credits' });
-      consumedFrom = 'ADMIN_CARD';
+      // Soonest-expiring credit still valid on the class date (lib/creditSpend.ts).
+      const choice = chooseCredit(walletItem, adminPunchCards, classDate);
+      if ('error' in choice) {
+        return json(403, choice.error === 'credits_expired'
+          ? { error: 'credits_expired', message: CREDITS_EXPIRED_MESSAGE }
+          : { error: 'no_credits' });
+      }
+      consumedFrom = choice.consumedFrom;
       membershipId = membership.membershipId;
-      adminCardId = card.cardId;
+      if (choice.consumedFrom === 'ADMIN_CARD') adminCardId = choice.adminCardId;
+      else creditBucket = choice.creditBucket;
     }
   } else {
-    const card = findAvailableAdminCard(adminPunchCards, classDate);
-    if (!card) return json(403, { error: 'membership_required' });
-    consumedFrom = 'ADMIN_CARD';
-    adminCardId = card.cardId;
+    // No membership: punch cards only, as before.
+    const choice = chooseCredit(walletItem, adminPunchCards, classDate, { allowWallet: false });
+    if ('error' in choice) {
+      return json(403, choice.error === 'credits_expired'
+        ? { error: 'credits_expired', message: CREDITS_EXPIRED_MESSAGE }
+        : { error: 'membership_required' });
+    }
+    consumedFrom = choice.consumedFrom;
+    if (choice.consumedFrom === 'ADMIN_CARD') adminCardId = choice.adminCardId;
   }
 
   const newWaitlist = waitlist.filter((e) => e.member !== memberId);
@@ -129,6 +130,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     registeredAt: nowIso,
   };
   if (adminCardId) regPayload.adminCardId = adminCardId;
+  if (creditBucket) regPayload.creditBucket = creditBucket;
 
   const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [
     {
@@ -171,7 +173,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
     // Oldest (soonest-to-expire) credit first — see lib/walletCredit.ts.
-    transactItems.push(spendCreditItem(memberId, walletRes.Item as WalletItem | undefined, nowIso));
+    transactItems.push(spendFromBucketItem(memberId, walletItem, creditBucket, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD') {
     balanceItemIndex = transactItems.length;
     transactItems.push({
