@@ -29,3 +29,8 @@ dist/
 layer_build/
 .layer_deps/
 exports/
+
+# macOS / iCloud sync artifacts
+.DS_Store
+* 2.*
+tfplan*
