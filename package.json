@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc --noEmit && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npx --yes tsx@4.19.2 --test test/*.test.ts"
+    "test": "npx --yes --package=tsx@4.19.2 -- tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.600.0",
