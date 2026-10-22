@@ -170,18 +170,28 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
       await ddb.send(new UpdateCommand({
         TableName: FORCA_TABLE_NAME,
         Key: { PK: agreement.PK, SK: agreement.SK },
-        UpdateExpression: giveUp
-          ? 'SET consecutiveFailures = :cf, #status = :failed, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK'
-          : 'SET consecutiveFailures = :cf, #status = :active, nextChargeDate = :now, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :now',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':cf': consecutiveFailures,
-          ':failed': 'failed',
-          ':active': 'active',
-          ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
-          ':now': nowIso,
-          ':g3pk': 'FORCA_AGREEMENT_STATUS#active',
-        },
+        // DynamoDB rejects unused values — each branch passes only its own.
+        ...(giveUp
+          ? {
+            UpdateExpression: 'SET consecutiveFailures = :cf, #status = :failed, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK',
+            ExpressionAttributeValues: {
+              ':cf': consecutiveFailures,
+              ':failed': 'failed',
+              ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
+              ':now': nowIso,
+            },
+          }
+          : {
+            UpdateExpression: 'SET consecutiveFailures = :cf, #status = :active, nextChargeDate = :now, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :now',
+            ExpressionAttributeValues: {
+              ':cf': consecutiveFailures,
+              ':active': 'active',
+              ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
+              ':now': nowIso,
+              ':g3pk': 'FORCA_AGREEMENT_STATUS#active',
+            },
+          }),
       }));
     }
   }
@@ -287,8 +297,14 @@ export async function runForcaBillingCycle(): Promise<{ processed: number; succe
   let succeeded = 0;
   let failed = 0;
   for (const agreement of due) {
-    const { success } = await chargeOneForcaAgreement(agreement);
-    if (success) succeeded++; else failed++;
+    // One bad agreement must never abort the rest of the cycle.
+    try {
+      const { success } = await chargeOneForcaAgreement(agreement);
+      if (success) succeeded++; else failed++;
+    } catch (err: any) {
+      console.error(`[chargeForcaSubscriptions] agreement=${agreement.agreementId} user=${agreement.userId} threw:`, err);
+      failed++;
+    }
   }
 
   console.log(`[chargeForcaSubscriptions] processed=${due.length} succeeded=${succeeded} failed=${failed}`);
