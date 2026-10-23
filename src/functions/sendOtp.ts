@@ -1,10 +1,10 @@
 import { randomUUID } from 'crypto';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { QueryCommand, DeleteCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import * as nodemailer from 'nodemailer';
 import { ddb, TABLE_NAME, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import { getEmailBrandTokens } from '../lib/emailBranding';
+import { sendEmail } from '../lib/mailer';
 import type { MemberProfileItem } from '../lib/entities';
 
 // POST /sendOtp
@@ -12,9 +12,7 @@ import type { MemberProfileItem } from '../lib/entities';
 // be behind the API Gateway Cognito JWT authorizer. Configure its route
 // without an authorizer, unlike the rest of this batch.
 //
-// GMAIL_APP_PASSWORD should be sourced from Secrets Manager / SSM Parameter
-// Store and injected as this Lambda's environment variable at deploy time —
-// left as process.env here to match how TABLE_NAME is wired (see dynamo.ts).
+// Sent through lib/mailer.ts (SES, Gmail fallback during the migration).
 //
 // FORCA's member data lives in a fully separate table (FORCA_TABLE_NAME —
 // see dynamo.ts), and the email alone doesn't tell us which one a given
@@ -22,8 +20,6 @@ import type { MemberProfileItem } from '../lib/entities';
 // 404ing "No account found" for every FORCA member's forgot-password
 // attempt. Now queries both in parallel and brands the email (and the OTP
 // record's own table) off whichever one actually has her.
-
-const FROM_EMAIL = 'incoreworkout@gmail.com';
 
 function generateOtp(): string {
   return Math.floor(1000 + Math.random() * 9000).toString();
@@ -139,17 +135,12 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   }));
 
   const t = getEmailBrandTokens(brand);
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: FROM_EMAIL, pass: process.env.GMAIL_APP_PASSWORD },
-  });
-
-  await transporter.sendMail({
-    from: `"${t.senderName}" <${FROM_EMAIL}>`,
+  await sendEmail({
     to: email,
     subject: `קוד האימות שלך ל-${t.senderName}`,
     html: buildOtpEmailHtml(code, brand),
-  });
+    senderName: t.senderName,
+  }, 'sendOtp');
 
   return json(200, { success: true, maskedEmail: maskEmail(email) });
 }

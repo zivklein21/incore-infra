@@ -30,7 +30,7 @@ locals {
     adminDeleteExercise                     = { method = "POST" } # FORCA Tracker feature
     adminDeleteExerciseLogEntry             = { method = "POST" } # FORCA Tracker feature: admin edit/delete of a trainee's logged history entry
     adminDeleteExtraTraining                = { method = "POST" } # FORCA Extra Training feature
-    adminDeleteMeasurementType               = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
+    adminDeleteMeasurementType              = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
     adminDeleteForcaSubscriptionProduct     = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     adminDeleteGroup                        = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                       = { method = "POST" }
@@ -45,7 +45,7 @@ locals {
     adminDeleteTestGroup                    = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType                 = { method = "POST" } # FORCA Coach feature
     adminDeleteWeeklyTask                   = { method = "POST" } # FORCA Weekly Tasks feature
-    adminDeleteWorkoutMethodType             = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
+    adminDeleteWorkoutMethodType            = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
     adminDeleteWorkoutPackageType           = { method = "POST" } # FORCA Workout Plan builder: Package dropdown management
     adminDeleteWorkoutPlan                  = { method = "POST" } # FORCA Workout Plan builder
     adminDeleteWorkoutPlanBlock             = { method = "POST" } # FORCA Workout Plan builder
@@ -115,7 +115,7 @@ locals {
     adminSaveTestGroup                      = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType                   = { method = "POST" } # FORCA Coach feature
     adminSaveWeeklyTask                     = { method = "POST" } # FORCA Weekly Tasks feature
-    adminSaveWorkoutMethodType               = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
+    adminSaveWorkoutMethodType              = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
     adminSaveWorkoutPackageType             = { method = "POST" } # FORCA Workout Plan builder: Package dropdown management
     adminSaveWorkoutPlan                    = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
     adminSaveWorkoutPlanBlock               = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
@@ -156,7 +156,7 @@ locals {
     createHypCardUpdatePage                 = { method = "POST" }
     createHypPaymentPage                    = { method = "POST" }
     createHypTokenPurchase                  = { method = "POST" }
-    createForcaMerchTokenPurchase            = { method = "POST" } # FORCA Merch Store feature — saved-card checkout
+    createForcaMerchTokenPurchase           = { method = "POST" } # FORCA Merch Store feature — saved-card checkout
     createMerchPaymentPage                  = { method = "POST" } # FORCA Merch Store feature
     createSupportInquiry                    = { method = "POST" }
     createTrainingSession                   = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
@@ -244,7 +244,7 @@ locals {
     getTrainingHistory                      = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                        = { method = "GET" } # FORCA Coach feature
     getUploadUrl                            = { method = "POST" }
-    getWorkoutMethodTypes                    = { method = "ANY" } # FORCA Workout Plan builder: Working Method dropdown source
+    getWorkoutMethodTypes                   = { method = "ANY" } # FORCA Workout Plan builder: Working Method dropdown source
     getWorkoutPackageTypes                  = { method = "ANY" } # FORCA Workout Plan builder: Package dropdown source
     getWallet                               = { method = "ANY" }
     grantPunchCard                          = { method = "POST" }
@@ -267,7 +267,7 @@ locals {
     saveRunningReport                       = { method = "POST" } # FORCA running-session post-workout report: trainee's own RPE/pace for one session
     saveScheduleAlertSettings               = { method = "POST" }
     saveSupportSettings                     = { method = "POST" }
-    searchForca                             = { method = "ANY" } # FORCA Global Search: trainees/groups/workout plans
+    searchForca                             = { method = "ANY" }  # FORCA Global Search: trainees/groups/workout plans
     sendCoachNotification                   = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendForcaSupportMessage                 = { method = "POST" } # FORCA Chat feature
     sendSupportMessage                      = { method = "POST" }
@@ -332,9 +332,9 @@ locals {
     getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
     saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
     # Manage → Forms → Form Templates (custom admin-built templates; same shared integration)
-    adminListFormTemplates    = "GET"  # admin: list custom form templates for a brand
-    adminSaveFormTemplate     = "POST" # admin: create/edit a custom form template (name + sections)
-    adminDeleteFormTemplate   = "POST" # admin: delete a custom form template
+    adminListFormTemplates  = "GET"  # admin: list custom form templates for a brand
+    adminSaveFormTemplate   = "POST" # admin: create/edit a custom form template (name + sections)
+    adminDeleteFormTemplate = "POST" # admin: delete a custom form template
     # Manage → Forms → First Sign-up Order (same shared integration)
     adminGetSignupFlowConfig  = "GET"  # admin: a brand's onboarding form order + include/exclude
     adminSaveSignupFlowConfig = "POST" # admin: save that order
@@ -399,6 +399,11 @@ locals {
     "processDlqMessage",
   ]
 
+  # SNS-triggered — SES bounce/complaint/reject events (see ses.tf).
+  sns_functions = [
+    "onSesNotification",
+  ]
+
   # Shared no-op OPTIONS handler — see api_gateway.tf's aws_apigatewayv2_route.cors_preflight
   # and corsPreflight.ts for why every path needs its own unauthenticated
   # OPTIONS route. Not part of all_http_functions: it's deployed once here
@@ -422,6 +427,7 @@ locals {
     keys(local.scheduled_functions),
     local.stream_functions,
     local.sqs_functions,
+    local.sns_functions,
     [local.cors_preflight_function],
     local.cognito_custom_auth_functions,
   ))

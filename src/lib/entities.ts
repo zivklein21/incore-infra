@@ -1287,6 +1287,8 @@ export interface WeeklyTaskExerciseLogItem {
 export interface MailItem {
   PK: string; SK: string;
   to: string;
+  /** Picks the sender display name (INCORE/FORCA); absent on items queued before it existed → INCORE. */
+  brand?: 'incore' | 'forca';
   message: { subject?: string; html?: string };
 }
 

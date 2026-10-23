@@ -5,7 +5,6 @@ import {
   AdminDeleteUserCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import * as nodemailer from 'nodemailer';
 import { ddb, tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
@@ -14,6 +13,7 @@ import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
 import { createFamilyLink } from '../lib/familyLinks';
 import { recordSystemAlert } from '../lib/alerts';
 import { getEmailBrandTokens } from '../lib/emailBranding';
+import { sendEmail } from '../lib/mailer';
 import type { MemberProfileItem } from '../lib/entities';
 
 // POST /adminCreateUser
@@ -392,11 +392,6 @@ async function sendWelcomeEmail(email: string, name: string, password: string, b
     ? 'איזה כיף לראות אותך איתנו! אנחנו נרגשים שהצטרפת ל-FORCA.'
     : 'איזה כיף לראות אותך איתנו! אנחנו נרגשים שהצטרפת לאפליקציה שלנו.';
 
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user: 'incoreworkout@gmail.com', pass: process.env.GMAIL_APP_PASSWORD },
-  });
-
   const header = isCoach
     ? `<div style="padding:24px 30px;text-align:center;border-bottom:1px solid #eeeeee;background-color:${t.headerBg};">
       <span style="font-size:20px;font-weight:700;color:#ffffff;">${t.senderName}</span>
@@ -423,8 +418,8 @@ async function sendWelcomeEmail(email: string, name: string, password: string, b
       </a>
     </div>`;
 
-  await transporter.sendMail({
-    from: `"${t.senderName}" <incoreworkout@gmail.com>`,
+  await sendEmail({
+    senderName: t.senderName,
     to: email,
     subject: brand === 'forca'
       ? `ברוכה הבאה ל-${t.senderName}! פרטי ההתחברות שלך בפנים`
@@ -447,5 +442,5 @@ async function sendWelcomeEmail(email: string, name: string, password: string, b
     ${footer}
   </div>
 </body></html>`,
-  });
+  }, 'adminCreateUser');
 }

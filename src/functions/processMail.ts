@@ -1,15 +1,14 @@
 import type { DynamoDBStreamEvent } from 'aws-lambda';
-import * as nodemailer from 'nodemailer';
 import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { newImage } from '../lib/dynamoStream';
+import { getEmailBrandTokens } from '../lib/emailBranding';
+import { maskEmailForLog, sendEmail } from '../lib/mailer';
 import type { MailItem } from '../lib/entities';
 
 // DynamoDB Stream trigger — fires on INSERT of a PK=MAIL#<id> item (an
-// email-to-send record). GMAIL_APP_PASSWORD sourced from Secrets Manager,
-// same pattern as sendOtp.ts.
-const FROM_EMAIL = 'incoreworkout@gmail.com';
-
+// email-to-send record, queued by sendWelcomeEmail.ts). Sent through
+// lib/mailer.ts (SES, Gmail fallback during the migration).
 export async function handler(event: DynamoDBStreamEvent): Promise<void> {
   for (const record of event.Records) {
     if (record.eventName !== 'INSERT') continue;
@@ -25,21 +24,12 @@ export async function handler(event: DynamoDBStreamEvent): Promise<void> {
       continue;
     }
 
-    const transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: { user: FROM_EMAIL, pass: process.env.GMAIL_APP_PASSWORD },
-    });
-
-    await transporter.sendMail({
-      from: `"INCORE" <${FROM_EMAIL}>`,
-      to,
-      subject,
-      html,
-    });
+    const { senderName } = getEmailBrandTokens(item.brand === 'forca' ? 'forca' : 'incore');
+    await sendEmail({ to, subject, html, senderName }, 'processMail');
 
     // Delete the item so credentials don't linger in the table.
     await ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { PK: item.PK, SK: item.SK } }));
 
-    console.log(`[processMail] Sent to ${to} (${item.PK})`);
+    console.log(`[processMail] Sent to ${maskEmailForLog(to)} (${item.PK})`);
   }
 }
