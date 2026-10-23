@@ -4,9 +4,8 @@ import { deriveMemberName, type ClassItem, type RegistrationItem, type MemberPro
 import { getReminderSettings } from './notificationTiming';
 import { fmtTime, fmtDate, getMemberLang } from './templateResolver';
 import { israelHour, israelDateStrOf, israelHourToUTC } from './israelTime';
+import { sendExpoPushBatch } from './push';
 
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const EXPO_CHUNK_SZ = 100;
 const LOOKAHEAD_HOURS = 48;
 
 interface RawTemplate {
@@ -32,12 +31,6 @@ function computeSendBucket(classDate: Date, hoursBefore: number, windowStartHour
 
   const bucketStart = israelHourToUTC(dayStr, targetHour);
   return { start: bucketStart, end: new Date(bucketStart.getTime() + 3_600_000) };
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
 }
 
 function applyVars(text: string, vars: { class_type: string; class_time: string; class_date: string; member_name: string }): string {
@@ -214,19 +207,10 @@ export async function runClassReminderEngine(): Promise<Record<string, unknown>>
       })));
     }
 
-    for (const batch of chunk(pushBatch, EXPO_CHUNK_SZ)) {
-      try {
-        const resp = await fetch(EXPO_PUSH_URL, {
-          method: 'POST',
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify(batch),
-        });
-        const result = await resp.json();
-        console.log(`[classReminderEngine] push (${batch.length}):`, JSON.stringify(result));
-        totalPushed += batch.length;
-      } catch (err: any) {
-        console.error('[classReminderEngine] push batch error:', err);
-      }
+    if (pushBatch.length) {
+      const accepted = await sendExpoPushBatch(pushBatch, 'classReminderEngine');
+      console.log(`[classReminderEngine] push accepted ${accepted}/${pushBatch.length}`);
+      totalPushed += accepted;
     }
 
     await Promise.all(dbWrites.map((fn) => fn()));

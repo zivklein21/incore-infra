@@ -371,6 +371,7 @@ locals {
     chargeHypBillingAgreements     = "cron(0 3 * * ? *)"       # 03:00 daily
     chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
+    checkPushReceipts              = "cron(0/30 * * * ? *)"    # every 30 minutes — Expo push receipts (see lib/push.ts)
   }
 
   # DynamoDB Streams consumers — every one of these must filter internally
