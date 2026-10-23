@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from './dynamo';
 import type { MemberProfileItem, ProductItem, HypOrderItem, HypProductType, HypPaymentMethod } from './entities';
 import { monthKey, endOfMonth } from './entities';
 import { queryAllActiveMemberships } from './membershipQueries';
+import { normalizeIsraeliId } from './israeliId';
 
 // HYP's `UserId` param doubles as the cardholder's Israeli ID number when the
 // terminal is configured to require one (confirmed: our terminal is). Per
@@ -12,8 +13,13 @@ import { queryAllActiveMemberships } from './membershipQueries';
 // string, never the cardholder's real ID; sending it risks a CCode 6 decline).
 export const HYP_NO_ID_PLACEHOLDER = '000000000';
 
+// Always the normalized 9-digit string: if an ID ever reached the table as a
+// number (or lost its leading zero some other way), it's padded back here
+// rather than sent to HYP as 8 digits.
 export function getMemberIdNumber(member: MemberProfileItem): string {
-  return member.forms?.health_declaration?.id_number ?? '';
+  const raw: unknown = member.forms?.health_declaration?.id_number;
+  if (raw === undefined || raw === null) return '';
+  return normalizeIsraeliId(String(raw));
 }
 
 // Members are created with separate identity.first_name/last_name — used as
