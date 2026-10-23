@@ -267,21 +267,12 @@ export async function getHypToken(transId: string): Promise<HypToken | null> {
 
 // ─── action=soft&Token=True — charge a previously captured token ─────────
 
-// UserId for EVERY saved-card charge. HYP's UserId must be the CARDHOLDER's
-// ID, and we never learn it: the payer types it on HYP's page, and HYP's
-// success redirect doesn't return it (only ACode/Amount/CCode/Fild1-3/Id/
-// Order/Sign). Sending the member's health-declaration ID instead made every
-// charge on someone else's card (a parent's card for a child, a spouse's)
-// decline with CCode 6 ("ID doesn't match cardholder"). HYP's docs: send
-// 000000000 when the cardholder ID isn't available. Deliberately not a
-// parameter, so no caller can pass a member ID again.
-const TOKEN_CHARGE_USER_ID = '000000000';
-
 export interface ChargeTokenParams {
   token: string;
   expiryMonth: number;
   expiryYear: number;
   amount: number;
+  userId: string;
   clientName: string;
   info: string;
   email?: string;
@@ -316,7 +307,7 @@ export async function chargeHypToken(params: ChargeTokenParams): Promise<ChargeT
     Tmonth: mm,
     Tyear: yy,
     Amount: params.amount,
-    UserId: TOKEN_CHARGE_USER_ID,
+    UserId: params.userId,
     ClientName: params.clientName,
     Info: params.info,
     ...(params.email ? { email: params.email } : {}),

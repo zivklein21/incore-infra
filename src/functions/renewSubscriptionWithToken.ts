@@ -5,7 +5,7 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MemberProfileItem, ProductItem } from '../lib/entities';
 import { monthKey, endOfMonth } from '../lib/entities';
-import { getMemberFullName, buildHypInfo } from '../lib/hypOrders';
+import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from '../lib/paymentGrants';
 
@@ -66,6 +66,7 @@ export async function handler(
     result = await chargeHypToken({
       token, expiryMonth, expiryYear,
       amount: price,
+      userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       clientName,
       info: buildHypInfo(product.name ?? productId, product.description),
       email: member.identity?.email || member.email || undefined,

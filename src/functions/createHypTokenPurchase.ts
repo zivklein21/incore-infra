@@ -5,7 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import type { MemberProfileItem, ProductItem } from '../lib/entities';
 import { firstOfNextMonth, monthKey } from '../lib/entities';
-import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getPolicySettings, buildHypInfo } from '../lib/hypOrders';
+import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, getPolicySettings, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { chargeHypToken } from '../lib/hypClient';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
@@ -62,6 +62,7 @@ export async function handler(
     chargeResult = await chargeHypToken({
       token, expiryMonth, expiryYear,
       amount: chargeAmount,
+      userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       clientName: [build.clientFirstName, build.clientLastName].filter(Boolean).join(' '),
       info: buildHypInfo(build.productName, build.description),
       email: build.email || undefined,

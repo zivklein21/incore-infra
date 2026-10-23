@@ -4,7 +4,7 @@ import { ddb, TABLE_NAME } from './dynamo';
 import type { HypBillingAgreementItem, MemberProfileItem, ProductItem, MembershipItem } from './entities';
 import { monthKey, endOfMonth, addMonths, firstOfNextMonth } from './entities';
 import { chargeHypToken } from './hypClient';
-import { getMemberFullName, buildHypInfo, getPolicySettings } from './hypOrders';
+import { getMemberIdNumber, getMemberFullName, buildHypInfo, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from './paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
@@ -20,6 +20,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
 
   const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${agreement.userId}`, SK: 'PROFILE' } }));
   const member = memberRes.Item as MemberProfileItem | undefined;
+  const chargeUserId = (member && getMemberIdNumber(member)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = member ? getMemberFullName(member) : 'Member';
   const chargeEmail = member?.identity?.email || member?.email || '';
 
@@ -36,6 +37,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         expiryMonth: agreement.tokenExpiryMonth,
         expiryYear: agreement.tokenExpiryYear,
         amount: chargeAmount,
+        userId: chargeUserId,
         clientName: chargeClientName,
         info: buildHypInfo(agreement.productName, agreement.description),
         email: chargeEmail || undefined,

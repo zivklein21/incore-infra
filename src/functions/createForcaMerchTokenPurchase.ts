@@ -3,7 +3,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { getMemberFullName, buildHypInfo } from '../lib/hypOrders';
+import { getMemberFullName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import { applyMerchOrderCharge } from '../lib/merchPayments';
@@ -139,6 +139,7 @@ export async function handler(
       expiryMonth: savedExpiryMonth,
       expiryYear: savedExpiryYear,
       amount: totalAmount,
+      userId: getMemberIdNumber(billedMember) || HYP_NO_ID_PLACEHOLDER,
       clientName: getMemberFullName(billedMember),
       info: childName ? buildHypInfo(infoLine, `שם הילדה: ${childName}`) : buildHypInfo(infoLine),
       email: billedMember.identity?.email || billedMember.email || undefined,
