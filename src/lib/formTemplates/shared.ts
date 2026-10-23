@@ -1,5 +1,5 @@
 import {
-  defaultRoleFor, normalizeSections, normalizeSigners, normalizeTraineeDevice, templateContentHash,
+  defaultRoleFor, normalizeAcknowledgers, normalizeSections, normalizeSigners, normalizeTraineeDevice, templateContentHash,
   SignerRole, TemplateSection, TraineeDevice,
 } from './schema';
 
@@ -40,6 +40,8 @@ export interface StoredTemplate {
   id: string;
   name: string;
   signers: SignerRole[];
+  /** Roles that only view the completed form and confirm (FORCA). */
+  acknowledgers: SignerRole[];
   /** Where the trainee signs/fills (FORCA). */
   traineeDevice: TraineeDevice;
   sections: TemplateSection[];
@@ -63,14 +65,16 @@ export function fromStored(item: Record<string, unknown>, brand: 'incore' | 'for
   }
   const legacy = typeof item.currentVersion !== 'number';
   const traineeDevice = normalizeTraineeDevice(item.traineeDevice);
+  const acknowledgers = normalizeAcknowledgers(item.acknowledgers, signers);
   return {
     id: String(item.id ?? ''),
     name: String(item.name ?? ''),
     signers,
+    acknowledgers,
     traineeDevice,
     sections,
     currentVersion: legacy ? 1 : (item.currentVersion as number),
-    contentHash: legacy ? templateContentHash({ signers, sections, traineeDevice }) : String(item.contentHash ?? ''),
+    contentHash: legacy ? templateContentHash({ signers, sections, traineeDevice, acknowledgers }) : String(item.contentHash ?? ''),
     createdAt: String(item.createdAt ?? ''),
     updatedAt: String(item.updatedAt ?? ''),
     legacy,

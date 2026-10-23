@@ -248,6 +248,18 @@ export function normalizeSections(raw: unknown, defaultRole: SignerRole): Templa
  */
 export const defaultRoleFor = (brand: 'incore' | 'forca'): SignerRole => (brand === 'forca' ? 'parent' : 'trainee');
 
+/**
+ * "View & acknowledge" participants: they fill and sign nothing — once the
+ * signers are done they see the whole form read-only (answers, signatures)
+ * and confirm "I've read and confirm". A role is either a signer or an
+ * acknowledger; a role in both lists signs. Shown on the same device as
+ * that role would sign on (traineeDevice for the trainee).
+ */
+export function normalizeAcknowledgers(raw: unknown, signers: SignerRole[]): SignerRole[] {
+  const set = new Set<SignerRole>(Array.isArray(raw) ? raw.filter(isRole) : []);
+  return SIGNER_ROLES.filter(r => set.has(r) && !signers.includes(r));
+}
+
 export function normalizeSigners(raw: unknown, defaultRole: SignerRole): SignerRole[] {
   const list = Array.isArray(raw) ? raw.filter(isRole) : [];
   const set = new Set<SignerRole>(list);
@@ -271,13 +283,18 @@ export function stableStringify(value: unknown): string {
 }
 
 /**
- * SHA-256 of what a signer actually agrees to: the signer set, where the
- * trainee signs, and every section/field. The template's name isn't part of
+ * SHA-256 of what a signer actually agrees to: the signer set, who views &
+ * acknowledges, where the trainee signs, and every section/field. The template's name isn't part of
  * it — renaming isn't a new version. traineeDevice only enters the hash
  * when it isn't the default, so templates hashed before the setting existed
  * keep their hash.
  */
-export function templateContentHash(content: { signers: SignerRole[]; sections: TemplateSection[]; traineeDevice?: TraineeDevice }): string {
+export function templateContentHash(content: {
+  signers: SignerRole[]; sections: TemplateSection[]; traineeDevice?: TraineeDevice; acknowledgers?: SignerRole[];
+}): string {
+  // Optional parts only enter the hash when set, so templates hashed before
+  // they existed keep their hash (and don't publish a phantom new version).
   const device = content.traineeDevice && content.traineeDevice !== DEFAULT_TRAINEE_DEVICE ? { traineeDevice: content.traineeDevice } : {};
-  return createHash('sha256').update(stableStringify({ signers: content.signers, sections: content.sections, ...device })).digest('hex');
+  const acks = content.acknowledgers?.length ? { acknowledgers: content.acknowledgers } : {};
+  return createHash('sha256').update(stableStringify({ signers: content.signers, sections: content.sections, ...device, ...acks })).digest('hex');
 }

@@ -5,9 +5,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  normalizeAcknowledgers,
   resolveTraineeDevice,
   convertLegacySections, normalizeSections, normalizeSigners, templateContentHash, TemplateValidationError,
 } from '../src/lib/formTemplates/schema';
+import { completionStatus } from '../src/lib/formTemplates/completion';
 import { formTemplateVersionKey, fromStored, FORM_TEMPLATE_SK_PREFIX } from '../src/lib/formTemplates/shared';
 
 const legacy = [{
@@ -123,4 +125,30 @@ test('trainee device: default keeps the old hash, a non-default changes it; no a
   assert.equal(resolveTraineeDevice('own_phone', false), 'parent_phone');
   assert.equal(resolveTraineeDevice('own_phone', true), 'own_phone');
   assert.equal(resolveTraineeDevice('either', false), 'parent_phone');
+});
+
+test('acknowledgers: a role is either a signer or an acknowledger; empty list keeps the old hash', () => {
+  assert.deepEqual(normalizeAcknowledgers(['trainee', 'parent', 'bogus'], ['parent']), ['trainee']);
+  const sections = normalizeSections(legacy, 'parent');
+  const base = templateContentHash({ signers: ['parent'], sections });
+  assert.equal(templateContentHash({ signers: ['parent'], sections, acknowledgers: [] }), base);
+  assert.notEqual(templateContentHash({ signers: ['parent'], sections, acknowledgers: ['trainee'] }), base);
+});
+
+test('completion: all signatures and acknowledgments, re-sign versions honoured', () => {
+  const sig = (role: 'parent' | 'trainee', version: number) => ({ role, kind: 'signature' as const, version, at: '2026-10-23' });
+  const ack = (role: 'parent' | 'trainee', version: number) => ({ role, kind: 'acknowledgment' as const, version, at: '2026-10-23' });
+  const base = { signers: ['parent'] as const, acknowledgers: ['trainee'] as const };
+  const run = (resignFromVersion: number, records: ReturnType<typeof sig>[]) =>
+    completionStatus({ signers: [...base.signers], acknowledgers: [...base.acknowledgers], resignFromVersion, records });
+
+  assert.deepEqual(run(0, [sig('parent', 1)]), { complete: false, missingSignatures: [], missingAcknowledgments: ['trainee'] });
+  assert.equal(run(0, [sig('parent', 1), ack('trainee', 1)]).complete, true);
+  // A later edit WITHOUT re-sign keeps both valid…
+  assert.equal(run(0, [sig('parent', 1), ack('trainee', 1)]).complete, true);
+  // …but a version published with "Require re-sign" needs a new signature AND a new acknowledgment.
+  assert.deepEqual(run(3, [sig('parent', 1), ack('trainee', 1)]), { complete: false, missingSignatures: ['parent'], missingAcknowledgments: ['trainee'] });
+  assert.equal(run(3, [sig('parent', 3), ack('trainee', 4)]).complete, true);
+  // An acknowledgment never stands in for a signature.
+  assert.deepEqual(run(0, [ack('parent', 1), ack('trainee', 1)]).missingSignatures, ['parent']);
 });
