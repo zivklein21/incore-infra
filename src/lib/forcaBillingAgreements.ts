@@ -4,7 +4,7 @@ import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { ForcaBillingAgreementItem, ForcaSubscriptionOrderItem, MemberProfileItem } from './entities';
 import { endOfMonth, firstOfNextMonth } from './entities';
 import { chargeHypToken } from './hypClient';
-import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
+import { getMemberFullName, buildHypInfo } from './hypOrders';
 import { getExpoPushToken, sendExpoPush } from './push';
 // Admin accounts only ever live in the INCORE table (isAdmin() itself always
 // checks TABLE_NAME — see lib/auth.ts) — there is no separate "FORCA admin"
@@ -23,7 +23,6 @@ import { notifyAdminsPaymentFailed } from './adminNotify';
 export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementItem): Promise<{ success: boolean; ccode: number }> {
   const payerRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${agreement.payerUid}`, SK: 'PROFILE' } }));
   const payer = payerRes.Item as MemberProfileItem | undefined;
-  const chargeUserId = (payer && getMemberIdNumber(payer)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = payer ? getMemberFullName(payer) : agreement.payerName || 'Parent';
   const chargeEmail = payer?.identity?.email || payer?.email || '';
 
@@ -40,7 +39,6 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
         expiryMonth: agreement.tokenExpiryMonth,
         expiryYear: agreement.tokenExpiryYear,
         amount: agreement.amountPerCharge,
-        userId: chargeUserId,
         clientName: chargeClientName,
         info: buildHypInfo(agreement.productName, `שם הילדה: ${agreement.groupName}`),
         email: chargeEmail || undefined,

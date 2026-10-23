@@ -3,7 +3,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { getMemberFullName, buildHypInfo, getMemberIdNumber, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
+import { getMemberFullName, buildHypInfo } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import { applyForcaSubscriptionCharge } from '../lib/forcaSubscriptionPayments';
@@ -102,7 +102,6 @@ export async function handler(
       // (chargeOneForcaAgreement, createHypTokenPurchase.ts) sends the
       // placeholder here rather than omitting it, unlike the hosted-page
       // SIGN call this doesn't go through.
-      userId: getMemberIdNumber(payer) || HYP_NO_ID_PLACEHOLDER,
       clientName: getMemberFullName(payer),
       info: buildHypInfo(product.name, `שם הילדה: ${childName}`),
       email: payer.identity?.email || payer.email || undefined,
