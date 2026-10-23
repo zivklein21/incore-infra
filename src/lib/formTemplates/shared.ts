@@ -1,6 +1,6 @@
 import {
-  defaultRoleFor, normalizeSections, normalizeSigners, templateContentHash,
-  SignerRole, TemplateSection,
+  defaultRoleFor, normalizeSections, normalizeSigners, normalizeTraineeDevice, templateContentHash,
+  SignerRole, TemplateSection, TraineeDevice,
 } from './schema';
 
 // Custom admin-built form templates (Manage → Forms → Form Templates).
@@ -40,6 +40,8 @@ export interface StoredTemplate {
   id: string;
   name: string;
   signers: SignerRole[];
+  /** Where the trainee signs/fills (FORCA). */
+  traineeDevice: TraineeDevice;
   sections: TemplateSection[];
   currentVersion: number;
   contentHash: string;
@@ -60,13 +62,15 @@ export function fromStored(item: Record<string, unknown>, brand: 'incore' | 'for
     sections = [];
   }
   const legacy = typeof item.currentVersion !== 'number';
+  const traineeDevice = normalizeTraineeDevice(item.traineeDevice);
   return {
     id: String(item.id ?? ''),
     name: String(item.name ?? ''),
     signers,
+    traineeDevice,
     sections,
     currentVersion: legacy ? 1 : (item.currentVersion as number),
-    contentHash: legacy ? templateContentHash({ signers, sections }) : String(item.contentHash ?? ''),
+    contentHash: legacy ? templateContentHash({ signers, sections, traineeDevice }) : String(item.contentHash ?? ''),
     createdAt: String(item.createdAt ?? ''),
     updatedAt: String(item.updatedAt ?? ''),
     legacy,

@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  resolveTraineeDevice,
   convertLegacySections, normalizeSections, normalizeSigners, templateContentHash, TemplateValidationError,
 } from '../src/lib/formTemplates/schema';
 import { formTemplateVersionKey, fromStored, FORM_TEMPLATE_SK_PREFIX } from '../src/lib/formTemplates/shared';
@@ -24,6 +25,7 @@ test('v1 questions convert to v2 fields in order, follow-up becomes a conditiona
   ]);
   assert.deepEqual(section.fields[0].options, [{ id: 'o0', label: 'Yes' }, { id: 'o1', label: 'No' }]);
   assert.deepEqual(section.fields[1].showIf, { fieldId: 'q1', op: 'equals', value: 'o0' });
+  assert.equal(section.fields[1].parentId, 'q1');
   assert.equal(section.fields[0].helpText, 'Any');
   assert.equal(section.fields[0].required, true);
 });
@@ -80,4 +82,45 @@ test('a legacy head reads as version 1; version keys never match the head prefix
   assert.deepEqual(stored.signers, ['parent']);
   assert.ok(!formTemplateVersionKey('t', 3).SK.startsWith(FORM_TEMPLATE_SK_PREFIX));
   assert.equal(formTemplateVersionKey('t', 3).SK, 'FORM_TEMPLATE_VERSION#t#0003');
+});
+
+test('nesting: valid children keep parentId; out-of-block, cross-section and too-deep parents are dropped', () => {
+  const f = (id: string, parentId?: string, type = 'yes_no') => ({ id, type, label: id, required: false, filledBy: 'parent', parentId });
+  const [a, b] = normalizeSections([
+    { id: 's1', fields: [
+      f('top'), f('child', 'top'), f('grand', 'child'), f('great', 'grand'),
+      f('sibling', 'top'), f('other'), f('stray', 'top'),
+    ] },
+    { id: 's2', fields: [f('cross', 'top')] },
+  ], 'parent');
+  const parent = Object.fromEntries(a.fields.map(x => [x.id, x.parentId]));
+  assert.equal(parent.child, 'top');
+  assert.equal(parent.grand, 'child');
+  assert.equal(parent.great, undefined, 'depth 3 is too deep');
+  assert.equal(parent.sibling, undefined, "'great' was made top-level, so 'sibling' is no longer inside top's block");
+  assert.equal(parent.stray, undefined, "'other' sits between 'top' and 'stray'");
+  assert.equal(b.fields[0].parentId, undefined);
+});
+
+test('nesting changes the content hash', () => {
+  const base = [{ id: 's', fields: [
+    { id: 'q', type: 'yes_no', label: 'Q', required: true, filledBy: 'parent' },
+    { id: 'd', type: 'long_text', label: 'D', required: true, filledBy: 'parent', showIf: { fieldId: 'q', op: 'equals', value: 'yes' } },
+  ] }];
+  const nested = JSON.parse(JSON.stringify(base));
+  nested[0].fields[1].parentId = 'q';
+  assert.notEqual(
+    templateContentHash({ signers: ['parent'], sections: normalizeSections(base, 'parent') }),
+    templateContentHash({ signers: ['parent'], sections: normalizeSections(nested, 'parent') }),
+  );
+});
+
+test('trainee device: default keeps the old hash, a non-default changes it; no account falls back to the parent phone', () => {
+  const sections = normalizeSections(legacy, 'parent');
+  const base = templateContentHash({ signers: ['parent', 'trainee'], sections });
+  assert.equal(templateContentHash({ signers: ['parent', 'trainee'], sections, traineeDevice: 'either' }), base);
+  assert.notEqual(templateContentHash({ signers: ['parent', 'trainee'], sections, traineeDevice: 'own_phone' }), base);
+  assert.equal(resolveTraineeDevice('own_phone', false), 'parent_phone');
+  assert.equal(resolveTraineeDevice('own_phone', true), 'own_phone');
+  assert.equal(resolveTraineeDevice('either', false), 'parent_phone');
 });

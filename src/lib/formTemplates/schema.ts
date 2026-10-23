@@ -13,7 +13,7 @@ import { createHash } from 'crypto';
 // renaming an option never breaks a condition), and a general `showIf` on
 // both fields and sections. convertLegacySections() maps v1 onto v2
 // losslessly: each follow-up becomes its own long-text field with a showIf
-// on the trigger option.
+// on the trigger option, nested under it (parentId).
 
 export const FIELD_TYPES = [
   'short_text', 'long_text', 'number', 'date',
@@ -24,6 +24,26 @@ export type FieldType = typeof FIELD_TYPES[number];
 
 export const SIGNER_ROLES = ['parent', 'trainee', 'coach'] as const;
 export type SignerRole = typeof SIGNER_ROLES[number];
+
+/**
+ * Where the trainee signs / fills their part. The parent always uses the
+ * parent's phone and the coach the coach's own device, so only the trainee
+ * needs a setting. 'own_phone' falls back to the parent's phone for a
+ * trainee without their own login (resolveTraineeDevice), so a form can
+ * never get stuck waiting for an account that doesn't exist.
+ */
+export const TRAINEE_DEVICES = ['parent_phone', 'own_phone', 'either'] as const;
+export type TraineeDevice = typeof TRAINEE_DEVICES[number];
+export const DEFAULT_TRAINEE_DEVICE: TraineeDevice = 'either';
+
+export const normalizeTraineeDevice = (v: unknown): TraineeDevice =>
+  (TRAINEE_DEVICES as readonly string[]).includes(v as string) ? (v as TraineeDevice) : DEFAULT_TRAINEE_DEVICE;
+
+/** Where a trainee actually signs, given the template's setting and whether they have their own login. */
+export function resolveTraineeDevice(setting: TraineeDevice, traineeHasAccount: boolean): 'parent_phone' | 'own_phone' | 'either' {
+  if (!traineeHasAccount) return 'parent_phone';
+  return setting;
+}
 
 export type ShowIfOp = 'equals' | 'notEquals';
 
@@ -47,7 +67,19 @@ export interface TemplateField {
   options?: FieldOption[];
   items?: SignoffItem[];
   showIf?: ShowIf;
+  /**
+   * Nesting: this field is a sub-question of `parentId` (shown indented
+   * under it, hidden whenever the parent is). A follow-up question is a
+   * child whose showIf tests its parent's answer ("If yes, please
+   * explain"). Children are stored directly after their parent in the
+   * section's flat `fields` array (depth-first), so "a condition only points
+   * at an earlier field" still holds and order is just array order.
+   */
+  parentId?: string;
 }
+
+/** Max nesting below a top-level field: a sub-question's own follow-up is the deepest. */
+export const MAX_FIELD_DEPTH = 2;
 
 export interface TemplateSection {
   id: string;
@@ -101,7 +133,7 @@ export function convertLegacySections(raw: unknown[], defaultRole: SignerRole): 
         if (trigger) {
           fields.push({
             id: `${id}_sub`, type: 'long_text', label: str(sub.text), required: false, filledBy: defaultRole,
-            showIf: { fieldId: id, op: 'equals', value: trigger.id },
+            showIf: { fieldId: id, op: 'equals', value: trigger.id }, parentId: id,
           });
         }
       }
@@ -152,6 +184,14 @@ export function normalizeSections(raw: unknown, defaultRole: SignerRole): Templa
     const sectionId = str(rs?.id);
     claim(sectionId);
     const showIf = normalizeShowIf(rs.showIf, earlier);
+    // Nesting bookkeeping for this section: each kept field's parent and depth.
+    const parentOf = new Map<string, string | undefined>();
+    const depthOf = new Map<string, number>();
+    let previousId: string | undefined;
+    const isAncestorOrSelf = (ancestor: string, id: string | undefined) => {
+      for (let cur = id; cur; cur = parentOf.get(cur)) if (cur === ancestor) return true;
+      return false;
+    };
     const fields = (Array.isArray(rs.fields) ? rs.fields : []).map((rf: Record<string, unknown>) => {
       const id = str(rf?.id);
       claim(id);
@@ -179,6 +219,16 @@ export function normalizeSections(raw: unknown, defaultRole: SignerRole): Templa
       }
       const fieldShowIf = normalizeShowIf(rf.showIf, earlier);
       if (fieldShowIf) field.showIf = fieldShowIf;
+      // A parent must be an earlier field of THIS section, the field just
+      // before must be inside the parent's block (keeps each block
+      // contiguous), and depth is capped. Otherwise the field is top-level.
+      const parentId = str(rf.parentId);
+      if (parentId && depthOf.has(parentId) && (depthOf.get(parentId) ?? 0) < MAX_FIELD_DEPTH && isAncestorOrSelf(parentId, previousId)) {
+        field.parentId = parentId;
+      }
+      parentOf.set(id, field.parentId);
+      depthOf.set(id, field.parentId ? (depthOf.get(field.parentId) ?? 0) + 1 : 0);
+      previousId = id;
       earlier.set(id, field);
       return field;
     });
@@ -220,7 +270,14 @@ export function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** SHA-256 of what a signer actually agrees to: the signer set + every section/field. The template's name isn't part of it — renaming isn't a new version. */
-export function templateContentHash(content: { signers: SignerRole[]; sections: TemplateSection[] }): string {
-  return createHash('sha256').update(stableStringify({ signers: content.signers, sections: content.sections })).digest('hex');
+/**
+ * SHA-256 of what a signer actually agrees to: the signer set, where the
+ * trainee signs, and every section/field. The template's name isn't part of
+ * it — renaming isn't a new version. traineeDevice only enters the hash
+ * when it isn't the default, so templates hashed before the setting existed
+ * keep their hash.
+ */
+export function templateContentHash(content: { signers: SignerRole[]; sections: TemplateSection[]; traineeDevice?: TraineeDevice }): string {
+  const device = content.traineeDevice && content.traineeDevice !== DEFAULT_TRAINEE_DEVICE ? { traineeDevice: content.traineeDevice } : {};
+  return createHash('sha256').update(stableStringify({ signers: content.signers, sections: content.sections, ...device })).digest('hex');
 }

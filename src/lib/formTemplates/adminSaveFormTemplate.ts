@@ -5,12 +5,13 @@ import { ddb, tableForBrand } from '../dynamo';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
-import { defaultRoleFor, normalizeSections, normalizeSigners, templateContentHash, TemplateValidationError } from './schema';
+import { defaultRoleFor, normalizeSections, normalizeSigners, normalizeTraineeDevice, templateContentHash, TemplateValidationError } from './schema';
 
 type TransactItems = NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']>;
 
 // POST /adminSaveFormTemplate
-// Body: { id?: string, name: string, signers?: SignerRole[], sections: TemplateSection[] (v2, or v1),
+// Body: { id?: string, name: string, signers?: SignerRole[], traineeDevice?: TraineeDevice,
+//         sections: TemplateSection[] (v2, or v1),
 //         requireResign?: boolean, brand?: 'incore' | 'forca' }
 // Auth: Cognito JWT, admin only. Same "edit everything, then Save once"
 // model as adminSaveRegistrationFormConfig.ts, but every save whose CONTENT
@@ -27,7 +28,7 @@ export async function handler(
   const uid = getUid(event);
   if (!(await isAdmin(uid))) return json(403, { error: 'forbidden' });
 
-  let body: { id?: unknown; name?: unknown; signers?: unknown; sections?: unknown; requireResign?: unknown; brand?: unknown };
+  let body: { id?: unknown; name?: unknown; signers?: unknown; traineeDevice?: unknown; sections?: unknown; requireResign?: unknown; brand?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -50,7 +51,9 @@ export async function handler(
   // INCORE has no separate parent/trainee signing — every field is the member's own.
   const signers = brand === 'forca' ? normalizeSigners(body.signers, role) : [role];
   if (brand !== 'forca') sections = sections.map(s => ({ ...s, fields: s.fields.map(f => ({ ...f, filledBy: role })) }));
-  const contentHash = templateContentHash({ signers, sections });
+  // INCORE has no parent/trainee split, so the setting is meaningless there.
+  const traineeDevice = brand === 'forca' ? normalizeTraineeDevice(body.traineeDevice) : normalizeTraineeDevice(undefined);
+  const contentHash = templateContentHash({ signers, sections, traineeDevice });
 
   const now = new Date().toISOString();
   const existingId = typeof body.id === 'string' && body.id ? body.id : '';
@@ -76,7 +79,7 @@ export async function handler(
         TableName: table,
         Item: {
           ...formTemplateVersionKey(id, 1), templateId: id, version: 1, name: stored.name,
-          signers: stored.signers, sections: stored.sections, contentHash: stored.contentHash,
+          signers: stored.signers, traineeDevice: stored.traineeDevice, sections: stored.sections, contentHash: stored.contentHash,
           publishedAt: stored.updatedAt || now, publishedBy: 'migration', requireResign: false,
         },
         ConditionExpression: 'attribute_not_exists(SK)',
@@ -94,7 +97,7 @@ export async function handler(
     writes.push({ Put: {
       TableName: table,
       Item: {
-        ...formTemplateVersionKey(id, version), templateId: id, version, name, signers, sections, contentHash,
+        ...formTemplateVersionKey(id, version), templateId: id, version, name, signers, traineeDevice, sections, contentHash,
         publishedAt: now, publishedBy: uid, requireResign: body.requireResign === true,
       },
       ConditionExpression: 'attribute_not_exists(SK)',
@@ -103,7 +106,7 @@ export async function handler(
   writes.push({ Put: {
     TableName: table,
     Item: {
-      ...formTemplateKey(id), id, name, schemaVersion: 2, signers, sections, contentHash,
+      ...formTemplateKey(id), id, name, schemaVersion: 2, signers, traineeDevice, sections, contentHash,
       currentVersion: version, createdAt, updatedAt: now,
     },
     ...headCondition,
