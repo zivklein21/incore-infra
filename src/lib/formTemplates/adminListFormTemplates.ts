@@ -3,10 +3,11 @@ import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, tableForBrand } from '../dynamo';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
-import { FORM_TEMPLATE_SK_PREFIX, parseBrand } from './shared';
+import { FORM_TEMPLATE_SK_PREFIX, fromStored, parseBrand } from './shared';
 
 // GET /adminListFormTemplates?brand=incore|forca
-// Auth: Cognito JWT, admin only. Every custom template (incl. sections),
+// Auth: Cognito JWT, admin only. Every custom template's CURRENT version
+// (schema v2 — legacy templates converted on the fly, see fromStored),
 // oldest first — the client lists the built-in Registration/Orthopedic
 // forms ahead of these itself.
 export async function handler(
@@ -29,13 +30,10 @@ export async function handler(
   } while (lastKey);
 
   const templates = items
-    .map(item => ({
-      id: String(item.id ?? ''),
-      name: String(item.name ?? ''),
-      sections: Array.isArray(item.sections) ? item.sections : [],
-      createdAt: String(item.createdAt ?? ''),
-      updatedAt: String(item.updatedAt ?? ''),
-    }))
+    .map(item => {
+      const { legacy: _legacy, ...template } = fromStored(item, brand);
+      return template;
+    })
     .filter(t => t.id)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 

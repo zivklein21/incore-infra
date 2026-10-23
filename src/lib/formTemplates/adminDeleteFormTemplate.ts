@@ -9,7 +9,9 @@ import { formTemplateKey, parseBrand } from './shared';
 // Body: { id: string, brand?: 'incore' | 'forca' }
 // Auth: Cognito JWT, admin only. Hard delete of a custom template. The
 // built-in Registration/Orthopedic forms aren't stored under this key
-// prefix, so they can't be deleted through here.
+// prefix, so they can't be deleted through here. Only the head is
+// removed — published versions (FORM_TEMPLATE_VERSION#<id>#<n>) are kept,
+// since a signed document must stay viewable on the version it was signed on.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
