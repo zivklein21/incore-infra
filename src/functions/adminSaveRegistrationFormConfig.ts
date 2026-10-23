@@ -1,8 +1,8 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, tableForBrand } from '../lib/dynamo';
+import { tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { isConflict, saveVersionedConfig } from '../lib/configVersions';
 
 // POST /adminSaveRegistrationFormConfig
 // Body: { sections: FormSection[], brand?: 'incore' | 'forca' }
@@ -14,6 +14,9 @@ import { isAdmin } from '../lib/auth';
 // and FORCA each get their own independently-editable question set.
 // Overwrites the whole sections array — matches the editor screen's "edit
 // everything, then Save once" model, no per-question partial update.
+// Each content change also publishes an immutable version
+// (lib/configVersions.ts) — earlier submissions keep counting as complete;
+// nobody is asked to fill the form again because it changed.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -31,10 +34,13 @@ export async function handler(
   if (!Array.isArray(sections)) return json(400, { error: 'invalid_argument' });
   const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
 
-  await ddb.send(new PutCommand({
-    TableName: tableForBrand(brand),
-    Item: { PK: 'APPCONFIG', SK: 'REGISTRATION_FORM_CONFIG', sections },
-  }));
-
-  return json(200, { success: true });
+  try {
+    const { version, published } = await saveVersionedConfig({
+      table: tableForBrand(brand), sk: 'REGISTRATION_FORM_CONFIG', content: { sections }, contentKeys: ['sections'], uid,
+    });
+    return json(200, { success: true, version, published });
+  } catch (err) {
+    if (isConflict(err)) return json(409, { error: 'conflict' });
+    throw err;
+  }
 }

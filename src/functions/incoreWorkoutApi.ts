@@ -13,6 +13,8 @@ import { handler as adminSaveFormTemplate } from '../lib/formTemplates/adminSave
 import { handler as adminDeleteFormTemplate } from '../lib/formTemplates/adminDeleteFormTemplate';
 import { handler as adminGetSignupFlowConfig } from '../lib/signupFlow/adminGetSignupFlowConfig';
 import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSaveSignupFlowConfig';
+import { handler as getFormWording } from '../lib/formWording/getFormWording';
+import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -34,6 +36,9 @@ const HANDLERS: Record<string, Handler> = {
   // Manage → Forms → First Sign-up Order.
   adminGetSignupFlowConfig,
   adminSaveSignupFlowConfig,
+  // Built-in forms' wording overrides (Health Declaration, Parental Consent).
+  getFormWording,
+  adminSaveFormWording,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

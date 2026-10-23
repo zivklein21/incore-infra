@@ -338,6 +338,9 @@ locals {
     # Manage → Forms → First Sign-up Order (same shared integration)
     adminGetSignupFlowConfig  = "GET"  # admin: a brand's onboarding form order + include/exclude
     adminSaveSignupFlowConfig = "POST" # admin: save that order
+    # Built-in forms' wording overrides — Health Declaration / Parental Consent (same shared integration)
+    getFormWording       = "GET"  # member: a built-in form's admin-edited wording
+    adminSaveFormWording = "POST" # admin: save that wording (versioned)
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

@@ -1,8 +1,8 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, tableForBrand } from '../lib/dynamo';
+import { tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { isConflict, saveVersionedConfig } from '../lib/configVersions';
 
 // POST /adminSaveTermsOfServiceContent
 // Body: {
@@ -36,10 +36,19 @@ export async function handler(
   }
   const brand = body.brand === 'forca' ? 'forca' as const : 'incore' as const;
 
-  const item: Record<string, unknown> = { PK: 'APPCONFIG', SK: 'TERMS_OF_SERVICE', parts };
-  if (checkboxes !== undefined) item.checkboxes = checkboxes;
+  const content: Record<string, unknown> = { parts };
+  if (checkboxes !== undefined) content.checkboxes = checkboxes;
 
-  await ddb.send(new PutCommand({ TableName: tableForBrand(brand), Item: item }));
-
-  return json(200, { success: true });
+  // Versioned like the other form configs (lib/configVersions.ts). A new
+  // version never re-asks anyone to agree — acceptPolicies.ts's own
+  // agreedToPolicies flag is untouched by this.
+  try {
+    const { version, published } = await saveVersionedConfig({
+      table: tableForBrand(brand), sk: 'TERMS_OF_SERVICE', content, contentKeys: ['parts', 'checkboxes'], uid,
+    });
+    return json(200, { success: true, version, published });
+  } catch (err) {
+    if (isConflict(err)) return json(409, { error: 'conflict' });
+    throw err;
+  }
 }
