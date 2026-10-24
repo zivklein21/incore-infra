@@ -152,3 +152,11 @@ test('completion: all signatures and acknowledgments, re-sign versions honoured'
   // An acknowledgment never stands in for a signature.
   assert.deepEqual(run(0, [ack('parent', 1), ack('trainee', 1)]).missingSignatures, ['parent']);
 });
+
+test("coach isn't a template role: dropped from signers/acknowledgers, coach-filled fields fall back", () => {
+  assert.deepEqual(normalizeSigners(['coach'], 'parent'), ['parent']);
+  assert.deepEqual(normalizeSigners(['parent', 'coach'], 'parent'), ['parent']);
+  assert.deepEqual(normalizeAcknowledgers(['coach', 'trainee'], ['parent']), ['trainee']);
+  const [section] = normalizeSections([{ id: 's', fields: [{ id: 'a', type: 'short_text', label: 'A', filledBy: 'coach' }] }], 'parent');
+  assert.equal(section.fields[0].filledBy, 'parent');
+});

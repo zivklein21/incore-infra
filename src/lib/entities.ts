@@ -1557,14 +1557,19 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   // Agreement and fills her own Registration Form, in that order, on her
   // first login — see resolvePostLoginRoute.ts).
   const isParentOnly = profile.identity?.accountType === 'parent_only';
+  // A coach (FORCA staff) only ever accepts the app's privacy policy —
+  // never a trainee's Registration/Health/Parental/Orthopedic forms, even
+  // if an admin.require_* flag was set on the account. This only ever
+  // REMOVES requirements, so no one is newly asked to fill anything.
+  const isCoach = role === 'coach';
 
   const registrationFormFilled = forms.registration_form === true;
-  const requiresRegistrationForm = !isParentOnly && admin.require_registration_form === true && !registrationFormFilled;
+  const requiresRegistrationForm = !isParentOnly && !isCoach && admin.require_registration_form === true && !registrationFormFilled;
 
   const hdSubmittedAt = forms.health_declaration?.submitted_at;
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-  const requiresHealthDeclaration = !isParentOnly && role !== 'admin' && admin.require_health_form === true
+  const requiresHealthDeclaration = !isParentOnly && !isCoach && role !== 'admin' && admin.require_health_form === true
     && (!hdSubmittedAt || new Date(hdSubmittedAt) < twoYearsAgo);
 
   const requiresPoliciesAgreement = role !== 'admin' && forms.agreedToPolicies !== true;
@@ -1572,13 +1577,13 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   // Same parent-fills-it-for-her pattern as Registration/Health — see the
   // forms.parental_authorization comment above for why this is a distinct
   // field from parental_consent.
-  const requiresParentalAuthorization = !isParentOnly && admin.require_parental_authorization === true
+  const requiresParentalAuthorization = !isParentOnly && !isCoach && admin.require_parental_authorization === true
     && !forms.parental_authorization?.submitted_at;
 
   // Mandatory onboarding, filled by the parent right after Health
   // Declaration (see resolvePostLoginRoute.ts) — same parent-fills-it-for-her
   // shape as Registration/Health/Parental Authorization above.
-  const requiresOrthopedicForm = !isParentOnly && admin.require_orthopedic_form === true
+  const requiresOrthopedicForm = !isParentOnly && !isCoach && admin.require_orthopedic_form === true
     && forms.orthopedic_form !== true;
 
   return {

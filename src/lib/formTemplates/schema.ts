@@ -22,13 +22,17 @@ export const FIELD_TYPES = [
 ] as const;
 export type FieldType = typeof FIELD_TYPES[number];
 
-export const SIGNER_ROLES = ['parent', 'trainee', 'coach'] as const;
+// A trainee's forms are between the parent and the trainee only — coaches
+// aren't part of a trainee's documents (their own account only accepts the
+// app's privacy policy, see computeComplianceFlags). A stored 'coach' (from
+// before this) is dropped by normalizeSigners/normalizeAcknowledgers and
+// falls back to the brand's default role in normalizeSections.
+export const SIGNER_ROLES = ['parent', 'trainee'] as const;
 export type SignerRole = typeof SIGNER_ROLES[number];
 
 /**
  * Where the trainee signs / fills their part. The parent always uses the
- * parent's phone and the coach the coach's own device, so only the trainee
- * needs a setting. 'own_phone' falls back to the parent's phone for a
+ * parent's phone, so only the trainee needs a setting. 'own_phone' falls back to the parent's phone for a
  * trainee without their own login (resolveTraineeDevice), so a form can
  * never get stuck waiting for an account that doesn't exist.
  */
