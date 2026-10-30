@@ -68,48 +68,80 @@ export async function handler(
     return json(200, { success: true });
   }
 
-  const head = await getTemplateHead(brand, templateId);
-  if (!head) return json(404, { error: 'not_found' });
-  if (head.status !== 'published' || !head.publishedVersion) return json(409, { error: 'not_published' });
-  const t = await getTemplateVersion(brand, templateId, head.publishedVersion);
-  if (!t) return json(404, { error: 'not_found' });
+  const res = await assignForm({ brand, templateId, target: body.target, adminAnswers: body.adminAnswers, notify: body.notify !== false, uid });
+  if (!res.ok) return json(res.status, res.body);
+  return json(200, { success: true, assignmentId: res.assignmentId, trainees: res.trainees, notified: res.notified });
+}
 
-  const raw = (body.target ?? {}) as Record<string, unknown>;
+export type AssignResult =
+  | { ok: true; assignmentId: string; trainees: number; notified: number }
+  | { ok: false; status: number; body: Record<string, unknown> };
+
+/** Admin-field values an activity provides (prefill 'activity.*'): name, date (YYYY-MM-DD), time (HH:mm, Israel), location, description. */
+export function activityPrefill(cls: Record<string, unknown>): Record<string, string> {
+  const date = typeof cls.date === 'string' ? new Date(cls.date) : null;
+  const ok = date && !Number.isNaN(date.getTime());
+  const time = ok ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date!) : '';
+  return Object.fromEntries(Object.entries({
+    'activity.name': typeof cls.className === 'string' ? cls.className : '',
+    'activity.date': ok ? date!.toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) : '',
+    'activity.time': time,
+    'activity.location': typeof cls.location === 'string' ? cls.location : '',
+    'activity.description': typeof cls.description === 'string' ? cls.description : '',
+  }).filter(([, v]) => v));
+}
+
+/** Assigns a published template — shared by adminAssignFormTemplate (Assign & track) and adminCreateActivity (forms attached to a new activity). */
+export async function assignForm(input: {
+  brand: 'incore' | 'forca'; templateId: string; target: unknown; adminAnswers?: unknown; notify?: boolean; uid: string;
+}): Promise<AssignResult> {
+  const { brand, templateId, uid } = input;
+  const head = await getTemplateHead(brand, templateId);
+  if (!head) return { ok: false, status: 404, body: { error: 'not_found' } };
+  if (head.status !== 'published' || !head.publishedVersion) return { ok: false, status: 409, body: { error: 'not_published' } };
+  const t = await getTemplateVersion(brand, templateId, head.publishedVersion);
+  if (!t) return { ok: false, status: 404, body: { error: 'not_found' } };
+
+  let activityValues: Record<string, string> = {};
+  const raw = (input.target ?? {}) as Record<string, unknown>;
   let target: AssignmentTarget;
   if (raw.kind === 'all') target = { kind: 'all' };
   else if (raw.kind === 'new_members') target = { kind: 'new_members' };
   else if (raw.kind === 'activity' && typeof raw.classId === 'string' && raw.classId) {
     const cls = (await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: { PK: `CLASS#${raw.classId}`, SK: 'METADATA' } }))).Item;
-    if (!cls) return json(400, { error: 'activity_not_found' });
+    if (!cls) return { ok: false, status: 400, body: { error: 'activity_not_found' } };
     target = { kind: 'activity', classId: raw.classId, className: typeof cls.className === 'string' ? cls.className : '', date: String(cls.date ?? '') };
+    activityValues = activityPrefill(cls);
   }
   else if (brand === 'forca' && raw.kind === 'group' && typeof raw.groupId === 'string' && raw.groupId) {
     target = { kind: 'group', groupId: raw.groupId, ...(typeof raw.groupName === 'string' ? { groupName: raw.groupName } : {}) };
   } else if (raw.kind === 'members' && Array.isArray(raw.memberIds) && raw.memberIds.length) {
     target = { kind: 'members', memberIds: [...new Set(raw.memberIds.filter((x): x is string => typeof x === 'string' && !!x))].slice(0, 500) };
-  } else return json(400, { error: 'invalid_target' });
+  } else return { ok: false, status: 400, body: { error: 'invalid_target' } };
 
   // Admin-filled fields: values for exactly those, validated like family answers.
-  const incoming = (body.adminAnswers && typeof body.adminAnswers === 'object' ? body.adminAnswers : {}) as Record<string, FieldAnswer>;
+  const incoming = (input.adminAnswers && typeof input.adminAnswers === 'object' ? input.adminAnswers : {}) as Record<string, FieldAnswer>;
   const adminFields = t.sections.flatMap(s => s.fields).filter(f => f.filledBy === 'admin' && !DISPLAY_ONLY.has(f.type));
   const adminAnswers: Answers = {};
   for (const f of adminFields) {
-    const value = incoming[f.id];
+    // Event details come from the activity itself when the field is set to (activity.*); an explicit value still wins.
+    const fromActivity = f.prefill?.startsWith('activity.') ? activityValues[f.prefill] : undefined;
+    const value = incoming[f.id] ?? fromActivity;
     if (value === undefined || value === null || value === '') continue;
     const error = answerFormatError(f, value);
-    if (error) return json(400, { error: 'invalid_answer', fieldId: f.id, reason: error });
+    if (error) return { ok: false, status: 400, body: { error: 'invalid_answer', fieldId: f.id, reason: error } };
     adminAnswers[f.id] = value;
   }
   // A required admin field only has to be filled if it can be visible at all — conditions on admin answers resolve now.
   const visible = visibleIds(t.sections, adminAnswers);
   const missing = adminFields.filter(f => f.required && visible.has(f.id) && !f.showIf && !isAnswered(f, adminAnswers[f.id]));
-  if (missing.length) return json(400, { error: 'missing_required', fieldIds: missing.map(f => f.id) });
+  if (missing.length) return { ok: false, status: 400, body: { error: 'missing_required', fieldIds: missing.map(f => f.id) } };
 
   const assignedAt = new Date().toISOString();
   // 'new_members' matches nobody yet — it fills up as members join.
   const rosters = await loadRosters(brand, [{ target }]);
   const trainees = (await listTrainees(brand)).filter(tr => targetIncludes(target, tr, assignedAt, rosters));
-  if (target.kind === 'members' && !trainees.length) return json(400, { error: 'no_trainees' });
+  if (target.kind === 'members' && !trainees.length) return { ok: false, status: 400, body: { error: 'no_trainees' } };
 
   const assignmentId = randomUUID();
   const now = assignedAt;
@@ -121,7 +153,7 @@ export async function handler(
   await writeAudit(brand, { action: 'assign', templateId, actorUid: uid, detail: { assignmentId, target, trainees: trainees.length } });
 
   let notified = 0;
-  if (body.notify !== false) {
+  if (input.notify !== false) {
     // Only the side(s) the form actually shows up for (visibleOn).
     const roles = participatingRoles(t);
     const toTrainee = rolesOnDevice('trainee_phone', roles, t.traineeDevice, brand).length > 0;
@@ -138,5 +170,5 @@ export async function handler(
     notified = messages.length ? await sendExpoPushBatch(messages, 'formAssigned') : 0;
   }
 
-  return json(200, { success: true, assignmentId, trainees: trainees.length, notified });
+  return { ok: true, assignmentId, trainees: trainees.length, notified };
 }

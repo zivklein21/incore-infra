@@ -71,6 +71,8 @@ export type FillerRole = typeof FILLER_ROLES[number];
 export const PREFILL_KEYS = [
   'child.fullName', 'child.idNumber', 'child.birthDate', 'child.grade',
   'parent.fullName', 'parent.idNumber', 'parent.phone', 'parent.email',
+  // Admin-filled event details, taken from the activity a form is attached to (adminAssignFormTemplate / adminCreateActivity).
+  'activity.name', 'activity.date', 'activity.time', 'activity.location', 'activity.description',
 ] as const;
 export type PrefillKey = typeof PREFILL_KEYS[number];
 
@@ -300,7 +302,9 @@ export function normalizeSections(raw: unknown, defaultRole: SignerRole): Templa
       };
       const help = str(rf.helpText).trim();
       if (help) field.helpText = help;
-      if (!DISPLAY_ONLY.has(type) && !ownedBySigner && type !== 'file' && field.filledBy !== 'admin' && isPrefill(rf.prefill)) field.prefill = rf.prefill;
+      // Profile prefill is for what families fill; activity.* is for admin fields (event details from the activity).
+      if (!DISPLAY_ONLY.has(type) && !ownedBySigner && type !== 'file' && isPrefill(rf.prefill)
+        && (field.filledBy === 'admin') === rf.prefill.startsWith('activity.')) field.prefill = rf.prefill;
       const details = str(rf.detailsLabel).trim();
       if (type === 'yes_no' && details) field.detailsLabel = details;
       if (CHOICE_TYPES.has(type)) {

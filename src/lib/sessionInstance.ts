@@ -30,6 +30,14 @@ export interface CreateSessionInstanceParams {
   testGroupId?: string;
   testGroupName?: string;
   testComponentIds?: string[];
+  /**
+   * A SPECIAL ACTIVITY (Manage → Activities — a trip, an event…) instead of a
+   * typed training: its own name + description, no training type needed.
+   * Same calendar item and same group auto-registration as any session, so
+   * it shows in the calendar and its roster is the group — which is what
+   * forms attached to it go to (formTemplates "activity" assignments).
+   */
+  activity?: { name: string; description?: string };
 }
 
 export type CreateSessionInstanceResult =
@@ -39,7 +47,9 @@ export type CreateSessionInstanceResult =
 export async function createSessionInstance(params: CreateSessionInstanceParams): Promise<CreateSessionInstanceResult> {
   const [groupRes, trainingTypeRes, workoutPlanRes] = await Promise.all([
     ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `GROUP#${params.groupId}`, SK: 'METADATA' } })),
-    ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `TRAININGTYPE#${params.trainingTypeId}`, SK: 'METADATA' } })),
+    params.trainingTypeId
+      ? ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `TRAININGTYPE#${params.trainingTypeId}`, SK: 'METADATA' } }))
+      : Promise.resolve({ Item: undefined }),
     params.workoutPlanId
       ? ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${params.workoutPlanId}`, SK: 'METADATA' } }))
       : Promise.resolve(undefined),
@@ -47,12 +57,12 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
   const group = groupRes.Item as GroupItem | undefined;
   if (!group) return { ok: false, error: 'group_not_found' };
   const trainingType = trainingTypeRes.Item as TrainingTypeItem | undefined;
-  if (!trainingType) return { ok: false, error: 'training_type_not_found' };
+  if (!trainingType && !params.activity) return { ok: false, error: 'training_type_not_found' };
   // Running is the OR of two independent sources — the session's own
   // TrainingType category, or the Workout Plan carried over from the
   // template (if any) — see entities.ts's WorkoutPlanItem.category comment.
   const workoutPlan = workoutPlanRes?.Item as WorkoutPlanItem | undefined;
-  const isRunningSession = trainingType.category === 'running' || workoutPlan?.category === 'running';
+  const isRunningSession = trainingType?.category === 'running' || workoutPlan?.category === 'running';
 
   // Table documented for <=50 users per brand (dynamodb.tf) — same accepted
   // Scan tradeoff as getAllMemberProfiles()/getClassTypes.ts. identity is a
@@ -105,14 +115,15 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
     date: params.date.toISOString(),
     capacity: memberIds.length,
     currentAttendeesCount: memberIds.length,
-    className: trainingType.name,
+    className: params.activity ? params.activity.name : trainingType?.name,
     notes: group.name,
+    ...(params.activity ? { isSpecialActivity: true, ...(params.activity.description ? { description: params.activity.description } : {}) } : {}),
     isWaitlistEnabled: false,
     waitlist: [],
     isPrivate: true,
     allowedMemberIds: memberIds,
     groupId: params.groupId,
-    trainingTypeId: params.trainingTypeId,
+    ...(params.trainingTypeId ? { trainingTypeId: params.trainingTypeId } : {}),
     ...(isRunningSession ? { isRunningSession: true } : {}),
     equipmentTaken: [],
     repeat_weekly: params.repeatWeekly === true,
