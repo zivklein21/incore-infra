@@ -185,3 +185,8 @@ test('a removed built-in form is kept as a step, never gates, and is not re-appe
   assert.equal(flags.requiresOrthopedicForm, false);
   assert.ok(!signupOrder.includes('orthopedic'));
 });
+
+test('rich text: multi-level numbered lines 1.1 / 1.1.1', () => {
+  const b = parseRichText('1. ראשון\n1.1 משני\n1.1.1. שלישי\n2026 שנה');
+  assert.deepEqual(b.map(x => x.kind === 'number' ? [x.marker, x.depth] : x.kind), [['1.', 1], ['1.1.', 2], ['1.1.1.', 3], 'p']);
+});

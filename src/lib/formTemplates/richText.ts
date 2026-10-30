@@ -6,14 +6,16 @@
 //
 //   **bold**   __underline__   (may nest: **__both__**)
 //   "- text" or "• text" at a line start → bullet item
-//   "1) text" or "1. text" at a line start → numbered list item (number kept)
+//   "1) text" or "1. text" at a line start → numbered list item (number kept);
+//   multi-level "1.1 text" / "1.1.1. text" → indented one step per level
 //   anything else → a paragraph line
 
 export interface Span { text: string; bold: boolean; underline: boolean }
 export type RichBlock =
   | { kind: 'p'; spans: Span[] }
   | { kind: 'bullet'; spans: Span[] }
-  | { kind: 'number'; marker: string; spans: Span[] };
+  /** marker is "1." / "1.2." / "1.2.3."; depth is its level (1 = "1.", 2 = "1.2."…). */
+  | { kind: 'number'; marker: string; depth: number; spans: Span[] };
 
 export function parseInline(text: string): Span[] {
   const spans: Span[] = [];
@@ -39,8 +41,11 @@ export function parseRichText(text: string): RichBlock[] {
     const line = raw.trimEnd();
     const bullet = /^\s*[-•]\s+(.*)$/.exec(line);
     if (bullet) return { kind: 'bullet', spans: parseInline(bullet[1]) };
-    const numbered = /^\s*(\d{1,3})[.)]\s+(.*)$/.exec(line);
-    if (numbered) return { kind: 'number', marker: `${numbered[1]}.`, spans: parseInline(numbered[2]) };
+    // "1." / "1)" — or multi-level "1.1" / "1.1." / "1.1.1)" (a plain "2026 …" isn't a list line).
+    const numbered = /^\s*(\d{1,3}(?:\.\d{1,3}){0,5})([.)]?)\s+(.*)$/.exec(line);
+    if (numbered && (numbered[2] || numbered[1].includes('.'))) {
+      return { kind: 'number', marker: `${numbered[1]}.`, depth: numbered[1].split('.').length, spans: parseInline(numbered[3]) };
+    }
     return { kind: 'p', spans: parseInline(line) };
   });
 }

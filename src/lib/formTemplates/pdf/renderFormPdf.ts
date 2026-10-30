@@ -254,9 +254,12 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
           w.text(chars, { indent });
         } else {
           const marker = block.kind === 'bullet' ? '•' : block.marker;
+          // Multi-level numbers (1.1. / 1.1.1.) step in one level each and need a wider marker column.
+          const level = block.kind === 'number' ? (block.depth - 1) * 14 : 0;
+          const markerWidth = Math.max(14, lineWidth(plain(marker), fonts, 10.5) + 5);
           w.ensure(16);
-          drawLine(w.page, plain(marker), fonts, { right: w.right - indent, y: w.y - 10.5, size: 10.5, color: INK });
-          w.text(chars, { indent: indent + 14 });
+          drawLine(w.page, plain(marker), fonts, { right: w.right - indent - level, y: w.y - 10.5, size: 10.5, color: INK });
+          w.text(chars, { indent: indent + level + markerWidth });
         }
       }
       w.y -= 3;
