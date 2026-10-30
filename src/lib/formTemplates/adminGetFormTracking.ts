@@ -3,6 +3,7 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { deriveMemberName } from '../entities';
 import { parseBrand } from './shared';
+import { evaluateOutcome } from './logic';
 import {
   computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listTrainees,
   listSubmissionsOfTemplate, loadRosters, parentOf, targetIncludes, versionToSign,
@@ -61,6 +62,7 @@ export async function handler(
         previousSubmissionId: !reuse && existing?.status === 'completed' ? existing.submissionId : null,
         signedRoles: sub?.signedRoles ?? [],
         completedAt: sub?.completedAt ?? null,
+        outcome: status === 'completed' && sub && t ? evaluateOutcome(head.settings.outcome, t.sections, sub.answers) : null,
         hasPdf: !!sub?.pdfS3Key,
         updatedAt: sub?.updatedAt ?? null,
       });

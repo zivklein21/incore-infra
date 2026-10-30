@@ -1,5 +1,5 @@
 import { isValidIsraeliId } from '../israeliId';
-import { CHOICE_TYPES, DISPLAY_ONLY, FillerRole, ShowIf, SignerRole, TemplateField, TemplateSection } from './schema';
+import { CHOICE_TYPES, DISPLAY_ONLY, FillerRole, FormOutcome, ShowIf, SignerRole, TemplateField, TemplateSection } from './schema';
 
 // Conditional visibility + required checks, the server's copy of the app's
 // src/shared/utils/formTemplateLogic.ts (same rules — the app shows them,
@@ -139,4 +139,21 @@ export function rolesUsed(sections: TemplateSection[]): Set<FillerRole> {
   const used = new Set<FillerRole>();
   sections.forEach(s => s.fields.forEach(f => { if (!DISPLAY_ONLY.has(f.type)) used.add(f.filledBy); }));
   return used;
+}
+
+export interface OutcomeResult { label: string; approved: boolean; text: string; alert: boolean }
+
+/** A completed form's result: approved only when EVERY condition matches the signed answers (a missing / hidden answer doesn't match). */
+export function evaluateOutcome(outcome: FormOutcome | undefined, sections: TemplateSection[], answers: Answers): OutcomeResult | null {
+  if (!outcome?.conditions.length) return null;
+  const fields = new Map(sections.flatMap(s => s.fields).map(f => [f.id, f]));
+  const approved = outcome.conditions.every(c => {
+    const field = fields.get(c.fieldId);
+    const answer = answers[c.fieldId];
+    if (!field) return false;
+    if (field.type === 'multi_select') return Array.isArray(answer) && answer.includes(c.value);
+    if (field.type === 'checkbox') return (answer === true) === (c.value === 'checked');
+    return answer === c.value;
+  });
+  return { label: outcome.label, approved, text: approved ? outcome.approvedText : outcome.notApprovedText, alert: outcome.alert };
 }

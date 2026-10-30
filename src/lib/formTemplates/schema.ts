@@ -464,9 +464,48 @@ export interface TemplateSettings {
    *              hand); its participants sign it before the activity.
    */
   kind: FormKind;
+  /** Whose profile lists the final signed form: the parent's view, the trainee's own, or both. */
+  showIn: VisibleOn;
+  /** Optional result of the signed form (e.g. photo consent → approved / not approved) — see evaluateOutcome. */
+  outcome?: FormOutcome;
 }
 
 export type FormKind = 'signup' | 'activity';
+
+/**
+ * A form's RESULT, computed from the final signed answers (never stored —
+ * so editing the texts updates every profile without anyone signing again):
+ * APPROVED only when every condition holds (e.g. the parent's "Yes" AND the
+ * trainee's "Yes"); otherwise NOT APPROVED. The matching text is shown on
+ * the profile — as an alert at the top when `alert` is on (e.g. "may not
+ * leave without a parent").
+ */
+export interface FormOutcome {
+  /** e.g. "אישור צילום" / "יציאה ללא הורה". */
+  label: string;
+  /** All must match. fieldId of a yes_no / checkbox / choice field; value 'yes'|'no' / 'checked' / an option id. */
+  conditions: { fieldId: string; value: string }[];
+  approvedText: string;
+  notApprovedText: string;
+  alert: boolean;
+}
+
+function normalizeOutcome(raw: unknown): FormOutcome | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const conditions = (Array.isArray(r.conditions) ? r.conditions : [])
+    .map((c: Record<string, unknown>) => ({ fieldId: str(c?.fieldId), value: str(c?.value) }))
+    .filter(c => c.fieldId && c.value)
+    .slice(0, 20);
+  if (!conditions.length) return undefined;
+  return {
+    label: str(r.label).trim().slice(0, 80),
+    conditions,
+    approvedText: str(r.approvedText).trim().slice(0, 200),
+    notApprovedText: str(r.notApprovedText).trim().slice(0, 200),
+    alert: r.alert === true,
+  };
+}
 
 export function normalizeSettings(raw: Record<string, unknown>, fallbackDevice: TraineeDevice): TemplateSettings {
   const code = str(raw.code).trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
@@ -477,6 +516,8 @@ export function normalizeSettings(raw: Record<string, unknown>, fallbackDevice: 
     required: raw.required !== false,
     beforeFirstTraining: raw.beforeFirstTraining === true || raw.kind === 'signup',
     kind: raw.kind === 'signup' ? 'signup' : 'activity',
+    showIn: (VISIBLE_ON as readonly string[]).includes(raw.showIn as string) ? raw.showIn as VisibleOn : 'both',
+    ...(normalizeOutcome(raw.outcome) ? { outcome: normalizeOutcome(raw.outcome) } : {}),
   };
 }
 

@@ -6,6 +6,7 @@ import {
   listTemplateHeads, loadRosters, parentOf, SIGNUP_ASSIGNMENT_ID, targetIncludes, versionToSign,
 } from './submissions';
 import { prefillValues } from './prefill';
+import { evaluateOutcome } from './logic';
 
 // GET /getMyForms?childId=<uid>
 // Auth: Cognito JWT, either brand (the caller's profile table decides). A
@@ -115,6 +116,9 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       signatures: (sub?.signatures ?? []).map(s => ({ fieldId: s.fieldId, role: s.role, name: s.name, paths: s.paths, signedAt: s.signedAt })),
       prefill,
       completedAt: sub?.completedAt ?? null,
+      // Result + where the final form shows: the CURRENT settings (head), so edited texts apply to everyone at once.
+      showIn: head.settings.showIn,
+      outcome: status === 'completed' && sub ? evaluateOutcome(head.settings.outcome, t.sections, sub.answers) : null,
       hasPdf: !!sub?.pdfS3Key,
       assignedAt: a.createdAt,
     });

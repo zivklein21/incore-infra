@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
 import { hebrewLetter, normalizeSections, publishIssues, sectionNumbers, templateContentHash, TemplateSection } from '../src/lib/formTemplates/schema';
-import { answerFormatError, canFill, missingRequired, pruneHidden, visibleIds } from '../src/lib/formTemplates/logic';
+import { answerFormatError, canFill, evaluateOutcome, missingRequired, pruneHidden, visibleIds } from '../src/lib/formTemplates/logic';
 import { plain, visualOrder } from '../src/lib/formTemplates/pdf/rtlText';
 import { fitSignature, israelDateTime, renderFormPdf } from '../src/lib/formTemplates/pdf/renderFormPdf';
 import { parseRichText } from '../src/lib/formTemplates/richText';
@@ -202,4 +202,16 @@ test('new_members target: only accounts created after the assignment; migrated (
 test('INCORE: every role is done on the member\'s own device', () => {
   assert.deepEqual(rolesOnDevice('trainee_phone', ['parent', 'trainee'], 'own_phone', 'incore'), ['parent', 'trainee']);
   assert.deepEqual(rolesOnDevice('trainee_phone', ['parent', 'trainee'], 'own_phone', 'forca'), ['trainee']);
+});
+
+test('outcome: approved only when every condition matches (photo consent: parent AND child yes)', () => {
+  const sections: TemplateSection[] = [sec('a', { fields: [
+    { id: 'p', type: 'yes_no', label: 'P', required: true, filledBy: 'parent' },
+    { id: 'c', type: 'yes_no', label: 'C', required: true, filledBy: 'trainee' },
+  ] })];
+  const outcome = { label: 'צילום', conditions: [{ fieldId: 'p', value: 'yes' }, { fieldId: 'c', value: 'yes' }], approvedText: 'מאושר', notApprovedText: 'לא מאושר', alert: false };
+  assert.equal(evaluateOutcome(outcome, sections, { p: 'yes', c: 'yes' })?.approved, true);
+  assert.equal(evaluateOutcome(outcome, sections, { p: 'yes', c: 'no' })?.text, 'לא מאושר');
+  assert.equal(evaluateOutcome(outcome, sections, { p: 'no', c: 'no' })?.approved, false);
+  assert.equal(evaluateOutcome(undefined, sections, {}), null);
 });
