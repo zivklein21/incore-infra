@@ -10,7 +10,7 @@ import { Answers, answerFormatError, canFill, detailsKey, FieldAnswer, missingRe
 import { notifyNextSigner, participatingRoles, resolveFamilyCaller, rolesOnDevice } from './familyForms';
 import {
   computeSubmissionStatus, FormAssignmentItem, formsTable, FormSubmissionItem, getProfile, getTemplateHead, getTemplateVersion,
-  latestByAssignment, listSubmissionsOfChild, parentOf, targetIncludes, versionToSign,
+  latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign,
 } from './submissions';
 import type { SignatureRecord } from './pdf/renderFormPdf';
 import { ensureSignedPdf } from './signedPdf';
@@ -62,7 +62,8 @@ export async function handler(
   ]);
   const assignment = assignmentRes.Item as FormAssignmentItem | undefined;
   if (!head || head.status !== 'published' || !assignment || assignment.cancelledAt || !child) return json(404, { error: 'not_found' });
-  if (!targetIncludes(assignment.target, { uid: caller.childId, groupId: child.identity?.groupId, createdAt: (child as { createdAt?: string }).createdAt }, assignment.createdAt)) {
+  const rosters = await loadRosters(caller.brand, [assignment]);
+  if (!targetIncludes(assignment.target, { uid: caller.childId, groupId: child.identity?.groupId, createdAt: (child as { createdAt?: string }).createdAt }, assignment.createdAt, rosters)) {
     return json(404, { error: 'not_found' });
   }
 

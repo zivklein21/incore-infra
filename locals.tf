@@ -344,6 +344,7 @@ locals {
     getMyForms              = "GET"  # parent (childId) / trainee: "Forms to sign" for this device
     submitFormPart          = "POST" # parent / trainee: fill + declare + sign their part (server timestamps)
     getSignedFormPdfUrl     = "GET"  # admin / the child's parent: presigned URL to a signed PDF
+    adminListActivities     = "GET"  # admin: upcoming calendar activities to attach a form to
     # Manage → Forms → First Sign-up Order (same shared integration)
     adminGetSignupFlowConfig  = "GET"  # admin: a brand's onboarding form order + include/exclude
     adminSaveSignupFlowConfig = "POST" # admin: save that order

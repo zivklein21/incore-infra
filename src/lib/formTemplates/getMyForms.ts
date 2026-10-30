@@ -1,9 +1,9 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { getUid, json } from '../http';
-import { participatingRoles, resolveFamilyCaller, rolesOnDevice } from './familyForms';
+import { FamilyCaller, participatingRoles, resolveFamilyCaller, rolesOnDevice } from './familyForms';
 import {
   computeSubmissionStatus, getProfile, getTemplateVersion, latestByAssignment, listAssignments, listSubmissionsOfChild,
-  listTemplateHeads, parentOf, targetIncludes, versionToSign,
+  listTemplateHeads, loadRosters, parentOf, SIGNUP_ASSIGNMENT_ID, targetIncludes, versionToSign,
 } from './submissions';
 import { prefillValues } from './prefill';
 
@@ -25,17 +25,32 @@ import { prefillValues } from './prefill';
 // read-only), signatures already made (with server time), admin-filled
 // answers and profile prefill. Archived forms are hidden; a form a family
 // already completed stays listed (read-only, PDF for the parent).
+//
+// Each form says its kind: 'signup' forms are the first-login ones (also
+// reported by getProfile so the app routes there before the home screen);
+// 'activity' forms carry the calendar activity they belong to (name + date).
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const uid = getUid(event);
   const caller = await resolveFamilyCaller(uid, event.queryStringParameters?.childId || undefined);
   if (!caller) return json(403, { error: 'forbidden' });
+  const forms = await formsForCaller(caller);
+  if (!forms) return json(404, { error: 'member_not_found' });
+  return json(200, { forms, pendingCount: forms.filter(f => f.myRoles.length > 0).length });
+}
 
+export type MyFormRow = {
+  templateId: string; assignmentId: string; title: string; status: string; myRoles: string[]; waiting: string[];
+  kind: 'signup' | 'activity'; beforeFirstTraining: boolean; assignedAt: string; activity: { name: string; date: string } | null;
+} & Record<string, unknown>;
+
+/** The "Forms to sign" list for one caller (device + child) — shared with profileResponse.ts's first-login gate. */
+export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] | null> {
   const [heads, assignments, subs, child] = await Promise.all([
     listTemplateHeads(caller.brand), listAssignments(caller.brand), listSubmissionsOfChild(caller.brand, caller.childId), getProfile(caller.brand, caller.childId),
   ]);
-  if (!child) return json(404, { error: 'member_not_found' });
+  if (!child) return null;
   const trainee = { uid: caller.childId, groupId: child.identity?.groupId, createdAt: (child as { createdAt?: string }).createdAt };
   const headById = new Map(heads.filter(h => h.status === 'published' && h.publishedVersion > 0).map(h => [h.id, h]));
   const latest = latestByAssignment(subs, caller.childId);
@@ -44,10 +59,13 @@ export async function handler(
   const parent = parentUid ? await getProfile(caller.brand, parentUid) : null;
   const prefill = prefillValues(child as never, parent as never);
 
-  const forms: ({ status: string; myRoles: string[]; beforeFirstTraining: boolean; assignedAt: string } & Record<string, unknown>)[] = [];
+  const rosters = await loadRosters(caller.brand, assignments);
+  const forms: MyFormRow[] = [];
   for (const a of assignments) {
     const head = headById.get(a.templateId);
-    if (!head || !targetIncludes(a.target, trainee, a.createdAt)) continue;
+    if (!head || !targetIncludes(a.target, trainee, a.createdAt, rosters)) continue;
+    // A sign-up form's own assignment only counts while the form IS a sign-up form.
+    if (a.assignmentId === SIGNUP_ASSIGNMENT_ID && head.settings.kind !== 'signup') continue;
     const existing = latest.get(a.assignmentId);
     const { version, reuse } = versionToSign(head, existing);
     const t = await getTemplateVersion(caller.brand, a.templateId, version);
@@ -74,7 +92,9 @@ export async function handler(
       code: t.settings.code,
       description: t.settings.description,
       required: t.settings.required,
-      beforeFirstTraining: t.settings.beforeFirstTraining,
+      beforeFirstTraining: t.settings.beforeFirstTraining || a.assignmentId === SIGNUP_ASSIGNMENT_ID,
+      kind: a.assignmentId === SIGNUP_ASSIGNMENT_ID ? 'signup' : 'activity',
+      activity: a.target.kind === 'activity' ? { name: a.target.className ?? '', date: a.target.date } : null,
       version,
       signers: t.signers,
       acknowledgers: t.acknowledgers,
@@ -96,9 +116,9 @@ export async function handler(
     });
   }
 
-  // Required-before-first-training first, then forms waiting on this device, then the rest; newest assignment first within each.
-  const rank = (f: typeof forms[number]) => (f.status === 'completed' ? 3 : f.myRoles.length ? (f.beforeFirstTraining ? 0 : 1) : 2);
-  forms.sort((x, y) => rank(x) - rank(y) || y.assignedAt.localeCompare(x.assignedAt));
-
-  return json(200, { forms, pendingCount: forms.filter(f => f.myRoles.length > 0).length });
+  // Sign-up / before-first-training first, then forms waiting on this device (soonest activity first), then the rest.
+  const rank = (f: MyFormRow) => (f.status === 'completed' ? 3 : f.myRoles.length ? (f.beforeFirstTraining ? 0 : 1) : 2);
+  const when = (f: MyFormRow) => f.activity?.date ?? '9999';
+  forms.sort((x, y) => rank(x) - rank(y) || when(x).localeCompare(when(y)) || y.assignedAt.localeCompare(x.assignedAt));
+  return forms;
 }

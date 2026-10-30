@@ -5,7 +5,7 @@ import { deriveMemberName } from '../entities';
 import { parseBrand } from './shared';
 import {
   computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listTrainees,
-  listSubmissionsOfTemplate, parentOf, targetIncludes, versionToSign,
+  listSubmissionsOfTemplate, loadRosters, parentOf, targetIncludes, versionToSign,
 } from './submissions';
 
 // GET /adminGetFormTracking?templateId=<id>&brand=incore|forca
@@ -27,6 +27,7 @@ export async function handler(
   if (!head) return json(404, { error: 'not_found' });
   const [assignments, trainees, subs] = await Promise.all([listAssignments(brand, templateId), listTrainees(brand), listSubmissionsOfTemplate(brand, templateId)]);
 
+  const rosters = await loadRosters(brand, assignments);
   const parentNames = new Map<string, string>();
   const parentName = async (childId: string) => {
     if (!parentNames.has(childId)) {
@@ -40,7 +41,7 @@ export async function handler(
   const out = [];
   for (const a of assignments.sort((x, y) => y.createdAt.localeCompare(x.createdAt))) {
     const rows = [];
-    for (const tr of trainees.filter(x => targetIncludes(a.target, x, a.createdAt))) {
+    for (const tr of trainees.filter(x => targetIncludes(a.target, x, a.createdAt, rosters))) {
       const existing = latestByAssignment(subs, tr.uid).get(a.assignmentId);
       const { version, reuse } = head.publishedVersion ? versionToSign(head, existing) : { version: existing?.version ?? 0, reuse: !!existing };
       const t = version ? await getTemplateVersion(brand, templateId, version) : null;

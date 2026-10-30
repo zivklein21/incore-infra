@@ -1,9 +1,10 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, tableForBrand } from '../dynamo';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
-import { formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
+import { formAssignmentKey, formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
+import { SIGNUP_ASSIGNMENT_ID } from './submissions';
 import { publishIssues } from './schema';
 import { writeAudit } from './audit';
 
@@ -22,6 +23,13 @@ import { writeAudit } from './audit';
 //
 // Nothing to publish (draft identical to the published version, and not
 // archived) → 200 { published: false }.
+//
+// Sign-up forms (settings.kind 'signup'): publishing makes sure the form has
+// its own assignment (assignmentId 'signup', target 'new_members') — so it
+// becomes part of the FIRST LOGIN for accounts created from that moment on,
+// and never for anyone who already had an account. Publishing it as an
+// activity form cancels that assignment (signatures already made are kept);
+// turning it back into a sign-up form starts again from that moment.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -51,7 +59,11 @@ export async function handler(
   if (issues.length) return json(400, { error: 'not_publishable', issues });
 
   const changed = t.contentHash !== t.publishedHash || t.publishedVersion === 0;
-  if (!changed && t.status === 'published') return json(200, { success: true, published: false, version: t.publishedVersion });
+  if (!changed && t.status === 'published') {
+    // Settings (like the form type) aren't content — still bring the sign-up assignment in line.
+    await syncSignupAssignment(table, id, t.settings.kind === 'signup', uid);
+    return json(200, { success: true, published: false, version: t.publishedVersion });
+  }
 
   const now = new Date().toISOString();
   // Version numbers continue from the highest ever written (currentVersion), never reuse one.
@@ -88,7 +100,30 @@ export async function handler(
     throw err;
   }
 
+  await syncSignupAssignment(table, id, t.settings.kind === 'signup', uid);
+
   await writeAudit(brand, { action: 'publish', templateId: id, actorUid: uid, detail: { version, requireResign, unarchived: t.status === 'archived' } });
 
   return json(200, { success: true, published: true, version, updatedAt: now });
+}
+
+async function syncSignupAssignment(table: string, templateId: string, isSignup: boolean, uid: string): Promise<void> {
+  const key = formAssignmentKey(templateId, SIGNUP_ASSIGNMENT_ID);
+  const existing = (await ddb.send(new GetCommand({ TableName: table, Key: key }))).Item;
+  const active = !!existing && !existing.cancelledAt;
+  if (isSignup && !active) {
+    await ddb.send(new PutCommand({
+      TableName: table,
+      Item: {
+        ...key, assignmentId: SIGNUP_ASSIGNMENT_ID, templateId, target: { kind: 'new_members' }, adminAnswers: {},
+        version: 0, createdAt: new Date().toISOString(), createdBy: uid,
+      },
+    }));
+  } else if (!isSignup && active) {
+    await ddb.send(new UpdateCommand({
+      TableName: table, Key: key,
+      UpdateExpression: 'SET cancelledAt = :now, cancelledBy = :uid',
+      ExpressionAttributeValues: { ':now': new Date().toISOString(), ':uid': uid },
+    }));
+  }
 }

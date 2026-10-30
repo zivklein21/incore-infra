@@ -1,5 +1,5 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { randomUUID } from 'crypto';
 import { ddb } from '../dynamo';
 import { getUid, json } from '../http';
@@ -9,18 +9,22 @@ import { formAssignmentKey, parseBrand } from './shared';
 import { DISPLAY_ONLY } from './schema';
 import { Answers, answerFormatError, FieldAnswer, isAnswered, visibleIds } from './logic';
 import {
-  AssignmentTarget, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, listTrainees, parentOf, getProfile, targetIncludes,
+  AssignmentTarget, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, listTrainees, loadRosters, parentOf, getProfile, targetIncludes,
 } from './submissions';
 import { writeAudit } from './audit';
 import { participatingRoles, rolesOnDevice } from './familyForms';
 
 // POST /adminAssignFormTemplate
 // Body (assign):  { templateId, target: { kind: 'all' } | { kind: 'new_members' } | { kind: 'group', groupId, groupName? }
-//                   | { kind: 'members', memberIds }, adminAnswers?: { [adminFieldId]: value }, notify?: boolean, brand }
+//                   | { kind: 'members', memberIds } | { kind: 'activity', classId },
+//                   adminAnswers?: { [adminFieldId]: value }, notify?: boolean, brand }
 // Body (cancel):  { action: 'cancel', templateId, assignmentId, brand }
 // Auth: Cognito JWT, admin only. Either brand. INCORE's usual target is
 // 'new_members' — only members who join after the assignment see it, so no
-// existing member is ever asked (groups are FORCA-only).
+// existing member is ever asked (groups are FORCA-only). An ACTIVITY target
+// (a session/class from the calendar) goes to everyone registered to it —
+// re-checked whenever a family opens their forms, so members registered
+// later get it too; its name and date are stored for display/deadline.
 //
 // Assigning is where admin-filled fields (event name, date, location…) get
 // their values — required ones must be filled, and every value must pass
@@ -74,6 +78,11 @@ export async function handler(
   let target: AssignmentTarget;
   if (raw.kind === 'all') target = { kind: 'all' };
   else if (raw.kind === 'new_members') target = { kind: 'new_members' };
+  else if (raw.kind === 'activity' && typeof raw.classId === 'string' && raw.classId) {
+    const cls = (await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: { PK: `CLASS#${raw.classId}`, SK: 'METADATA' } }))).Item;
+    if (!cls) return json(400, { error: 'activity_not_found' });
+    target = { kind: 'activity', classId: raw.classId, className: typeof cls.className === 'string' ? cls.className : '', date: String(cls.date ?? '') };
+  }
   else if (brand === 'forca' && raw.kind === 'group' && typeof raw.groupId === 'string' && raw.groupId) {
     target = { kind: 'group', groupId: raw.groupId, ...(typeof raw.groupName === 'string' ? { groupName: raw.groupName } : {}) };
   } else if (raw.kind === 'members' && Array.isArray(raw.memberIds) && raw.memberIds.length) {
@@ -98,7 +107,8 @@ export async function handler(
 
   const assignedAt = new Date().toISOString();
   // 'new_members' matches nobody yet — it fills up as members join.
-  const trainees = (await listTrainees(brand)).filter(tr => targetIncludes(target, tr, assignedAt));
+  const rosters = await loadRosters(brand, [{ target }]);
+  const trainees = (await listTrainees(brand)).filter(tr => targetIncludes(target, tr, assignedAt, rosters));
   if (target.kind === 'members' && !trainees.length) return json(400, { error: 'no_trainees' });
 
   const assignmentId = randomUUID();

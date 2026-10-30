@@ -456,7 +456,17 @@ export interface TemplateSettings {
   required: boolean;
   /** Must be signed before the trainee's first training — highlighted first in "Forms to sign". */
   beforeFirstTraining: boolean;
+  /**
+   * 'signup'   — part of the FIRST LOGIN: new members (accounts created after
+   *              it's first published) fill and sign it before reaching the
+   *              home screen (profileResponse.ts → resolvePostLoginRoute).
+   * 'activity' — attached to an activity in the calendar (or assigned by
+   *              hand); its participants sign it before the activity.
+   */
+  kind: FormKind;
 }
+
+export type FormKind = 'signup' | 'activity';
 
 export function normalizeSettings(raw: Record<string, unknown>, fallbackDevice: TraineeDevice): TemplateSettings {
   const code = str(raw.code).trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 24);
@@ -465,7 +475,8 @@ export function normalizeSettings(raw: Record<string, unknown>, fallbackDevice: 
     description: str(raw.description).trim(),
     visibleOn: normalizeVisibleOn(raw.visibleOn, fallbackDevice),
     required: raw.required !== false,
-    beforeFirstTraining: raw.beforeFirstTraining === true,
+    beforeFirstTraining: raw.beforeFirstTraining === true || raw.kind === 'signup',
+    kind: raw.kind === 'signup' ? 'signup' : 'activity',
   };
 }
 

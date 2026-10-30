@@ -35,7 +35,31 @@ export type AssignmentTarget =
   | { kind: 'all' }
   | { kind: 'new_members' }
   | { kind: 'group'; groupId: string; groupName?: string }
-  | { kind: 'members'; memberIds: string[] };
+  | { kind: 'members'; memberIds: string[] }
+  /** An activity in the calendar: everyone registered to it (the roster at the time it's checked). */
+  | { kind: 'activity'; classId: string; className?: string; date: string };
+
+/** The id of a sign-up form's own assignment (one per template; created on publish — see adminPublishFormTemplate.ts). */
+export const SIGNUP_ASSIGNMENT_ID = 'signup';
+
+export type Rosters = Map<string, Set<string>>;
+
+/** Registered members of each activity the assignments point at. */
+export async function loadRosters(brand: Brand, assignments: { target: AssignmentTarget }[]): Promise<Rosters> {
+  const out: Rosters = new Map();
+  const classIds = [...new Set(assignments.flatMap(a => (a.target.kind === 'activity' ? [a.target.classId] : [])))];
+  await Promise.all(classIds.map(async classId => {
+    const items = await queryAll({
+      TableName: formsTable(brand),
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      FilterExpression: '#status = :registered',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':pk': `CLASS#${classId}`, ':prefix': 'REG#', ':registered': 'REGISTERED' },
+    });
+    out.set(classId, new Set(items.map(i => String(i.userId ?? String(i.SK).replace(/^REG#/, '')))));
+  }));
+  return out;
+}
 
 export interface FormAssignmentItem {
   PK: string; SK: string;
@@ -194,8 +218,11 @@ export async function listTrainees(brand: Brand): Promise<Trainee[]> {
 }
 
 /** `assignedAt` is the assignment's createdAt — needed for 'new_members'. */
-export function targetIncludes(target: AssignmentTarget, trainee: { uid: string; groupId?: string; createdAt?: string }, assignedAt = ''): boolean {
+export function targetIncludes(
+  target: AssignmentTarget, trainee: { uid: string; groupId?: string; createdAt?: string }, assignedAt = '', rosters?: Rosters,
+): boolean {
   if (target.kind === 'all') return true;
+  if (target.kind === 'activity') return !!rosters?.get(target.classId)?.has(trainee.uid);
   if (target.kind === 'new_members') return !!trainee.createdAt && !!assignedAt && trainee.createdAt > assignedAt;
   if (target.kind === 'group') return !!trainee.groupId && trainee.groupId === target.groupId;
   return target.memberIds.includes(trainee.uid);
