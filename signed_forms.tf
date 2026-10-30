@@ -24,6 +24,17 @@ locals {
   signed_form_brands = toset(["forca", "incore"])
 }
 
+# The FORCA bucket existed (created as the single aws_s3_bucket.forca_signed_forms)
+# before this file went per-brand. Without this, Terraform plans to DELETE it and
+# create a new one with the same name — which fails (it isn't empty / the name
+# is taken) after already tearing down its protections. Its old companion
+# resources (versioning, encryption, policy, …) were already destroyed by that
+# failed apply on 2026-10-30, so they're simply re-created under the new names.
+moved {
+  from = aws_s3_bucket.forca_signed_forms
+  to   = aws_s3_bucket.signed_forms["forca"]
+}
+
 resource "aws_kms_key" "signed_forms" {
   for_each = local.signed_form_brands
 
