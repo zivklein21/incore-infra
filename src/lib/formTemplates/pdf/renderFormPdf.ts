@@ -240,15 +240,21 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
     const titleSize = depth === 0 ? 13 : depth === 1 ? 11.5 : 10.5;
     // The details box (name, ID…) has no number; it gets a default title and a rule under it.
     if (section.details && !section.title.trim()) section = { ...section, title: 'פרטים' };
-    if (number || section.title.trim()) {
+    // No title: the number opens the section's first line of text, not bold (below).
+    const inlineNumber = !!number && !section.title.trim();
+    if (section.title.trim()) {
       w.ensure(titleSize * 3);
       w.y -= depth === 0 ? 8 : 4;
       const heading = [...(number ? plain(`${number}. `, { bold: true }) : []), ...fromSpans(parseInline(section.title)).map(c => ({ ...c, bold: true }))];
       w.text(heading, { size: titleSize, color: depth === 0 ? BRAND : INK, indent, gap: 2 });
     }
+    if (inlineNumber) w.y -= depth === 0 ? 6 : 3;
+    if (inlineNumber && !section.description?.trim()) w.text(plain(`${number}.`), { indent });
     if (section.description?.trim()) {
-      for (const block of parseRichText(section.description)) {
-        const chars = fromSpans(block.spans);
+      const blocks = parseRichText(section.description);
+      if (inlineNumber && blocks[0]?.kind !== 'p') w.text(plain(`${number}.`), { indent });
+      for (const [bi, block] of blocks.entries()) {
+        const chars = [...(inlineNumber && bi === 0 && block.kind === 'p' ? plain(`${number}. `) : []), ...fromSpans(block.spans)];
         if (block.kind === 'p') {
           if (!chars.length) { w.y -= 5; continue; }
           w.text(chars, { indent });
