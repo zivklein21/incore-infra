@@ -12,7 +12,7 @@ import { writeAudit } from './audit';
 // Auth: Cognito JWT, admin only.
 //
 // A template nobody has signed is deleted (its head; published versions
-// are kept, they cost nothing and keep history intact). A FORCA template
+// are kept, they cost nothing and keep history intact). A template
 // with at least one signature is ARCHIVED instead: hidden from families
 // (getMyForms.ts lists published only) and from new assignments, while
 // every submission, signature and signed PDF stays exactly as it is —
@@ -38,9 +38,7 @@ export async function handler(
   const brand = parseBrand(body.brand);
   const table = tableForBrand(brand);
 
-  const signedCount = brand === 'forca'
-    ? (await listSubmissionsOfTemplate(id)).filter(s => s.signatures.length > 0 || s.acknowledgments.length > 0).length
-    : 0;
+  const signedCount = (await listSubmissionsOfTemplate(brand, id)).filter(s => s.signatures.length > 0 || s.acknowledgments.length > 0).length;
 
   if (signedCount > 0) {
     try {
@@ -56,11 +54,11 @@ export async function handler(
       if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return json(404, { error: 'not_found' });
       throw err;
     }
-    await writeAudit({ action: 'archive', templateId: id, actorUid: uid, detail: { signedCount } });
+    await writeAudit(brand, { action: 'archive', templateId: id, actorUid: uid, detail: { signedCount } });
     return json(200, { success: true, result: 'archived', signedCount });
   }
 
   await ddb.send(new DeleteCommand({ TableName: table, Key: formTemplateKey(id) }));
-  if (brand === 'forca') await writeAudit({ action: 'delete', templateId: id, actorUid: uid });
+  await writeAudit(brand, { action: 'delete', templateId: id, actorUid: uid });
   return json(200, { success: true, result: 'deleted', signedCount: 0 });
 }

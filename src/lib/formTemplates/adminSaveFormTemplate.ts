@@ -57,17 +57,13 @@ export async function handler(
     if (err instanceof TemplateValidationError) return json(400, { error: 'invalid_argument', detail: err.message });
     throw err;
   }
-  // INCORE has no separate parent/trainee signing — every field is the member's own.
-  const signers = brand === 'forca' ? normalizeSigners(body.signers, role) : [role];
-  if (brand !== 'forca') {
-    sections = sections.map(s => ({ ...s, fields: s.fields.map(({ prefill: _prefill, ...f }) => ({ ...f, filledBy: role })) }));
-  }
+  // Same system for both brands (INCORE: forms for new members — a minor's
+  // parent signs on the member's own device, see familyForms.rolesOnDevice).
+  const signers = normalizeSigners(body.signers, role);
   const rawSettings = (body.settings && typeof body.settings === 'object' ? body.settings : {}) as Record<string, unknown>;
-  let settings = normalizeSettings(rawSettings, normalizeTraineeDevice(body.traineeDevice));
-  // INCORE has no parent/trainee split, so where it's signed is meaningless there.
-  const traineeDevice = brand === 'forca' ? traineeDeviceFor(settings.visibleOn) : normalizeTraineeDevice(undefined);
-  if (brand !== 'forca') settings = { ...settings, visibleOn: 'both' };
-  const acknowledgers = brand === 'forca' ? normalizeAcknowledgers(body.acknowledgers, signers) : [];
+  const settings = normalizeSettings(rawSettings, normalizeTraineeDevice(body.traineeDevice));
+  const traineeDevice = traineeDeviceFor(settings.visibleOn);
+  const acknowledgers = normalizeAcknowledgers(body.acknowledgers, signers);
   const contentHash = templateContentHash({ signers, sections, traineeDevice, acknowledgers });
 
   const now = new Date().toISOString();
@@ -132,7 +128,7 @@ export async function handler(
     throw err;
   }
 
-  if (brand === 'forca') await writeAudit({ action: existingId ? 'edit' : 'create', templateId: id, actorUid: uid, detail: { name } });
+  await writeAudit(brand, { action: existingId ? 'edit' : 'create', templateId: id, actorUid: uid, detail: { name } });
 
   return json(200, { success: true, id, status, version: publishedVersion, hasUnpublishedChanges: contentHash !== publishedHash, updatedAt: now });
 }

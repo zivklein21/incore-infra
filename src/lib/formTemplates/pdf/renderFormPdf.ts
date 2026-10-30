@@ -6,7 +6,7 @@ import { parseInline, parseRichText, Span } from '../richText';
 import { DISPLAY_ONLY, hebrewLetter, sectionNumbers, SignerRole, TemplateField, TemplateSection } from '../schema';
 import { Answers, detailsKey, visibleIds } from '../logic';
 
-// The signed copy of a FORCA form (and the "Preview PDF" sample): every
+// The signed copy of a FORCA / INCORE form (and the "Preview PDF" sample): every
 // section with its exact numbering and text FROM THE SIGNED VERSION, every
 // field value, each declaration marked checked, each signature with its
 // server-recorded date/time (DD/MM/YYYY HH:mm, Asia/Jerusalem), then an
@@ -24,13 +24,14 @@ export interface SignatureRecord {
   paths: string[];
   /** Server time, ISO UTC. */
   signedAt: string;
-  ip: string;
-  userAgent: string;
-  deviceId: string;
+  /** Which family device it was signed on — the only device detail kept (no IP, user agent or device id). */
+  device: SigningDevice;
   version: number;
 }
 
-export interface AcknowledgmentRecord { role: SignerRole; userId: string; name: string; at: string; ip: string; userAgent: string; deviceId: string; version: number }
+export type SigningDevice = 'parent_phone' | 'trainee_phone';
+
+export interface AcknowledgmentRecord { role: SignerRole; userId: string; name: string; at: string; device: SigningDevice; version: number }
 
 export interface FormPdfInput {
   title: string;
@@ -45,20 +46,37 @@ export interface FormPdfInput {
   generatedAt: Date;
   /** "Preview PDF": dummy data + SAMPLE watermark. */
   sample?: boolean;
+  brand?: 'incore' | 'forca';
   /** PNG bytes of the white-on-pink FORCA wordmark (optional — falls back to text). */
   logoPng?: Uint8Array | null;
 }
 
 const A4: [number, number] = [595.28, 841.89];
 const M = 48; // page margin
-const BRAND = rgb(0x7a / 255, 0x00 / 255, 0x4b / 255); // colors.forcaDarkPink
-const BRAND_LIGHT = rgb(1, 0xc2 / 255, 0xe8 / 255);
+/** Per-brand look: FORCA a pink strip with its white wordmark, INCORE a light-purple strip with its purple logo. */
+interface Theme { accent: RGB; light: RGB; strip: RGB; stripText: RGB; stripSub: RGB; wordmark: string }
+const THEMES: Record<'incore' | 'forca', Theme> = {
+  forca: {
+    accent: rgb(0x7a / 255, 0x00 / 255, 0x4b / 255), // colors.forcaDarkPink
+    light: rgb(1, 0xc2 / 255, 0xe8 / 255), // colors.forcaLightPink
+    strip: rgb(0x7a / 255, 0x00 / 255, 0x4b / 255), stripText: rgb(1, 1, 1), stripSub: rgb(1, 0xc2 / 255, 0xe8 / 255), wordmark: 'FORCA',
+  },
+  incore: {
+    accent: rgb(0x5c / 255, 0x3a / 255, 0x8f / 255), // colors.purpleVeryDark
+    light: rgb(0xf3 / 255, 0xee / 255, 1), // colors.purpleVeryLight
+    strip: rgb(0xf3 / 255, 0xee / 255, 1), stripText: rgb(0x5c / 255, 0x3a / 255, 0x8f / 255), stripSub: rgb(0.42, 0.42, 0.46), wordmark: 'INCORE',
+  },
+};
 const INK = rgb(0.12, 0.12, 0.14);
 const MUTED = rgb(0.42, 0.42, 0.46);
 const LINE = rgb(0.85, 0.85, 0.88);
 const SURFACE = rgb(0.96, 0.96, 0.97);
 
-export const ROLE_HE: Record<SignerRole, string> = { parent: 'הורה', trainee: 'מתאמנת' };
+/** FORCA's trainees are girls; INCORE's members are anyone. */
+export const roleHe = (brand: 'incore' | 'forca'): Record<SignerRole, string> =>
+  ({ parent: 'הורה', trainee: brand === 'forca' ? 'מתאמנת' : 'מתאמן/ת' });
+export const deviceHe = (brand: 'incore' | 'forca'): Record<SigningDevice, string> =>
+  ({ parent_phone: 'מכשיר ההורה', trainee_phone: brand === 'forca' ? 'מכשיר המתאמנת' : 'מכשיר המתאמן/ת' });
 
 /** DD/MM/YYYY HH:mm in Israel time. */
 export function israelDateTime(iso: string | Date): string {
@@ -133,7 +151,7 @@ class Writer {
   page!: PDFPage;
   y = 0;
   pages: PDFPage[] = [];
-  constructor(doc: PDFDocument, fonts: Fonts, private continuationTitle: string) {
+  constructor(doc: PDFDocument, fonts: Fonts, private continuationTitle: string, private theme: Theme) {
     this.doc = doc;
     this.fonts = fonts;
   }
@@ -173,8 +191,8 @@ class Writer {
     this.ensure(size * 1.45 * lines.length + 4);
     const right = this.right - indent;
     const top = this.y;
-    this.page.drawRectangle({ x: right - box, y: top - size - 1, width: box, height: box, borderColor: checked ? BRAND : MUTED, borderWidth: 1, color: checked ? BRAND_LIGHT : undefined });
-    if (checked) this.page.drawSvgPath('M1.5,4.5 L3.8,7 L8,1.5', { x: right - box, y: top - size + box - 1, borderColor: BRAND, borderWidth: 1.4 });
+    this.page.drawRectangle({ x: right - box, y: top - size - 1, width: box, height: box, borderColor: checked ? this.theme.accent : MUTED, borderWidth: 1, color: checked ? this.theme.light : undefined });
+    if (checked) this.page.drawSvgPath('M1.5,4.5 L3.8,7 L8,1.5', { x: right - box, y: top - size + box - 1, borderColor: this.theme.accent, borderWidth: 1.4 });
     for (const line of lines) {
       drawLine(this.page, line, this.fonts, { right: right - box - 6, y: this.y - size, size, color: INK });
       this.y -= size * 1.45;
@@ -203,7 +221,11 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
     try { logo = await doc.embedPng(input.logoPng); } catch { logo = null; }
   }
   const versionLine = `${input.code ? `${input.code} · ` : ''}גרסה ${input.version}`;
-  const w = new Writer(doc, fonts, `${input.title} · ${versionLine}`);
+  const brand = input.brand ?? 'forca';
+  const theme = THEMES[brand];
+  const ROLE_HE = roleHe(brand);
+  const DEVICE_HE = deviceHe(brand);
+  const w = new Writer(doc, fonts, `${input.title} · ${versionLine}`, theme);
   const answers = input.sample ? { ...sampleAnswers(input.sections), ...input.answers } : input.answers;
   const visible = input.sample
     ? new Set([...input.sections.map(s => s.id), ...input.sections.flatMap(s => s.fields.map(f => f.id))])
@@ -213,18 +235,18 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
   // ── Header ──
   w.newPage(true);
   const stripH = 64;
-  w.page.drawRectangle({ x: 0, y: A4[1] - stripH, width: A4[0], height: stripH, color: BRAND });
+  w.page.drawRectangle({ x: 0, y: A4[1] - stripH, width: A4[0], height: stripH, color: theme.strip });
   if (logo) {
     const h = 30;
     const lw = (logo.width / logo.height) * h;
     w.page.drawImage(logo, { x: M, y: A4[1] - stripH / 2 - h / 2, width: lw, height: h });
   } else {
-    w.page.drawText('FORCA', { x: M, y: A4[1] - stripH / 2 - 7, size: 20, font: fonts.latinBold, color: rgb(1, 1, 1) });
+    w.page.drawText(theme.wordmark, { x: M, y: A4[1] - stripH / 2 - 7, size: 20, font: fonts.latinBold, color: theme.stripText });
   }
-  drawLine(w.page, plain(input.title, { bold: true }), fonts, { right: w.right, y: A4[1] - 32, size: 16, color: rgb(1, 1, 1) });
-  drawLine(w.page, plain(versionLine), fonts, { right: w.right, y: A4[1] - 50, size: 9, color: BRAND_LIGHT });
+  drawLine(w.page, plain(input.title, { bold: true }), fonts, { right: w.right, y: A4[1] - 32, size: 16, color: theme.stripText });
+  drawLine(w.page, plain(versionLine), fonts, { right: w.right, y: A4[1] - 50, size: 9, color: theme.stripSub });
   w.y = A4[1] - stripH - 22;
-  w.text(plain(`שם המתאמנת: ${input.childName || '—'}`), { size: 10, color: MUTED });
+  w.text(plain(`${brand === 'forca' ? 'שם המתאמנת' : 'שם המתאמן/ת'}: ${input.childName || '—'}`), { size: 10, color: MUTED });
   w.text(plain(`מזהה הגשה: ${input.submissionId}`), { size: 8.5, color: MUTED, gap: 8 });
 
   const sigByField = new Map(input.signatures.map(s => [s.fieldId, s]));
@@ -246,7 +268,7 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
       w.ensure(titleSize * 3);
       w.y -= depth === 0 ? 8 : 4;
       const heading = [...(number ? plain(`${number}. `, { bold: true }) : []), ...fromSpans(parseInline(section.title)).map(c => ({ ...c, bold: true }))];
-      w.text(heading, { size: titleSize, color: depth === 0 ? BRAND : INK, indent, gap: 2 });
+      w.text(heading, { size: titleSize, color: depth === 0 ? theme.accent : INK, indent, gap: 2 });
     }
     if (inlineNumber) w.y -= depth === 0 ? 6 : 3;
     if (inlineNumber && !section.description?.trim()) w.text(plain(`${number}.`), { indent });
@@ -349,31 +371,27 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
 
   // ── Audit page ──
   w.newPage();
-  w.text(plain('דף ביקורת', { bold: true }), { size: 13, color: BRAND, gap: 6 });
+  w.text(plain('דף ביקורת', { bold: true }), { size: 13, color: theme.accent, gap: 6 });
   const row = (label: string, value: string) => w.text([...plain(`${label}: `, { bold: true }), ...plain(value)], { size: 9.5 });
   row('מזהה הגשה', input.submissionId);
   row('טופס', `${input.title}${input.code ? ` (${input.code})` : ''}`);
   row('גרסת טופס', String(input.version));
   w.rule();
   const sigs = input.sample
-    ? [{ role: 'parent' as SignerRole, name: 'ישראלה ישראלי', signedAt: input.generatedAt.toISOString(), ip: '0.0.0.0', userAgent: 'SAMPLE', deviceId: 'SAMPLE', userId: 'SAMPLE', version: input.version }]
+    ? [{ role: 'parent' as SignerRole, name: 'ישראלה ישראלי', signedAt: input.generatedAt.toISOString(), device: 'parent_phone' as SigningDevice }]
     : input.signatures;
   for (const s of sigs) {
     w.text(plain(`חתימה — ${ROLE_HE[s.role]}: ${s.name}`, { bold: true }), { size: 10, gap: 1 });
+    row('תאריך ושעת חתימה', israelDateTime(s.signedAt));
     row('חותמת זמן (UTC)', s.signedAt);
-    row('שעון ישראל', israelDateTime(s.signedAt));
-    row('כתובת IP', s.ip || '—');
-    row('דפדפן / מכשיר (User agent)', s.userAgent || '—');
-    row('מזהה מכשיר', s.deviceId || '—');
-    row('מזהה משתמש', s.userId || '—');
+    row('נחתם ב', DEVICE_HE[s.device] ?? '—');
     w.y -= 6;
   }
   for (const a of input.acknowledgments ?? []) {
     w.text(plain(`אישור קריאה — ${ROLE_HE[a.role]}: ${a.name}`, { bold: true }), { size: 10, gap: 1 });
+    row('תאריך ושעת אישור', israelDateTime(a.at));
     row('חותמת זמן (UTC)', a.at);
-    row('כתובת IP', a.ip || '—');
-    row('דפדפן / מכשיר (User agent)', a.userAgent || '—');
-    row('מזהה מכשיר', a.deviceId || '—');
+    row('אושר ב', DEVICE_HE[a.device] ?? '—');
     w.y -= 6;
   }
   w.rule();
@@ -386,13 +404,13 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
     const footer = plain(`עמוד ${i + 1} מתוך ${total}`);
     drawLine(page, footer, fonts, { right: 0, left: (A4[0] - lineWidth(footer, fonts, 8.5)) / 2, y: 22, size: 8.5, color: MUTED });
     if (input.sample) {
-      page.drawText('SAMPLE', { x: 120, y: 300, size: 110, font: fonts.latinBold, color: BRAND, opacity: 0.1, rotate: degrees(40) });
-      drawLine(page, plain('דוגמה — לא לחתימה'), fonts, { right: w.right, y: 22, size: 8.5, color: BRAND });
+      page.drawText('SAMPLE', { x: 120, y: 300, size: 110, font: fonts.latinBold, color: theme.accent, opacity: 0.1, rotate: degrees(40) });
+      drawLine(page, plain('דוגמה — לא לחתימה'), fonts, { right: w.right, y: 22, size: 8.5, color: theme.accent });
     }
   });
 
   doc.setTitle(`${input.title}${input.code ? ` ${input.code}` : ''} v${input.version}`);
-  doc.setProducer('FORCA forms');
+  doc.setProducer(`${theme.wordmark} forms`);
   doc.setCreationDate(input.generatedAt);
   return doc.save({ useObjectStreams: true });
 }

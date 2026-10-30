@@ -3,7 +3,8 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { normalizeSections, normalizeSettings, TemplateValidationError } from './schema';
 import { renderFormPdf } from './pdf/renderFormPdf';
-import { forcaLogo, storePreviewPdf } from './signedPdf';
+import { brandLogo, storePreviewPdf } from './signedPdf';
+import { parseBrand } from './shared';
 
 // POST /adminPreviewFormPdf
 // Body: { id?: string, name: string, sections: TemplateSection[], settings?: { code }, version?: number }
@@ -16,12 +17,13 @@ export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   if (!(await isAdmin(getUid(event)))) return json(403, { error: 'forbidden' });
-  let body: { id?: unknown; name?: unknown; sections?: unknown; settings?: unknown; version?: unknown };
+  let body: { id?: unknown; name?: unknown; sections?: unknown; settings?: unknown; version?: unknown; brand?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
     return json(400, { error: 'invalid_json' });
   }
+  const brand = parseBrand(body.brand);
   let sections;
   try {
     sections = normalizeSections(body.sections ?? [], 'parent');
@@ -38,11 +40,12 @@ export async function handler(
     answers: {},
     signatures: [],
     submissionId: 'SAMPLE',
-    childName: 'מתאמנת לדוגמה',
+    childName: brand === 'forca' ? 'מתאמנת לדוגמה' : 'מתאמן/ת לדוגמה',
     generatedAt: new Date(),
     sample: true,
-    logoPng: await forcaLogo(),
+    brand,
+    logoPng: await brandLogo(brand),
   });
-  const url = await storePreviewPdf(bytes, typeof body.id === 'string' && body.id ? body.id : 'draft');
+  const url = await storePreviewPdf(brand, bytes, typeof body.id === 'string' && body.id ? body.id : 'draft');
   return json(200, { url });
 }

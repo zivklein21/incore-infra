@@ -11,9 +11,10 @@ import type { SignerRole } from './schema';
 import type { Answers } from './logic';
 import type { AcknowledgmentRecord, SignatureRecord } from './pdf/renderFormPdf';
 
-// FORCA forms: who a published form is assigned to, and each family's copy
-// of it (a "submission"). Shared by the admin endpoints (assign, tracking,
-// reminders) and the family ones (getMyForms, submitFormPart).
+// Forms (FORCA and INCORE): who a published form is assigned to, and each
+// member's / family's copy of it (a "submission"). Shared by the admin
+// endpoints (assign, tracking, reminders) and the family ones (getMyForms,
+// submitFormPart). Everything lives in the brand's own table.
 //
 // A submission is created the first time a signer submits their part, on
 // the version published at that moment, and stays on that version: a newer
@@ -21,11 +22,18 @@ import type { AcknowledgmentRecord, SignatureRecord } from './pdf/renderFormPdf'
 // re-sign" (resignFromVersion) — and even then the old submission, its
 // signatures and its PDF are kept untouched; the family just gets a new one.
 
-export const FORCA = 'forca' as const;
-export const formsTable = () => tableForBrand(FORCA);
+export type Brand = 'incore' | 'forca';
+export const formsTable = (brand: Brand) => tableForBrand(brand);
 
+/**
+ * Who sees an assigned form. 'new_members' = only members whose account is
+ * created AFTER the assignment (INCORE's "new members only" — existing
+ * members are never asked; a profile without createdAt, i.e. a migrated
+ * one, counts as existing).
+ */
 export type AssignmentTarget =
   | { kind: 'all' }
+  | { kind: 'new_members' }
   | { kind: 'group'; groupId: string; groupName?: string }
   | { kind: 'members'; memberIds: string[] };
 
@@ -46,6 +54,7 @@ export interface FormAssignmentItem {
 export type SubmissionStatus = 'pending_parent' | 'pending_child' | 'completed';
 
 export interface FormSubmissionItem {
+  brand?: Brand;
   PK: string; SK: string;
   GSI1PK: string; GSI1SK: string;
   submissionId: string;
@@ -86,21 +95,21 @@ export function computeSubmissionStatus(input: {
 
 // ─── Loading ────────────────────────────────────────────────────────────────
 
-export async function getTemplateHead(templateId: string): Promise<(StoredTemplate & { resignFromVersion: number }) | null> {
-  const res = await ddb.send(new GetCommand({ TableName: formsTable(), Key: formTemplateKey(templateId) }));
+export async function getTemplateHead(brand: Brand, templateId: string): Promise<(StoredTemplate & { resignFromVersion: number }) | null> {
+  const res = await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: formTemplateKey(templateId) }));
   if (!res.Item) return null;
-  return { ...fromStored(res.Item, FORCA), resignFromVersion: typeof res.Item.resignFromVersion === 'number' ? res.Item.resignFromVersion : 0 };
+  return { ...fromStored(res.Item, brand), resignFromVersion: typeof res.Item.resignFromVersion === 'number' ? res.Item.resignFromVersion : 0 };
 }
 
 const versionCache = new Map<string, StoredTemplate>();
 /** A published version — immutable, so cached for the life of the Lambda container. */
-export async function getTemplateVersion(templateId: string, version: number): Promise<StoredTemplate | null> {
-  const key = `${templateId}#${version}`;
+export async function getTemplateVersion(brand: Brand, templateId: string, version: number): Promise<StoredTemplate | null> {
+  const key = `${brand}#${templateId}#${version}`;
   const cached = versionCache.get(key);
   if (cached) return cached;
-  const res = await ddb.send(new GetCommand({ TableName: formsTable(), Key: formTemplateVersionKey(templateId, version) }));
+  const res = await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: formTemplateVersionKey(templateId, version) }));
   if (!res.Item) return null;
-  const t = fromVersionItem(res.Item, FORCA);
+  const t = fromVersionItem(res.Item, brand);
   versionCache.set(key, t);
   return t;
 }
@@ -116,36 +125,36 @@ async function queryAll(params: ConstructorParameters<typeof QueryCommand>[0]): 
   return items;
 }
 
-export async function listTemplateHeads(): Promise<(StoredTemplate & { resignFromVersion: number })[]> {
+export async function listTemplateHeads(brand: Brand): Promise<(StoredTemplate & { resignFromVersion: number })[]> {
   const items = await queryAll({
-    TableName: formsTable(),
+    TableName: formsTable(brand),
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': 'APPCONFIG', ':prefix': FORM_TEMPLATE_SK_PREFIX },
   });
-  return items.map(i => ({ ...fromStored(i, FORCA), resignFromVersion: typeof i.resignFromVersion === 'number' ? i.resignFromVersion : 0 })).filter(t => t.id);
+  return items.map(i => ({ ...fromStored(i, brand), resignFromVersion: typeof i.resignFromVersion === 'number' ? i.resignFromVersion : 0 })).filter(t => t.id);
 }
 
 /** Active (not cancelled) assignments — of one template, or all. */
-export async function listAssignments(templateId?: string): Promise<FormAssignmentItem[]> {
+export async function listAssignments(brand: Brand, templateId?: string): Promise<FormAssignmentItem[]> {
   const items = await queryAll({
-    TableName: formsTable(),
+    TableName: formsTable(brand),
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
     ExpressionAttributeValues: { ':pk': 'APPCONFIG', ':prefix': `${FORM_ASSIGNMENT_SK_PREFIX}${templateId ? `${templateId}#` : ''}` },
   });
   return (items as unknown as FormAssignmentItem[]).filter(a => !a.cancelledAt);
 }
 
-export async function listSubmissionsOfTemplate(templateId: string): Promise<FormSubmissionItem[]> {
+export async function listSubmissionsOfTemplate(brand: Brand, templateId: string): Promise<FormSubmissionItem[]> {
   return (await queryAll({
-    TableName: formsTable(),
+    TableName: formsTable(brand),
     KeyConditionExpression: 'PK = :pk',
     ExpressionAttributeValues: { ':pk': formSubmissionPk(templateId) },
   })) as unknown as FormSubmissionItem[];
 }
 
-export async function listSubmissionsOfChild(childId: string): Promise<FormSubmissionItem[]> {
+export async function listSubmissionsOfChild(brand: Brand, childId: string): Promise<FormSubmissionItem[]> {
   return (await queryAll({
-    TableName: formsTable(),
+    TableName: formsTable(brand),
     IndexName: 'GSI1',
     KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${childId}`, ':prefix': 'FORMSUB#' },
@@ -165,34 +174,42 @@ export function latestByAssignment(subs: FormSubmissionItem[], childId: string):
 
 // ─── Families ───────────────────────────────────────────────────────────────
 
-export interface Trainee { uid: string; name: string; groupId?: string; profile: MemberProfileItem }
+export interface Trainee { uid: string; name: string; groupId?: string; createdAt?: string; profile: MemberProfileItem }
 
 const isTrainee = (p: MemberProfileItem) =>
   p.identity?.accountType !== 'parent_only' && p.role !== 'admin' && p.identity?.role !== 'admin' && p.identity?.role !== 'coach'
   && p.role !== 'coach';
 
-export async function listForcaTrainees(): Promise<Trainee[]> {
-  const profiles = await getAllMemberProfiles(formsTable());
-  return profiles.filter(isTrainee).map(p => ({
-    uid: p.PK.replace(/^MEMBER#/, ''), name: deriveMemberName(p), groupId: p.identity?.groupId, profile: p,
-  }));
+const createdAtOf = (p: MemberProfileItem) => {
+  const v = (p as { createdAt?: unknown }).createdAt;
+  return typeof v === 'string' ? v : undefined;
+};
+
+/** The brand's members who can be assigned forms — FORCA trainees / INCORE members (no parent-only accounts, admins or coaches). */
+export async function listTrainees(brand: Brand): Promise<Trainee[]> {
+  const profiles = await getAllMemberProfiles(formsTable(brand));
+  return profiles
+    .filter(p => isTrainee(p) && (brand === 'forca' || p.identity?.brand !== 'forca'))
+    .map(p => ({ uid: p.PK.replace(/^MEMBER#/, ''), name: deriveMemberName(p), groupId: p.identity?.groupId, createdAt: createdAtOf(p), profile: p }));
 }
 
-export function targetIncludes(target: AssignmentTarget, trainee: { uid: string; groupId?: string }): boolean {
+/** `assignedAt` is the assignment's createdAt — needed for 'new_members'. */
+export function targetIncludes(target: AssignmentTarget, trainee: { uid: string; groupId?: string; createdAt?: string }, assignedAt = ''): boolean {
   if (target.kind === 'all') return true;
+  if (target.kind === 'new_members') return !!trainee.createdAt && !!assignedAt && trainee.createdAt > assignedAt;
   if (target.kind === 'group') return !!trainee.groupId && trainee.groupId === target.groupId;
   return target.memberIds.includes(trainee.uid);
 }
 
-export async function getProfile(uid: string): Promise<MemberProfileItem | null> {
-  const res = await ddb.send(new GetCommand({ TableName: formsTable(), Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' } }));
+export async function getProfile(brand: Brand, uid: string): Promise<MemberProfileItem | null> {
+  const res = await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' } }));
   return (res.Item as MemberProfileItem | undefined) ?? null;
 }
 
-/** The linked parent's uid (FORCA: one parent per child, see familyLinks.ts). */
-export async function parentOf(childId: string): Promise<string | null> {
+/** The linked parent's uid (one parent per child, see familyLinks.ts). INCORE members usually have none. */
+export async function parentOf(brand: Brand, childId: string): Promise<string | null> {
   const res = await ddb.send(new QueryCommand({
-    TableName: formsTable(),
+    TableName: formsTable(brand),
     IndexName: 'GSI1',
     KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
     ExpressionAttributeValues: { ':pk': `MEMBER#${childId}`, ':prefix': 'FAMILYOF#' },

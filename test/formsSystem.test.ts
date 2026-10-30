@@ -9,7 +9,8 @@ import { answerFormatError, canFill, missingRequired, pruneHidden, visibleIds } 
 import { plain, visualOrder } from '../src/lib/formTemplates/pdf/rtlText';
 import { fitSignature, israelDateTime, renderFormPdf } from '../src/lib/formTemplates/pdf/renderFormPdf';
 import { parseRichText } from '../src/lib/formTemplates/richText';
-import { computeSubmissionStatus } from '../src/lib/formTemplates/submissions';
+import { computeSubmissionStatus, targetIncludes } from '../src/lib/formTemplates/submissions';
+import { rolesOnDevice } from '../src/lib/formTemplates/familyForms';
 import { applySignupFlow, normalizeSteps } from '../src/lib/signupFlow/shared';
 
 const vis = (text: string) => visualOrder(plain(text)).map(c => c.c).join('');
@@ -152,7 +153,7 @@ test('renderFormPdf: real + SAMPLE render, page count includes the audit page', 
   ];
   const bytes = await renderFormPdf({
     title: 'טופס', code: 'FORCA-01', version: 2, sections, answers: { n: 'נועה' },
-    signatures: [{ fieldId: 'sig', role: 'parent', userId: 'u', name: 'דנה', paths: ['M1,1 L20,20'], signedAt: '2026-10-30T12:00:00Z', ip: '1.1.1.1', userAgent: 'UA', deviceId: 'd', version: 2 }],
+    signatures: [{ fieldId: 'sig', role: 'parent', userId: 'u', name: 'דנה', paths: ['M1,1 L20,20'], signedAt: '2026-10-30T12:00:00Z', device: 'parent_phone', version: 2 }],
     submissionId: 's1', childName: 'נועה', generatedAt: new Date(),
   });
   const doc = await PDFDocument.load(bytes);
@@ -189,4 +190,16 @@ test('a removed built-in form is kept as a step, never gates, and is not re-appe
 test('rich text: multi-level numbered lines 1.1 / 1.1.1', () => {
   const b = parseRichText('1. ראשון\n1.1 משני\n1.1.1. שלישי\n2026 שנה');
   assert.deepEqual(b.map(x => x.kind === 'number' ? [x.marker, x.depth] : x.kind), [['1.', 1], ['1.1.', 2], ['1.1.1.', 3], 'p']);
+});
+
+test('new_members target: only accounts created after the assignment; migrated (no createdAt) never', () => {
+  const at = '2026-11-01T10:00:00.000Z';
+  assert.equal(targetIncludes({ kind: 'new_members' }, { uid: 'a', createdAt: '2026-11-02T00:00:00.000Z' }, at), true);
+  assert.equal(targetIncludes({ kind: 'new_members' }, { uid: 'b', createdAt: '2026-10-01T00:00:00.000Z' }, at), false);
+  assert.equal(targetIncludes({ kind: 'new_members' }, { uid: 'c' }, at), false);
+});
+
+test('INCORE: every role is done on the member\'s own device', () => {
+  assert.deepEqual(rolesOnDevice('trainee_phone', ['parent', 'trainee'], 'own_phone', 'incore'), ['parent', 'trainee']);
+  assert.deepEqual(rolesOnDevice('trainee_phone', ['parent', 'trainee'], 'own_phone', 'forca'), ['trainee']);
 });

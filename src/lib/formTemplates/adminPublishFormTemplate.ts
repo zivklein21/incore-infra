@@ -47,7 +47,7 @@ export async function handler(
     return json(409, { error: 'conflict' });
   }
 
-  const issues = publishIssues({ name: t.name, signers: t.signers, sections: t.sections, visibleOn: t.settings.visibleOn, multiSigner: brand === 'forca' });
+  const issues = publishIssues({ name: t.name, signers: t.signers, sections: t.sections, visibleOn: t.settings.visibleOn, multiSigner: true });
   if (issues.length) return json(400, { error: 'not_publishable', issues });
 
   const changed = t.contentHash !== t.publishedHash || t.publishedVersion === 0;
@@ -88,7 +88,7 @@ export async function handler(
     throw err;
   }
 
-  if (brand === 'forca') await writeAudit({ action: 'publish', templateId: id, actorUid: uid, detail: { version, requireResign, unarchived: t.status === 'archived' } });
+  await writeAudit(brand, { action: 'publish', templateId: id, actorUid: uid, detail: { version, requireResign, unarchived: t.status === 'archived' } });
 
   return json(200, { success: true, published: true, version, updatedAt: now });
 }

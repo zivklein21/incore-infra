@@ -6,9 +6,10 @@ import {
   computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listSubmissionsOfTemplate, parentOf, versionToSign,
 } from './submissions';
 import { writeAudit } from './audit';
+import { parseBrand } from './shared';
 
 // POST /adminSendFormReminder
-// Body: { templateId, assignmentId, childId }
+// Body: { templateId, assignmentId, childId, brand }
 // Auth: Cognito JWT, admin only. Pushes a reminder to whoever the form is
 // still waiting on for this trainee (the parent, the trainee, or both).
 // Returns { sent, to: ['parent'|'trainee'] } — sent=0 when nobody on the
@@ -18,7 +19,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const uid = getUid(event);
   if (!(await isAdmin(uid))) return json(403, { error: 'forbidden' });
-  let body: { templateId?: unknown; assignmentId?: unknown; childId?: unknown };
+  let body: { templateId?: unknown; assignmentId?: unknown; childId?: unknown; brand?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -29,11 +30,12 @@ export async function handler(
   const childId = typeof body.childId === 'string' ? body.childId : '';
   if (!templateId || !assignmentId || !childId) return json(400, { error: 'missing_fields' });
 
-  const head = await getTemplateHead(templateId);
+  const brand = parseBrand(body.brand);
+  const head = await getTemplateHead(brand, templateId);
   if (!head || !head.publishedVersion) return json(404, { error: 'not_found' });
-  const existing = latestByAssignment(await listSubmissionsOfTemplate(templateId), childId).get(assignmentId);
+  const existing = latestByAssignment(await listSubmissionsOfTemplate(brand, templateId), childId).get(assignmentId);
   const { version, reuse } = versionToSign(head, existing);
-  const t = await getTemplateVersion(templateId, version);
+  const t = await getTemplateVersion(brand, templateId, version);
   if (!t) return json(404, { error: 'not_found' });
   const sub = reuse ? existing : undefined;
   const { status, missing } = computeSubmissionStatus({
@@ -44,13 +46,14 @@ export async function handler(
 
   let sent = 0;
   for (const role of missing) {
-    const target = role === 'trainee' ? childId : await parentOf(childId);
-    const profile = target ? await getProfile(target) : null;
+    // INCORE: the member's own phone for everyone (a parent signs there, switched in).
+    const target = role === 'trainee' || brand === 'incore' ? childId : await parentOf(brand, childId);
+    const profile = target ? await getProfile(brand, target) : null;
     const token = profile && getExpoPushToken(profile);
     if (!token) continue;
     await sendExpoPush(token, 'תזכורת: טופס מחכה לחתימה', `"${t.name}" עדיין מחכה לחתימה שלך באפליקציה`, { type: 'form_to_sign', templateId });
     sent++;
   }
-  await writeAudit({ action: 'remind', templateId, childId, actorUid: uid, detail: { assignmentId, to: missing, sent } });
+  await writeAudit(brand, { action: 'remind', templateId, childId, actorUid: uid, detail: { assignmentId, to: missing, sent } });
   return json(200, { success: true, sent, to: missing });
 }

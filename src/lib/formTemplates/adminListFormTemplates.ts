@@ -12,7 +12,7 @@ import { listSubmissionsOfTemplate } from './submissions';
 // oldest first — the client lists the built-in Registration/Orthopedic
 // forms ahead of these itself. Each carries its draft content (the head),
 // status (draft/published/archived), publishedVersion, whether the draft
-// has unpublished changes, its settings, and — FORCA — how many families
+// has unpublished changes, its settings, and how many members/families
 // have signed it (signedCount).
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -42,9 +42,7 @@ export async function handler(
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const templates = await Promise.all(heads.map(async t => ({
     ...t,
-    signedCount: brand === 'forca'
-      ? (await listSubmissionsOfTemplate(t.id)).filter(s => s.signatures.length > 0 || s.acknowledgments.length > 0).length
-      : 0,
+    signedCount: (await listSubmissionsOfTemplate(brand, t.id)).filter(s => s.signatures.length > 0 || s.acknowledgments.length > 0).length,
   })));
 
   return json(200, { templates });

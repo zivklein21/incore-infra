@@ -2,13 +2,14 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { deriveMemberName } from '../entities';
+import { parseBrand } from './shared';
 import {
-  computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listForcaTrainees,
+  computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listTrainees,
   listSubmissionsOfTemplate, parentOf, targetIncludes, versionToSign,
 } from './submissions';
 
-// GET /adminGetFormTracking?templateId=<id>
-// Auth: Cognito JWT, admin only. FORCA. Per assignment, one row per
+// GET /adminGetFormTracking?templateId=<id>&brand=incore|forca
+// Auth: Cognito JWT, admin only. Per assignment, one row per
 // targeted trainee: Pending Parent / Pending Child / Completed (computed
 // exactly like the family sees it — getMyForms.ts), who's missing, the
 // version they're on, when it completed and whether a signed PDF exists
@@ -21,15 +22,16 @@ export async function handler(
   const templateId = event.queryStringParameters?.templateId ?? '';
   if (!templateId) return json(400, { error: 'missing_template' });
 
-  const head = await getTemplateHead(templateId);
+  const brand = parseBrand(event.queryStringParameters?.brand);
+  const head = await getTemplateHead(brand, templateId);
   if (!head) return json(404, { error: 'not_found' });
-  const [assignments, trainees, subs] = await Promise.all([listAssignments(templateId), listForcaTrainees(), listSubmissionsOfTemplate(templateId)]);
+  const [assignments, trainees, subs] = await Promise.all([listAssignments(brand, templateId), listTrainees(brand), listSubmissionsOfTemplate(brand, templateId)]);
 
   const parentNames = new Map<string, string>();
   const parentName = async (childId: string) => {
     if (!parentNames.has(childId)) {
-      const pUid = await parentOf(childId);
-      const p = pUid ? await getProfile(pUid) : null;
+      const pUid = await parentOf(brand, childId);
+      const p = pUid ? await getProfile(brand, pUid) : null;
       parentNames.set(childId, p ? deriveMemberName(p) : '');
     }
     return parentNames.get(childId) ?? '';
@@ -38,10 +40,10 @@ export async function handler(
   const out = [];
   for (const a of assignments.sort((x, y) => y.createdAt.localeCompare(x.createdAt))) {
     const rows = [];
-    for (const tr of trainees.filter(x => targetIncludes(a.target, x))) {
+    for (const tr of trainees.filter(x => targetIncludes(a.target, x, a.createdAt))) {
       const existing = latestByAssignment(subs, tr.uid).get(a.assignmentId);
       const { version, reuse } = head.publishedVersion ? versionToSign(head, existing) : { version: existing?.version ?? 0, reuse: !!existing };
-      const t = version ? await getTemplateVersion(templateId, version) : null;
+      const t = version ? await getTemplateVersion(brand, templateId, version) : null;
       const sub = reuse ? existing : undefined;
       const { status, missing } = t
         ? computeSubmissionStatus({ signers: t.signers, acknowledgers: t.acknowledgers, resignFromVersion: head.resignFromVersion, signedRoles: sub?.signedRoles ?? [], ackRoles: sub?.ackRoles ?? [], version })

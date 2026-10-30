@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, tableForBrand } from '../dynamo';
 
-// Append-only audit log for FORCA's forms system: who created, edited,
+// Append-only audit log for the forms system (per brand table): who created, edited,
 // published, archived, deleted, assigned and signed what, and when (server
 // time, always). One partition, PK=FORM_AUDIT, SK=<iso>#<uuid> so a Query
 // reads it newest-last; at this app's scale (dozens of families) a single
@@ -16,7 +16,7 @@ import { ddb, tableForBrand } from '../dynamo';
 export type FormAuditAction =
   | 'create' | 'edit' | 'publish' | 'archive' | 'delete' | 'assign' | 'unassign' | 'sign' | 'acknowledge' | 'complete' | 'pdf' | 'remind';
 
-export async function writeAudit(entry: {
+export async function writeAudit(brand: 'incore' | 'forca', entry: {
   action: FormAuditAction;
   templateId: string;
   actorUid: string;
@@ -27,7 +27,7 @@ export async function writeAudit(entry: {
   const at = new Date().toISOString();
   try {
     await ddb.send(new PutCommand({
-      TableName: tableForBrand('forca'),
+      TableName: tableForBrand(brand),
       Item: { PK: 'FORM_AUDIT', SK: `${at}#${randomUUID()}`, at, ...entry },
     }));
   } catch (err) {

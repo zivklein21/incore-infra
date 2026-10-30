@@ -8,8 +8,10 @@ import {
 import { prefillValues } from './prefill';
 
 // GET /getMyForms?childId=<uid>
-// Auth: Cognito JWT. A FORCA parent passes her linked child's id (parent's
-// phone); a trainee passes nothing (her own phone). Returns the "Forms to
+// Auth: Cognito JWT, either brand (the caller's profile table decides). A
+// parent passes her linked child's id (parent's phone); a trainee / INCORE
+// member passes nothing (her own phone). INCORE forms are typically assigned
+// to new members only (target 'new_members'). Returns the "Forms to
 // sign" list for THIS device: every published form assigned to the child
 // whose part can be done here (visibleOn), with
 //
@@ -31,27 +33,27 @@ export async function handler(
   if (!caller) return json(403, { error: 'forbidden' });
 
   const [heads, assignments, subs, child] = await Promise.all([
-    listTemplateHeads(), listAssignments(), listSubmissionsOfChild(caller.childId), getProfile(caller.childId),
+    listTemplateHeads(caller.brand), listAssignments(caller.brand), listSubmissionsOfChild(caller.brand, caller.childId), getProfile(caller.brand, caller.childId),
   ]);
   if (!child) return json(404, { error: 'member_not_found' });
-  const trainee = { uid: caller.childId, groupId: child.identity?.groupId };
+  const trainee = { uid: caller.childId, groupId: child.identity?.groupId, createdAt: (child as { createdAt?: string }).createdAt };
   const headById = new Map(heads.filter(h => h.status === 'published' && h.publishedVersion > 0).map(h => [h.id, h]));
   const latest = latestByAssignment(subs, caller.childId);
 
-  const parentUid = caller.device === 'parent_phone' ? caller.uid : await parentOf(caller.childId);
-  const parent = parentUid ? await getProfile(parentUid) : null;
+  const parentUid = caller.device === 'parent_phone' ? caller.uid : await parentOf(caller.brand, caller.childId);
+  const parent = parentUid ? await getProfile(caller.brand, parentUid) : null;
   const prefill = prefillValues(child as never, parent as never);
 
   const forms: ({ status: string; myRoles: string[]; beforeFirstTraining: boolean; assignedAt: string } & Record<string, unknown>)[] = [];
   for (const a of assignments) {
     const head = headById.get(a.templateId);
-    if (!head || !targetIncludes(a.target, trainee)) continue;
+    if (!head || !targetIncludes(a.target, trainee, a.createdAt)) continue;
     const existing = latest.get(a.assignmentId);
     const { version, reuse } = versionToSign(head, existing);
-    const t = await getTemplateVersion(a.templateId, version);
+    const t = await getTemplateVersion(caller.brand, a.templateId, version);
     if (!t) continue;
     const sub = reuse ? existing : undefined;
-    const deviceRoles = rolesOnDevice(caller.device, participatingRoles(t), t.traineeDevice);
+    const deviceRoles = rolesOnDevice(caller.device, participatingRoles(t), t.traineeDevice, caller.brand);
     if (!deviceRoles.length) continue;
 
     const signedRoles = sub?.signedRoles ?? [];

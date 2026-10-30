@@ -5,13 +5,13 @@ import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { s3, BUCKET_NAME } from '../s3';
 import { ddb } from '../dynamo';
 import { renderFormPdf } from './pdf/renderFormPdf';
-import { formsTable, FormSubmissionItem, getProfile, getTemplateVersion } from './submissions';
+import { Brand, formsTable, FormSubmissionItem, getProfile, getTemplateVersion } from './submissions';
 import { deriveMemberName } from '../entities';
 import { writeAudit } from './audit';
 
-// Signed PDFs of completed FORCA forms. They live in their own bucket
-// (s3.tf's forca_signed_forms: private, SSE-KMS, versioning on, and a bucket
-// policy that denies every delete), under
+// Signed PDFs of completed forms. Each brand has its own bucket
+// (forca_signed_forms.tf: forca-/incore-production-signed-forms — private,
+// SSE-KMS, versioning on, and a bucket policy that denies every delete), under
 //
 //   signed-forms/{childId}/{formCode}/v{version}/{submissionId}_{YYYYMMDD-HHmmss}.pdf
 //
@@ -22,21 +22,22 @@ import { writeAudit } from './audit';
 // "Preview PDF" samples go under previews/ in the same bucket, which a
 // lifecycle rule expires after a day — they're never signed documents.
 
-export const SIGNED_FORMS_BUCKET = process.env.SIGNED_FORMS_BUCKET || 'forca-production-signed-forms';
+export const signedFormsBucket = (brand: Brand) => `${brand}-production-signed-forms`;
 export const PDF_URL_TTL_SECONDS = 300;
 
-let logoCache: Uint8Array | null | undefined;
-/** The white-on-pink FORCA wordmark used in emails (s3.tf's public email-assets/ prefix). */
-export async function forcaLogo(): Promise<Uint8Array | null> {
-  if (logoCache !== undefined) return logoCache;
+const logoCache = new Map<Brand, Uint8Array | null>();
+/** The brand's email logo (s3.tf's public email-assets/ prefix): FORCA's white wordmark for its pink strip, INCORE's purple logo. */
+export async function brandLogo(brand: Brand): Promise<Uint8Array | null> {
+  if (logoCache.has(brand)) return logoCache.get(brand) ?? null;
+  let logo: Uint8Array | null = null;
   try {
-    const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: 'email-assets/ForcaLogoEmail.png' }));
-    logoCache = res.Body ? await res.Body.transformToByteArray() : null;
+    const res = await s3.send(new GetObjectCommand({ Bucket: BUCKET_NAME, Key: brand === 'forca' ? 'email-assets/ForcaLogoEmail.png' : 'email-assets/Logo.png' }));
+    logo = res.Body ? await res.Body.transformToByteArray() : null;
   } catch (err) {
     console.warn('[signedPdf] logo unavailable, using text', err);
-    logoCache = null;
   }
-  return logoCache;
+  logoCache.set(brand, logo);
+  return logo;
 }
 
 const stamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15); // YYYYMMDD-HHmmss (UTC)
@@ -48,12 +49,12 @@ const safeSegment = (s: string) => s.replace(/[^A-Za-z0-9_-]/g, '') || 'FORM';
  * A failure leaves the submission completed without a PDF — the next
  * download request (getSignedFormPdfUrl.ts) generates it then.
  */
-export async function ensureSignedPdf(sub: FormSubmissionItem, actorUid: string): Promise<{ key: string; sha256: string }> {
+export async function ensureSignedPdf(brand: Brand, sub: FormSubmissionItem, actorUid: string): Promise<{ key: string; sha256: string }> {
   if (sub.pdfS3Key && sub.pdfSha256) return { key: sub.pdfS3Key, sha256: sub.pdfSha256 };
   if (sub.status !== 'completed') throw new Error('not_completed');
-  const version = await getTemplateVersion(sub.templateId, sub.version);
+  const version = await getTemplateVersion(brand, sub.templateId, sub.version);
   if (!version) throw new Error('version_missing');
-  const child = await getProfile(sub.childId);
+  const child = await getProfile(brand, sub.childId);
   const generatedAt = new Date();
   const code = version.settings.code || safeSegment(version.name).slice(0, 12) || 'FORM';
 
@@ -68,13 +69,14 @@ export async function ensureSignedPdf(sub: FormSubmissionItem, actorUid: string)
     submissionId: sub.submissionId,
     childName: child ? deriveMemberName(child) : '',
     generatedAt,
-    logoPng: await forcaLogo(),
+    brand,
+    logoPng: await brandLogo(brand),
   });
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const key = `signed-forms/${safeSegment(sub.childId)}/${safeSegment(code)}/v${sub.version}/${sub.submissionId}_${stamp(generatedAt)}.pdf`;
 
   await s3.send(new PutObjectCommand({
-    Bucket: SIGNED_FORMS_BUCKET,
+    Bucket: signedFormsBucket(brand),
     Key: key,
     Body: bytes,
     ContentType: 'application/pdf',
@@ -87,7 +89,7 @@ export async function ensureSignedPdf(sub: FormSubmissionItem, actorUid: string)
   // Record it only if no concurrent request recorded another one first (both files are kept either way).
   try {
     await ddb.send(new UpdateCommand({
-      TableName: formsTable(),
+      TableName: formsTable(brand),
       Key: { PK: sub.PK, SK: sub.SK },
       UpdateExpression: 'SET pdfS3Key = :k, pdfSha256 = :h, pdfGeneratedAt = :at',
       ConditionExpression: 'attribute_not_exists(pdfS3Key)',
@@ -96,13 +98,13 @@ export async function ensureSignedPdf(sub: FormSubmissionItem, actorUid: string)
   } catch (err) {
     if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') throw err;
   }
-  await writeAudit({ action: 'pdf', templateId: sub.templateId, submissionId: sub.submissionId, childId: sub.childId, actorUid, detail: { key, sha256 } });
+  await writeAudit(brand, { action: 'pdf', templateId: sub.templateId, submissionId: sub.submissionId, childId: sub.childId, actorUid, detail: { key, sha256 } });
   return { key, sha256 };
 }
 
-export async function presignPdf(key: string, filename: string): Promise<string> {
+export async function presignPdf(brand: Brand, key: string, filename: string): Promise<string> {
   return getSignedUrl(s3, new GetObjectCommand({
-    Bucket: SIGNED_FORMS_BUCKET,
+    Bucket: signedFormsBucket(brand),
     Key: key,
     ResponseContentType: 'application/pdf',
     ResponseContentDisposition: `inline; filename="${filename.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
@@ -110,8 +112,8 @@ export async function presignPdf(key: string, filename: string): Promise<string>
 }
 
 /** "Preview PDF" sample → previews/ (expires after a day) → presigned URL. */
-export async function storePreviewPdf(bytes: Uint8Array, templateId: string): Promise<string> {
+export async function storePreviewPdf(brand: Brand, bytes: Uint8Array, templateId: string): Promise<string> {
   const key = `previews/${safeSegment(templateId)}/${stamp(new Date())}-${Math.random().toString(36).slice(2, 8)}.pdf`;
-  await s3.send(new PutObjectCommand({ Bucket: SIGNED_FORMS_BUCKET, Key: key, Body: bytes, ContentType: 'application/pdf', ServerSideEncryption: 'aws:kms' }));
-  return presignPdf(key, 'sample.pdf');
+  await s3.send(new PutObjectCommand({ Bucket: signedFormsBucket(brand), Key: key, Body: bytes, ContentType: 'application/pdf', ServerSideEncryption: 'aws:kms' }));
+  return presignPdf(brand, key, 'sample.pdf');
 }
