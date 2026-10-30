@@ -11,6 +11,14 @@ import { handler as deleteMyWorkoutLog } from '../lib/incoreWorkout/deleteMyWork
 import { handler as adminListFormTemplates } from '../lib/formTemplates/adminListFormTemplates';
 import { handler as adminSaveFormTemplate } from '../lib/formTemplates/adminSaveFormTemplate';
 import { handler as adminDeleteFormTemplate } from '../lib/formTemplates/adminDeleteFormTemplate';
+import { handler as adminPublishFormTemplate } from '../lib/formTemplates/adminPublishFormTemplate';
+import { handler as adminAssignFormTemplate } from '../lib/formTemplates/adminAssignFormTemplate';
+import { handler as adminGetFormTracking } from '../lib/formTemplates/adminGetFormTracking';
+import { handler as adminSendFormReminder } from '../lib/formTemplates/adminSendFormReminder';
+import { handler as adminPreviewFormPdf } from '../lib/formTemplates/adminPreviewFormPdf';
+import { handler as getMyForms } from '../lib/formTemplates/getMyForms';
+import { handler as submitFormPart } from '../lib/formTemplates/submitFormPart';
+import { handler as getSignedFormPdfUrl } from '../lib/formTemplates/getSignedFormPdfUrl';
 import { handler as adminGetSignupFlowConfig } from '../lib/signupFlow/adminGetSignupFlowConfig';
 import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSaveSignupFlowConfig';
 import { handler as getFormWording } from '../lib/formWording/getFormWording';
@@ -33,6 +41,15 @@ const HANDLERS: Record<string, Handler> = {
   adminListFormTemplates,
   adminSaveFormTemplate,
   adminDeleteFormTemplate,
+  adminPublishFormTemplate,
+  // FORCA forms: assignment, tracking, family signing, signed PDFs.
+  adminAssignFormTemplate,
+  adminGetFormTracking,
+  adminSendFormReminder,
+  adminPreviewFormPdf,
+  getMyForms,
+  submitFormPart,
+  getSignedFormPdfUrl,
   // Manage → Forms → First Sign-up Order.
   adminGetSignupFlowConfig,
   adminSaveSignupFlowConfig,

@@ -1,6 +1,6 @@
 import {
-  defaultRoleFor, normalizeAcknowledgers, normalizeSections, normalizeSigners, normalizeTraineeDevice, templateContentHash,
-  SignerRole, TemplateSection, TraineeDevice,
+  defaultRoleFor, normalizeAcknowledgers, normalizeSections, normalizeSettings, normalizeSigners, normalizeTraineeDevice, templateContentHash,
+  SignerRole, TemplateSection, TemplateSettings, TemplateStatus, TEMPLATE_STATUSES, TraineeDevice,
 } from './schema';
 
 // Custom admin-built form templates (Manage → Forms → Form Templates).
@@ -17,6 +17,15 @@ import {
 //
 // The version prefix deliberately isn't FORM_TEMPLATE# + something, so a
 // begins_with(SK, 'FORM_TEMPLATE#') listing never picks versions up.
+//
+// Draft → Publish: the head is the admin's WORKING COPY. Save
+// (adminSaveFormTemplate.ts) only rewrites the head; Publish
+// (adminPublishFormTemplate.ts) snapshots it as the next immutable version
+// and records publishedVersion/publishedHash. So editing a published form
+// is "a new draft version" until it's published, and families keep signing
+// the published one meanwhile. A head saved before this split (no
+// `status`) was published on every save, so it reads as published with
+// publishedVersion = currentVersion.
 //
 // Legacy heads (saved before versioning) have no currentVersion and v1
 // sections; they read as version 1 (fromStored) and get their V#0001 item
@@ -51,6 +60,12 @@ export interface StoredTemplate {
   updatedAt: string;
   /** True for a pre-versioning head (no V#0001 item yet). */
   legacy: boolean;
+  settings: TemplateSettings;
+  status: TemplateStatus;
+  /** Latest published version (0 = never published). Families sign this one. */
+  publishedVersion: number;
+  /** contentHash of publishedVersion — differs from contentHash while the draft has unpublished changes. */
+  publishedHash: string;
 }
 
 /** A head item as the v2 shape the client sees — legacy heads converted on the fly. */
@@ -66,6 +81,10 @@ export function fromStored(item: Record<string, unknown>, brand: 'incore' | 'for
   const legacy = typeof item.currentVersion !== 'number';
   const traineeDevice = normalizeTraineeDevice(item.traineeDevice);
   const acknowledgers = normalizeAcknowledgers(item.acknowledgers, signers);
+  const contentHash = legacy ? templateContentHash({ signers, sections, traineeDevice, acknowledgers }) : String(item.contentHash ?? '');
+  const currentVersion = legacy ? 1 : (item.currentVersion as number);
+  const storedStatus = (TEMPLATE_STATUSES as readonly string[]).includes(item.status as string) ? item.status as TemplateStatus : null;
+  const publishedVersion = typeof item.publishedVersion === 'number' ? item.publishedVersion : (storedStatus ? 0 : currentVersion);
   return {
     id: String(item.id ?? ''),
     name: String(item.name ?? ''),
@@ -73,10 +92,33 @@ export function fromStored(item: Record<string, unknown>, brand: 'incore' | 'for
     acknowledgers,
     traineeDevice,
     sections,
-    currentVersion: legacy ? 1 : (item.currentVersion as number),
-    contentHash: legacy ? templateContentHash({ signers, sections, traineeDevice, acknowledgers }) : String(item.contentHash ?? ''),
+    currentVersion,
+    contentHash,
     createdAt: String(item.createdAt ?? ''),
     updatedAt: String(item.updatedAt ?? ''),
     legacy,
+    settings: normalizeSettings((item.settings ?? {}) as Record<string, unknown>, traineeDevice),
+    status: storedStatus ?? 'published',
+    publishedVersion,
+    publishedHash: typeof item.publishedHash === 'string' ? item.publishedHash : (storedStatus ? '' : contentHash),
   };
+}
+
+// ─── Assignments, submissions, audit (FORCA) ────────────────────────────────
+// All in the brand table (tableForBrand('forca')):
+//
+//   PK=APPCONFIG           SK=FORM_ASSIGNMENT#<templateId>#<assignmentId>
+//                          who a form is assigned to + admin-filled answers
+//   PK=FORMSUB#<templateId> SK=<childId>#<assignmentId>#<createdAt>
+//                          one family's copy (answers, signatures, PDF key);
+//                          GSI1PK=MEMBER#<childId> lists a child's copies
+//   PK=FORM_AUDIT          SK=<iso>#<uuid>   see audit.ts
+export const FORM_ASSIGNMENT_SK_PREFIX = 'FORM_ASSIGNMENT#';
+export const formAssignmentKey = (templateId: string, assignmentId: string) =>
+  ({ PK: 'APPCONFIG', SK: `${FORM_ASSIGNMENT_SK_PREFIX}${templateId}#${assignmentId}` });
+export const formSubmissionPk = (templateId: string) => `FORMSUB#${templateId}`;
+
+/** A version item → the same shape as a head (what a family actually signs). */
+export function fromVersionItem(item: Record<string, unknown>, brand: 'incore' | 'forca'): StoredTemplate {
+  return { ...fromStored({ ...item, id: item.templateId, currentVersion: item.version, status: 'published', publishedVersion: item.version, publishedHash: item.contentHash }, brand) };
 }

@@ -47,7 +47,7 @@ resource "aws_iam_role_policy" "lambda_cognito" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect   = "Allow"
+      Effect = "Allow"
       Action = [
         "cognito-idp:AdminDeleteUser",
         "cognito-idp:AdminCreateUser",
@@ -221,8 +221,10 @@ resource "aws_lambda_function" "fn" {
   # creation (x2 for a FORCA trainee, trainee + parent) plus the awaited
   # nodemailer/Gmail SMTP welcome-email send(s) is enough CPU-bound work at
   # 128MB to routinely land right at the client's 6s timeout edge.
-  memory_size      = contains(["resizeProfilePhoto", "adminBackfillResizeProfilePhotos", "getCoachSessions", "getTrainingHistory", "adminCreateUser"], each.key) ? 512 : 128
-  layers           = [aws_lambda_layer_version.dependencies.arn]
+  # incoreWorkoutApi: also renders FORCA's signed-form PDFs (pdf-lib, font
+  # subsetting) when a form completes — CPU-bound, so 128MB would be slow.
+  memory_size = contains(["resizeProfilePhoto", "adminBackfillResizeProfilePhotos", "getCoachSessions", "getTrainingHistory", "adminCreateUser", "incoreWorkoutApi"], each.key) ? 512 : 128
+  layers      = [aws_lambda_layer_version.dependencies.arn]
 
   environment {
     variables = {

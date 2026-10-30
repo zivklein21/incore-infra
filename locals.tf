@@ -332,9 +332,18 @@ locals {
     getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
     saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
     # Manage → Forms → Form Templates (custom admin-built templates; same shared integration)
-    adminListFormTemplates  = "GET"  # admin: list custom form templates for a brand
-    adminSaveFormTemplate   = "POST" # admin: create/edit a custom form template (name + sections)
-    adminDeleteFormTemplate = "POST" # admin: delete a custom form template
+    adminListFormTemplates   = "GET"  # admin: list custom form templates for a brand
+    adminSaveFormTemplate    = "POST" # admin: create/edit a custom form template (name + sections)
+    adminDeleteFormTemplate  = "POST" # admin: delete a custom form template (archives it instead once anyone signed)
+    adminPublishFormTemplate = "POST" # admin: publish the saved draft as the next version (publish checks, optional re-sign)
+    # FORCA forms system (same shared integration)
+    adminAssignFormTemplate = "POST" # admin: assign a published form to all / a group / specific trainees (+ admin-filled fields), or cancel
+    adminGetFormTracking    = "GET"  # admin: per assignment, each trainee's Pending Parent / Pending Child / Completed
+    adminSendFormReminder   = "POST" # admin: push a reminder to whoever a form is waiting on
+    adminPreviewFormPdf     = "POST" # admin: "Preview PDF" — SAMPLE-watermarked PDF of a draft
+    getMyForms              = "GET"  # parent (childId) / trainee: "Forms to sign" for this device
+    submitFormPart          = "POST" # parent / trainee: fill + declare + sign their part (server timestamps)
+    getSignedFormPdfUrl     = "GET"  # admin / the child's parent: presigned URL to a signed PDF
     # Manage → Forms → First Sign-up Order (same shared integration)
     adminGetSignupFlowConfig  = "GET"  # admin: a brand's onboarding form order + include/exclude
     adminSaveSignupFlowConfig = "POST" # admin: save that order
