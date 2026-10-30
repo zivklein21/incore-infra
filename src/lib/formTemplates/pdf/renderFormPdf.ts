@@ -231,13 +231,15 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
 
   // ── Body ──
   const sectionDepth = new Map<string, number>();
-  for (const section of input.sections) {
+  for (let section of input.sections) {
     const depth = section.parentId ? (sectionDepth.get(section.parentId) ?? 0) + 1 : 0;
     sectionDepth.set(section.id, depth);
     if (!visible.has(section.id)) continue;
     const indent = Math.min(depth, 5) * 14;
     const number = numbers.get(section.id);
     const titleSize = depth === 0 ? 13 : depth === 1 ? 11.5 : 10.5;
+    // The details box (name, ID…) has no number; it gets a default title and a rule under it.
+    if (section.details && !section.title.trim()) section = { ...section, title: 'פרטים' };
     if (number || section.title.trim()) {
       w.ensure(titleSize * 3);
       w.y -= depth === 0 ? 8 : 4;
@@ -333,6 +335,7 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
         }
       }
     }
+    if (section.details) w.rule();
   }
 
   // ── Audit page ──

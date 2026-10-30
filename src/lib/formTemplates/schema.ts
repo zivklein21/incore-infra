@@ -145,6 +145,12 @@ export interface TemplateSection {
   items?: SectionItem[];
   /** True = no number (e.g. a "Signatures" area); its sub-sections still number under its parent. */
   unnumbered?: boolean;
+  /**
+   * The form's DETAILS BOX (name, ID, date…): shown before all sections, as
+   * a box — not a numbered section. At most one, always first, never nested
+   * and never holding sub-sections (normalizeSections enforces all of it).
+   */
+  details?: boolean;
 }
 
 /** Deepest section nesting accepted (1.1.1.1.1.1.1.1) — "unlimited" in practice, but bounded so a bad payload can't build a 1000-deep tree. */
@@ -236,6 +242,10 @@ function normalizeShowIf(raw: unknown, earlier: Map<string, TemplateField>): Sho
 export function normalizeSections(raw: unknown, defaultRole: SignerRole): TemplateSection[] {
   if (!Array.isArray(raw)) throw new TemplateValidationError('sections must be an array');
   if (raw.some(isLegacySection)) return normalizeSections(convertLegacySections(raw, defaultRole), defaultRole);
+  // The details box (if any) always comes first; only the first one counts.
+  let list = raw as Record<string, unknown>[];
+  const detailsAt = list.findIndex(s => s?.details === true);
+  if (detailsAt > 0) list = [list[detailsAt], ...list.slice(0, detailsAt), ...list.slice(detailsAt + 1)];
 
   const seen = new Set<string>();
   const earlier = new Map<string, TemplateField>();
@@ -254,12 +264,14 @@ export function normalizeSections(raw: unknown, defaultRole: SignerRole): Templa
     return false;
   };
 
-  return raw.map((rs: Record<string, unknown>) => {
+  const detailsId = detailsAt >= 0 ? str(list[0]?.id) : '';
+  return list.map((rs: Record<string, unknown>, sectionIndex: number) => {
     const sectionId = str(rs?.id);
     claim(sectionId);
     const showIf = normalizeShowIf(rs.showIf, earlier);
-    const sectionParent = str(rs.parentId);
-    const keptParent = sectionParent && sectionDepthOf.has(sectionParent)
+    const isDetails = rs.details === true && sectionIndex === 0 && detailsAt >= 0;
+    const sectionParent = isDetails ? '' : str(rs.parentId);
+    const keptParent = sectionParent && sectionParent !== detailsId && sectionDepthOf.has(sectionParent)
       && (sectionDepthOf.get(sectionParent) ?? 0) < MAX_SECTION_DEPTH - 1 && sectionInside(sectionParent, previousSectionId)
       ? sectionParent : undefined;
     sectionParentOf.set(sectionId, keptParent);
@@ -328,7 +340,8 @@ export function normalizeSections(raw: unknown, defaultRole: SignerRole): Templa
       .map((i: Record<string, unknown>) => ({ id: str(i?.id), text: str(i?.text).trim() }))
       .filter(i => i.id && i.text && !itemIds.has(i.id) && itemIds.add(i.id));
     if (items.length) section.items = items;
-    if (rs.unnumbered === true) section.unnumbered = true;
+    if (rs.unnumbered === true && !isDetails) section.unnumbered = true;
+    if (isDetails) { section.details = true; delete section.showIf; }
     return section;
   });
 }
@@ -405,6 +418,7 @@ export function sectionNumbers(sections: TemplateSection[]): Map<string, string>
   for (const s of sections) {
     const parentKey = s.parentId ?? '';
     const parentPrefix = s.parentId ? prefixOf.get(s.parentId) ?? '' : '';
+    if (s.details) continue;
     if (s.unnumbered) {
       prefixOf.set(s.id, parentPrefix);
       continue;
@@ -477,7 +491,9 @@ export function publishIssues(t: { name: string; signers: SignerRole[]; sections
   }
   const hasChildSection = new Set(t.sections.map(s => s.parentId).filter(Boolean) as string[]);
   t.sections.forEach((s, i) => {
-    if (!s.title.trim() && !s.description?.trim() && !s.items?.length && !s.fields.length && !hasChildSection.has(s.id)) {
+    if (s.details && !s.fields.length) {
+      issues.push({ key: `empty-${s.id}`, message: 'The details box has no fields.' });
+    } else if (!s.details && !s.title.trim() && !s.description?.trim() && !s.items?.length && !s.fields.length && !hasChildSection.has(s.id)) {
       issues.push({ key: `empty-${s.id}`, message: `Section ${sectionNumbers(t.sections).get(s.id) ?? i + 1} is empty.` });
     }
   });

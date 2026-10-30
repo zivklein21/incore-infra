@@ -22,6 +22,14 @@ export interface SignupFlowStep {
   /** A built-in SignupFormId, or 'template:<id>' for a custom form template. */
   formId: string;
   included: boolean;
+  /**
+   * Built-in form REMOVED by the admin (Form Templates → delete): hidden from
+   * the admin lists and never gates anyone (always excluded). Nothing
+   * already filled/signed is touched — members' copies stay where they
+   * are. Kept as a step (not dropped) so normalizeSteps doesn't re-append
+   * it as included; restoring just clears the flag.
+   */
+  removed?: boolean;
 }
 
 // Today's hardcoded order, per brand (resolvePostLoginRoute.ts + each form
@@ -50,7 +58,8 @@ export function normalizeSteps(brand: Brand, saved: unknown): SignupFlowStep[] {
       const valid = isBuiltIn(formId) ? brandForms.includes(formId) : formId.startsWith('template:') && formId.length > 'template:'.length;
       if (!valid || seen.has(formId)) continue;
       seen.add(formId);
-      steps.push({ formId, included: raw.included !== false });
+      const removed = isBuiltIn(formId) && raw.removed === true;
+      steps.push({ formId, included: !removed && raw.included !== false, ...(removed ? { removed: true } : {}) });
     }
   }
   for (const formId of brandForms) {

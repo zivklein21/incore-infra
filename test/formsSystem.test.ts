@@ -10,6 +10,7 @@ import { plain, visualOrder } from '../src/lib/formTemplates/pdf/rtlText';
 import { fitSignature, israelDateTime, renderFormPdf } from '../src/lib/formTemplates/pdf/renderFormPdf';
 import { parseRichText } from '../src/lib/formTemplates/richText';
 import { computeSubmissionStatus } from '../src/lib/formTemplates/submissions';
+import { applySignupFlow, normalizeSteps } from '../src/lib/signupFlow/shared';
 
 const vis = (text: string) => visualOrder(plain(text)).map(c => c.c).join('');
 
@@ -158,4 +159,29 @@ test('renderFormPdf: real + SAMPLE render, page count includes the audit page', 
   assert.equal(doc.getPageCount(), 3); // page 1, page break → page 2, audit page
   const sample = await renderFormPdf({ title: 'טופס', code: '', version: 1, sections, answers: {}, signatures: [], submissionId: 'SAMPLE', childName: '', generatedAt: new Date(), sample: true });
   assert.ok((await PDFDocument.load(sample)).getPageCount() >= 2);
+});
+
+test('details box: moved first, never nested, never numbered, can\'t hold sub-sections', () => {
+  const out = normalizeSections([
+    sec('a'), { ...sec('d'), details: true, parentId: 'a', unnumbered: true } as TemplateSection, sec('b', { parentId: 'd' }), { ...sec('d2'), details: true } as TemplateSection,
+  ], 'parent');
+  assert.deepEqual(out.map(s => s.id), ['d', 'a', 'b', 'd2']);
+  assert.equal(out[0].details, true);
+  assert.equal(out[0].parentId, undefined);
+  assert.equal(out[0].unnumbered, undefined);
+  assert.equal(out[2].parentId, undefined);
+  assert.equal(out[3].details, undefined);
+  const n = sectionNumbers(out);
+  assert.equal(n.get('d'), undefined);
+  assert.deepEqual(['a', 'b', 'd2'].map(id => n.get(id)), ['1', '2', '3']);
+});
+
+test('a removed built-in form is kept as a step, never gates, and is not re-appended', () => {
+  const steps = normalizeSteps('forca', [{ formId: 'orthopedic', included: true, removed: true }]);
+  const ortho = steps.find(s => s.formId === 'orthopedic')!;
+  assert.deepEqual(ortho, { formId: 'orthopedic', included: false, removed: true });
+  assert.equal(steps.filter(s => s.formId === 'orthopedic').length, 1);
+  const { flags, signupOrder } = applySignupFlow({ requiresOrthopedicForm: true } as never, steps);
+  assert.equal(flags.requiresOrthopedicForm, false);
+  assert.ok(!signupOrder.includes('orthopedic'));
 });
