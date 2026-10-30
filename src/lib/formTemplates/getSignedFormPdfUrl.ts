@@ -8,8 +8,8 @@ import { ensureSignedPdf, PDF_URL_TTL_SECONDS, presignPdf } from './signedPdf';
 
 // GET /getSignedFormPdfUrl?templateId=<id>&submissionId=<id>&brand=incore|forca
 // Auth: Cognito JWT — an admin, the linked PARENT of the submission's child
-// (verifyFamilyLink), or — INCORE, where members are typically adults
-// signing for themselves — the member herself. Returns { url, expiresIn, sha256 }: a
+// (verifyFamilyLink), or the child / member herself (her own final signed
+// forms, shown on her profile). Returns { url, expiresIn, sha256 }: a
 // short-lived presigned URL to the signed PDF — the bucket itself is
 // private. If the completed submission has no PDF yet (generation failed
 // at completion), it's generated now.
@@ -25,7 +25,7 @@ export async function handler(
   const sub = (await listSubmissionsOfTemplate(brand, templateId)).find(s => s.submissionId === submissionId);
   if (!sub) return json(404, { error: 'not_found' });
   const allowed = (await isAdmin(uid))
-    || (brand === 'incore' && uid === sub.childId)
+    || uid === sub.childId
     || (uid !== sub.childId && (await verifyFamilyLink(uid, sub.childId)).ok);
   if (!allowed) return json(403, { error: 'forbidden' });
   if (sub.status !== 'completed') return json(409, { error: 'not_completed' });

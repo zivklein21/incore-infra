@@ -24,7 +24,9 @@ import { prefillValues } from './prefill';
 // plus the signed version's content, the answers so far (other side's are
 // read-only), signatures already made (with server time), admin-filled
 // answers and profile prefill. Archived forms are hidden; a form a family
-// already completed stays listed (read-only, PDF for the parent).
+// already completed stays listed (read-only, with its PDF) — on BOTH devices,
+// even one that had no part in it (the child's profile shows every final
+// signed form about her).
 //
 // Each form says its kind: 'signup' forms are the first-login ones (also
 // reported by getProfile so the app routes there before the home screen);
@@ -72,13 +74,15 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
     if (!t) continue;
     const sub = reuse ? existing : undefined;
     const deviceRoles = rolesOnDevice(caller.device, participatingRoles(t), t.traineeDevice, caller.brand);
-    if (!deviceRoles.length) continue;
 
     const signedRoles = sub?.signedRoles ?? [];
     const ackRoles = sub?.ackRoles ?? [];
     const { status, missing } = computeSubmissionStatus({
       signers: t.signers, acknowledgers: t.acknowledgers, resignFromVersion: head.resignFromVersion, signedRoles, ackRoles, version,
     });
+    // A form with no part on this device is listed only once it's COMPLETED — so the child sees, read-only,
+    // every final signed form about her (e.g. one only her parent signs on the parent's phone).
+    if (!deviceRoles.length && status !== 'completed') continue;
     // Fill-only roles (fields but no signature) also have a turn, before acknowledgers.
     const fillOnly = deviceRoles.filter(r => !t.signers.includes(r) && !t.acknowledgers.includes(r) && !signedRoles.includes(r));
     const myRoles = status === 'completed' ? [] : [...fillOnly, ...missing.filter(r => deviceRoles.includes(r))];
