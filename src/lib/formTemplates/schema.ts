@@ -28,6 +28,8 @@ export const FIELD_TYPES = [
   'single_select', 'multi_select', 'yes_no', 'checkbox',
   'file', 'section_header', 'info_text', 'signoff_list', 'signature',
   'time', 'israeli_id', 'phone', 'email', 'dropdown', 'divider', 'page_break',
+  // A numbered question with NO answer of its own — just holds sub-questions (1 → 1.1, 1.2).
+  'question_group',
 ] as const;
 export type FieldType = typeof FIELD_TYPES[number];
 
@@ -94,6 +96,14 @@ export interface ShowIf {
   fieldId: string;
   op: ShowIfOp;
   value: string;
+  /**
+   * "Any of these is Yes" (e.g. ask for a medical certificate if ANY health
+   * question was answered Yes): 'all' = every Yes/No question ABOVE this one
+   * in the form; a list = just those Yes/No questions. Shown when at least
+   * one of them is visible and answered Yes. When set, fieldId/op/value are
+   * only kept for older readers (fieldId = the list's first id, or '').
+   */
+  anyYes?: 'all' | string[];
 }
 
 export interface FieldOption { id: string; label: string }
@@ -159,7 +169,7 @@ export interface TemplateSection {
 export const MAX_SECTION_DEPTH = 8;
 
 /** Field types that hold no answer — layout only. */
-export const DISPLAY_ONLY: ReadonlySet<FieldType> = new Set(['section_header', 'info_text', 'divider', 'page_break']);
+export const DISPLAY_ONLY: ReadonlySet<FieldType> = new Set(['section_header', 'info_text', 'divider', 'page_break', 'question_group']);
 /** Field types another field/section may condition on. */
 export const CONDITION_SOURCES: ReadonlySet<FieldType> = new Set(['single_select', 'multi_select', 'dropdown', 'yes_no', 'checkbox']);
 /** Field types with an options list. */
@@ -222,6 +232,12 @@ export class TemplateValidationError extends Error {}
 function normalizeShowIf(raw: unknown, earlier: Map<string, TemplateField>): ShowIf | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;
+  if (r.anyYes === 'all' || Array.isArray(r.anyYes)) {
+    const yesNo = [...earlier.values()].filter(f => f.type === 'yes_no').map(f => f.id);
+    if (r.anyYes === 'all') return yesNo.length ? { fieldId: '', op: 'equals', value: 'yes', anyYes: 'all' } : undefined;
+    const ids = [...new Set((r.anyYes as unknown[]).map(str))].filter(id => yesNo.includes(id));
+    return ids.length ? { fieldId: ids[0], op: 'equals', value: 'yes', anyYes: ids } : undefined;
+  }
   const source = earlier.get(str(r.fieldId));
   // A condition may only point at an EARLIER answerable field — that's what
   // keeps visibility acyclic and lets the renderer evaluate in one pass.
@@ -415,6 +431,38 @@ export function templateContentHash(content: {
 // app's formTemplateLogic.ts.
 
 /** Section id → "1.2.3" for every numbered section. An unnumbered section gets no number; its sub-sections number on under its own parent's number. */
+/** A field that gets a question number — anything answerable except signature boxes and declaration lists. */
+export const isNumberedQuestion = (f: TemplateField) =>
+  f.type === 'question_group' || (!DISPLAY_ONLY.has(f.type) && f.type !== 'signature' && f.type !== 'signoff_list');
+
+/**
+ * settings.numberQuestions: 1, 2, 3… in reading order through the whole
+ * form; a follow-up / sub-question under a numbered question gets 1.1,
+ * 1.2 (and 1.1.1 deeper). Only VISIBLE questions count — no gaps when a
+ * follow-up is hidden — so the app and the signed PDF (same final answers)
+ * always show the same numbers. Mirrored in the app's formTemplateLogic.ts.
+ */
+export function questionNumbers(sections: TemplateSection[], visible: Set<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  const childCount = new Map<string, number>();
+  let top = 0;
+  for (const s of sections) {
+    if (!visible.has(s.id)) continue;
+    for (const f of s.fields) {
+      if (!visible.has(f.id) || !isNumberedQuestion(f)) continue;
+      const parentNumber = f.parentId ? out.get(f.parentId) : undefined;
+      if (parentNumber) {
+        const n = (childCount.get(f.parentId!) ?? 0) + 1;
+        childCount.set(f.parentId!, n);
+        out.set(f.id, `${parentNumber}.${n}`);
+      } else {
+        out.set(f.id, String(++top));
+      }
+    }
+  }
+  return out;
+}
+
 export function sectionNumbers(sections: TemplateSection[]): Map<string, string> {
   const out = new Map<string, string>();
   const prefixOf = new Map<string, string>(); // what a section's children number under
@@ -472,7 +520,20 @@ export interface TemplateSettings {
   showIn: VisibleOn;
   /** Optional result of the signed form (e.g. photo consent → approved / not approved) — see evaluateOutcome. */
   outcome?: FormOutcome;
+  /** Number the questions 1, 2, 3… through the form, follow-ups 1.1, 1.2 (see questionNumbers). */
+  numberQuestions?: boolean;
+  /**
+   * Who the form is FOR. 'coaches': filled and signed (or approved) by the
+   * coach herself on her own phone — stored with the single signer role
+   * 'trainee' (= "the person the form is about"), no parent, no
+   * acknowledgers, assigned to all coaches or specific ones. Coaches never
+   * get member forms and members never get coach forms (getMyForms.ts).
+   * Absent = members (trainees + parents).
+   */
+  audience?: 'coaches';
 }
+
+export const isCoachForm = (settings: { audience?: string } | undefined) => settings?.audience === 'coaches';
 
 export type FormKind = 'signup' | 'activity';
 
@@ -522,6 +583,9 @@ export function normalizeSettings(raw: Record<string, unknown>, fallbackDevice: 
     kind: raw.kind === 'signup' ? 'signup' : 'activity',
     showIn: (VISIBLE_ON as readonly string[]).includes(raw.showIn as string) ? raw.showIn as VisibleOn : 'both',
     ...(normalizeOutcome(raw.outcome) ? { outcome: normalizeOutcome(raw.outcome) } : {}),
+    ...(raw.numberQuestions === true ? { numberQuestions: true } : {}),
+    // A coach form is always "her own phone", manually assigned (never a sign-up form).
+    ...(raw.audience === 'coaches' ? { audience: 'coaches' as const, visibleOn: 'trainee' as const, kind: 'activity' as const, beforeFirstTraining: false, showIn: 'trainee' as const } : {}),
   };
 }
 
@@ -537,11 +601,8 @@ export function publishIssues(t: { name: string; signers: SignerRole[]; sections
   const fields = t.sections.flatMap(s => s.fields);
   if (!t.name.trim()) issues.push({ key: 'name', message: 'The form has no title.' });
   if (!t.sections.length) issues.push({ key: 'empty', message: 'The form has no sections.' });
-  for (const role of t.signers) {
-    if (!fields.some(f => f.type === 'signature' && f.filledBy === role)) {
-      issues.push({ key: `sig-${role}`, message: `No signature block for the ${role === 'parent' ? 'parent' : 'trainee'}, who is a required signer.` });
-    }
-  }
+  // A signer with no signature block approves instead (scrolls to the end,
+  // taps Approve — see submitFormPart.ts), so a missing block isn't an issue.
   if (t.multiSigner && t.visibleOn === 'trainee' && t.signers.includes('parent')) {
     issues.push({ key: 'visible-parent', message: "The parent must sign, but the form is only shown on the trainee's device." });
   }

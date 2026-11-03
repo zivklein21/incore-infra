@@ -217,6 +217,22 @@ export async function listTrainees(brand: Brand): Promise<Trainee[]> {
     .map(p => ({ uid: p.PK.replace(/^MEMBER#/, ''), name: deriveMemberName(p), groupId: p.identity?.groupId, createdAt: createdAtOf(p), profile: p }));
 }
 
+const isCoach = (p: MemberProfileItem) => p.identity?.role === 'coach' || p.role === 'coach';
+
+/** FORCA coaches — the people a coach form (settings.audience 'coaches') goes to. */
+export async function listCoaches(brand: Brand): Promise<Trainee[]> {
+  const profiles = await getAllMemberProfiles(formsTable(brand));
+  return profiles
+    .filter(p => isCoach(p) && p.identity?.accountType !== 'parent_only')
+    .map(p => ({ uid: p.PK.replace(/^MEMBER#/, ''), name: deriveMemberName(p), createdAt: createdAtOf(p), profile: p }));
+}
+
+/** Who a template's assignments can reach: coaches for a coach form, trainees otherwise. */
+export const listFormPeople = (brand: Brand, settings: { audience?: string } | undefined) =>
+  (settings?.audience === 'coaches' ? listCoaches(brand) : listTrainees(brand));
+
+export const isCoachProfile = isCoach;
+
 /** `assignedAt` is the assignment's createdAt — needed for 'new_members'. */
 export function targetIncludes(
   target: AssignmentTarget, trainee: { uid: string; groupId?: string; createdAt?: string }, assignedAt = '', rosters?: Rosters,

@@ -991,6 +991,16 @@ export interface WorkoutPlanItem {
   timingStructure?: string; // זמני עבודה — e.g. "1 min work / 30s rest | 2-3 sets | 1 min between sets"
   /** Superseded by the 6 fields above — kept only so any plan saved before this redesign still round-trips its old text instead of silently losing it. Not written or shown by the current builder UI. */
   description?: string;
+  /**
+   * Set only on a private per-session copy (see assignSessionWorkoutPlan.ts's
+   * customizeForSession) — the plan it was copied from, and the one ClassItem
+   * it belongs to. Edited in the normal builder like any plan, so logging/
+   * equipment/reports work unchanged, but hidden from every plan list/picker
+   * (library, recurring-template picker, search) — the original plan is
+   * never touched by edits to its copy.
+   */
+  sessionCopyOf?: string;
+  sessionClassId?: string;
   createdAt: string;
   createdBy: string;
 }

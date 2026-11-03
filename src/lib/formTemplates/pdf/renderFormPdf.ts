@@ -3,7 +3,7 @@ import { degrees, PDFDocument, PDFImage, PDFPage, rgb, RGB, StandardFonts } from
 import { NOTO_SANS_HEBREW_TTF_BASE64 } from './notoSansHebrew';
 import { drawLine, Fonts, lineWidth, plain, StyledChar, wrapLine } from './rtlText';
 import { parseInline, parseRichText, Span } from '../richText';
-import { DISPLAY_ONLY, hebrewLetter, sectionNumbers, SignerRole, TemplateField, TemplateSection } from '../schema';
+import { DISPLAY_ONLY, hebrewLetter, questionNumbers, sectionNumbers, SignerRole, TemplateField, TemplateSection } from '../schema';
 import { Answers, detailsKey, visibleIds } from '../logic';
 
 // The signed copy of a FORCA / INCORE form (and the "Preview PDF" sample): every
@@ -41,6 +41,8 @@ export interface FormPdfInput {
   answers: Answers;
   signatures: SignatureRecord[];
   acknowledgments?: AcknowledgmentRecord[];
+  /** settings.numberQuestions — prefix each question with its number (schema.ts questionNumbers). */
+  numberQuestions?: boolean;
   submissionId: string;
   childName: string;
   generatedAt: Date;
@@ -140,7 +142,7 @@ export function formatAnswer(field: TemplateField, answer: Answers[string]): str
     case 'single_select': case 'dropdown': return field.options?.find(o => o.id === answer)?.label ?? String(answer);
     case 'multi_select': return Array.isArray(answer) ? answer.map(id => field.options?.find(o => o.id === id)?.label ?? id).join(', ') : '—';
     case 'yes_no': return answer === 'yes' ? 'כן' : answer === 'no' ? 'לא' : '—';
-    case 'file': return typeof answer === 'object' && 'name' in answer ? answer.name : '—';
+    case 'file': return typeof answer === 'object' && 'name' in answer ? `${answer.name} (קובץ מצורף)` : '—';
     default: return typeof answer === 'string' ? answer : String(answer);
   }
 }
@@ -231,6 +233,8 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
     ? new Set([...input.sections.map(s => s.id), ...input.sections.flatMap(s => s.fields.map(f => f.id))])
     : visibleIds(input.sections, answers);
   const numbers = sectionNumbers(input.sections);
+  const qNumbers = input.numberQuestions ? questionNumbers(input.sections, visible) : new Map<string, string>();
+  const qPrefix = (id: string, bold = true) => (qNumbers.has(id) ? plain(`${qNumbers.get(id)}. `, { bold }) : []);
 
   // ── Header ──
   w.newPage(true);
@@ -309,6 +313,10 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
       switch (f.type) {
         case 'page_break': w.newPage(); break;
         case 'divider': w.rule(fi); break;
+        case 'question_group':
+          // Nothing to answer — just the (numbered) question its sub-questions sit under.
+          w.text([...qPrefix(f.id), ...fromSpans(parseInline(f.label)).map(c => ({ ...c, bold: true }))], { size: 10, indent: fi, gap: 2 });
+          break;
         case 'section_header': w.y -= 3; w.text(fromSpans(parseInline(f.label)).map(c => ({ ...c, bold: true })), { size: 11, indent: fi, gap: 2 }); break;
         case 'info_text': {
           const lines = wrapLine(fromSpans(parseInline(f.label)), fonts, 10, w.width - fi - 16);
@@ -321,7 +329,7 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
           break;
         }
         case 'checkbox':
-          w.checkRow(fromSpans(parseInline(f.label)), answer === true, fi);
+          w.checkRow([...qPrefix(f.id, false), ...fromSpans(parseInline(f.label))], answer === true, fi);
           break;
         case 'signoff_list': {
           if (f.label.trim()) w.text(fromSpans(parseInline(f.label)).map(c => ({ ...c, bold: true })), { indent: fi, gap: 2 });
@@ -356,7 +364,7 @@ export async function renderFormPdf(input: FormPdfInput): Promise<Uint8Array> {
         }
         default: {
           if (DISPLAY_ONLY.has(f.type)) break;
-          w.text(fromSpans(parseInline(f.label)).map(c => ({ ...c, bold: true })), { size: 10, indent: fi });
+          w.text([...qPrefix(f.id), ...fromSpans(parseInline(f.label)).map(c => ({ ...c, bold: true }))], { size: 10, indent: fi });
           const value = formatAnswer(f, answer);
           w.text(plain(value), { size: 10.5, indent: fi + 8, color: value === '—' ? MUTED : INK });
           if (f.type === 'yes_no' && answer === 'yes' && f.detailsLabel) {

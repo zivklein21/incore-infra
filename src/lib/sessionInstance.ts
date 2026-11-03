@@ -6,9 +6,9 @@
 // convention, isPrivate/allowedMemberIds construction, etc).
 
 import { randomUUID } from 'crypto';
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand, type ScanCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
-import { israelDateStr, israelWallTimeToDate, type GroupItem, type MemberProfileItem, type TrainingTypeItem, type WorkoutPlanItem } from './entities';
+import { israelDateStr, israelWallTimeToDate, type ClassItem, type GroupItem,type MemberProfileItem, type TrainingTypeItem, type WorkoutPlanItem } from './entities';
 
 export interface CreateSessionInstanceParams {
   groupId: string;
@@ -67,13 +67,15 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
   // Table documented for <=50 users per brand (dynamodb.tf) — same accepted
   // Scan tradeoff as getAllMemberProfiles()/getClassTypes.ts. identity is a
   // DynamoDB reserved keyword — bare here it fails every call.
-  const membersRes = await ddb.send(new ScanCommand({
+  // Paginated: a filtered Scan only evaluates 1MB per page, and this table
+  // also holds every ClassItem/RegistrationItem, so a single page silently
+  // misses group members once the table outgrows it.
+  const members = (await scanAll({
     TableName: FORCA_TABLE_NAME,
     FilterExpression: 'begins_with(PK, :prefix) AND SK = :profile AND #identity.groupId = :groupId',
     ExpressionAttributeNames: { '#identity': 'identity' },
     ExpressionAttributeValues: { ':prefix': 'MEMBER#', ':profile': 'PROFILE', ':groupId': params.groupId },
-  }));
-  const members = (membersRes.Items ?? []) as MemberProfileItem[];
+  })) as unknown as MemberProfileItem[];
   // A group member with no admin-granted active membership window (see
   // adminGrantForcaMembership.ts — start/end dates on her own PROFILE item,
   // the same field the Overview tab's "Activity Validity" line already
@@ -89,11 +91,7 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
   // filter below.
   const now = Date.now();
   const memberIds = members
-    .filter((m) => {
-      const start = typeof m.membership?.start === 'string' ? new Date(m.membership.start).getTime() : NaN;
-      const end = typeof m.membership?.end === 'string' ? new Date(m.membership.end).getTime() : NaN;
-      return !Number.isNaN(start) && !Number.isNaN(end) && now >= start && now <= end;
-    })
+    .filter((m) => hasActiveForcaMembership(m, now))
     .map((m) => (m.PK as string).replace('MEMBER#', ''));
 
   const classId = randomUUID();
@@ -168,6 +166,84 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
   }))));
 
   return { ok: true, classId, registeredCount: memberIds.length };
+}
+
+async function scanAll(input: ScanCommandInput): Promise<Record<string, unknown>[]> {
+  const items: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(new ScanCommand({ ...input, ExclusiveStartKey: lastKey }));
+    items.push(...(res.Items ?? []));
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
+  return items;
+}
+
+/** Same active-membership-window gate createSessionInstance() applies. */
+export function hasActiveForcaMembership(profile: Pick<MemberProfileItem, 'membership'>, at: number = Date.now()): boolean {
+  const start = typeof profile.membership?.start === 'string' ? new Date(profile.membership.start).getTime() : NaN;
+  const end = typeof profile.membership?.end === 'string' ? new Date(profile.membership.end).getTime() : NaN;
+  return !Number.isNaN(start) && !Number.isNaN(end) && at >= start && at <= end;
+}
+
+/**
+ * Registers a member onto every not-yet-occurred ClassItem of `groupId` she
+ * isn't already on — exactly as if she'd been in the group (with an active
+ * membership) when each one was materialized. Callers apply the membership
+ * gate themselves. Used by adminAssignGroup.ts (joining a group) and
+ * adminGrantForcaMembership.ts (membership granted after she was already in
+ * the group — without this, sessions created while she had no membership
+ * never pick her up). Returns how many sessions she was added to.
+ */
+export async function registerMemberOnFutureGroupSessions(memberId: string, groupId: string): Promise<number> {
+  const nowIso = new Date().toISOString();
+  // groupId isn't indexed — same accepted Scan tradeoff as
+  // adminSaveRecurringSession.ts's future-instance patch.
+  const futureClasses = (await scanAll({
+    TableName: FORCA_TABLE_NAME,
+    FilterExpression: 'SK = :meta AND groupId = :gid AND #dt >= :now',
+    ExpressionAttributeNames: { '#dt': 'date' },
+    ExpressionAttributeValues: { ':meta': 'METADATA', ':gid': groupId, ':now': nowIso },
+  })) as unknown as ClassItem[];
+
+  let added = 0;
+  await Promise.all(futureClasses.map(async (cls) => {
+    if ((cls.allowedMemberIds ?? []).includes(memberId)) return;
+    const classId = cls.PK.replace('CLASS#', '');
+
+    await Promise.all([
+      ddb.send(new PutCommand({
+        TableName: FORCA_TABLE_NAME,
+        Item: {
+          PK: cls.PK, SK: `REG#${memberId}`,
+          GSI1PK: `MEMBER#${memberId}`, GSI1SK: `REG##${classId}`,
+          userId: memberId,
+          classId,
+          classDate: cls.date,
+          status: 'REGISTERED',
+          consumedFrom: 'FORCA_AUTO',
+          membershipId: '',
+          targetMonth: '',
+          declaredAttendance: 'pending',
+          actualAttendance: null,
+          registeredAt: nowIso,
+        },
+      })),
+      ddb.send(new UpdateCommand({
+        TableName: FORCA_TABLE_NAME,
+        Key: { PK: cls.PK, SK: 'METADATA' },
+        // capacity is a DynamoDB reserved keyword — bare here it fails every call.
+        UpdateExpression: 'SET allowedMemberIds = :ids ADD #capacity :one, currentAttendeesCount :one',
+        ExpressionAttributeNames: { '#capacity': 'capacity' },
+        ExpressionAttributeValues: {
+          ':ids': [...(cls.allowedMemberIds ?? []), memberId],
+          ':one': 1,
+        },
+      })),
+    ]);
+    added += 1;
+  }));
+  return added;
 }
 
 /**

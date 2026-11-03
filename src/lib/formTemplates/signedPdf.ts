@@ -61,6 +61,7 @@ export async function ensureSignedPdf(brand: Brand, sub: FormSubmissionItem, act
   const bytes = await renderFormPdf({
     title: version.name,
     code: version.settings.code,
+    numberQuestions: version.settings.numberQuestions === true,
     version: sub.version,
     sections: version.sections,
     answers: sub.answers,

@@ -19,6 +19,7 @@ import { handler as adminPreviewFormPdf } from '../lib/formTemplates/adminPrevie
 import { handler as getMyForms } from '../lib/formTemplates/getMyForms';
 import { handler as submitFormPart } from '../lib/formTemplates/submitFormPart';
 import { handler as getSignedFormPdfUrl } from '../lib/formTemplates/getSignedFormPdfUrl';
+import { handler as getFormUploadUrl } from '../lib/formTemplates/formFiles';
 import { handler as adminListActivities } from '../lib/formTemplates/adminListActivities';
 import { handler as adminCreateActivity } from '../lib/formTemplates/adminCreateActivity';
 import { handler as adminGetSignupFlowConfig } from '../lib/signupFlow/adminGetSignupFlowConfig';
@@ -52,6 +53,7 @@ const HANDLERS: Record<string, Handler> = {
   getMyForms,
   submitFormPart,
   getSignedFormPdfUrl,
+  getFormUploadUrl,
   adminListActivities,
   adminCreateActivity,
   // Manage → Forms → First Sign-up Order.

@@ -23,18 +23,27 @@ function conditionMet(cond: ShowIf, source: TemplateField | undefined, answers: 
   return cond.op === 'notEquals' ? !matches : matches;
 }
 
+/** `byId` holds only fields EARLIER than the one being evaluated — so anyYes 'all' means "every Yes/No above". */
+function showIfMet(cond: ShowIf, byId: Map<string, TemplateField>, answers: Answers, visible: Set<string>): boolean {
+  if (cond.anyYes) {
+    const ids = cond.anyYes === 'all' ? [...byId.values()].filter(f => f.type === 'yes_no').map(f => f.id) : cond.anyYes;
+    return ids.some(id => visible.has(id) && answers[id] === 'yes');
+  }
+  return conditionMet(cond, byId.get(cond.fieldId), answers, visible);
+}
+
 export function visibleIds(sections: TemplateSection[], answers: Answers): Set<string> {
   const visible = new Set<string>();
   const byId = new Map<string, TemplateField>();
   for (const section of sections) {
     const parentShown = !section.parentId || visible.has(section.parentId);
-    const sectionShown = parentShown && (!section.showIf || conditionMet(section.showIf, byId.get(section.showIf.fieldId), answers, visible));
+    const sectionShown = parentShown && (!section.showIf || showIfMet(section.showIf, byId, answers, visible));
     if (sectionShown) visible.add(section.id);
     for (const field of section.fields) {
       byId.set(field.id, field);
       if (!sectionShown) continue;
       if (field.parentId && !visible.has(field.parentId)) continue;
-      if (!field.showIf || conditionMet(field.showIf, byId.get(field.showIf.fieldId), answers, visible)) visible.add(field.id);
+      if (!field.showIf || showIfMet(field.showIf, byId, answers, visible)) visible.add(field.id);
     }
   }
   return visible;

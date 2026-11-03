@@ -4,18 +4,19 @@ import { randomUUID } from 'crypto';
 import { ddb } from '../dynamo';
 import { getUid, json } from '../http';
 import { deriveMemberName } from '../entities';
-import { SIGNER_ROLES, SignerRole } from './schema';
+import { isCoachForm, SIGNER_ROLES, SignerRole } from './schema';
 import { formAssignmentKey, formSubmissionPk } from './shared';
 import { Answers, answerFormatError, canFill, detailsKey, FieldAnswer, missingRequired, pruneHidden } from './logic';
 import { notifyNextSigner, participatingRoles, resolveFamilyCaller, rolesOnDevice } from './familyForms';
 import {
   computeSubmissionStatus, FormAssignmentItem, formsTable, FormSubmissionItem, getProfile, getTemplateHead, getTemplateVersion,
-  latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign,
+  latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign, isCoachProfile,
 } from './submissions';
 import type { SignatureRecord } from './pdf/renderFormPdf';
 import { ensureSignedPdf } from './signedPdf';
 import { rememberPrefill } from './prefill';
 import { writeAudit } from './audit';
+import { commitFormFiles } from './formFiles';
 
 // POST /submitFormPart
 // Body: { templateId, assignmentId, childId?, role: 'parent'|'trainee',
@@ -62,6 +63,8 @@ export async function handler(
   ]);
   const assignment = assignmentRes.Item as FormAssignmentItem | undefined;
   if (!head || head.status !== 'published' || !assignment || assignment.cancelledAt || !child) return json(404, { error: 'not_found' });
+  // Coach forms are only for coaches, member forms only for members (TemplateSettings.audience).
+  if (isCoachForm(head.settings) !== isCoachProfile(child)) return json(404, { error: 'not_found' });
   const rosters = await loadRosters(caller.brand, [assignment]);
   if (!targetIncludes(assignment.target, { uid: caller.childId, groupId: child.identity?.groupId, createdAt: (child as { createdAt?: string }).createdAt }, assignment.createdAt, rosters)) {
     return json(404, { error: 'not_found' });
@@ -143,9 +146,26 @@ export async function handler(
     const missing = missingRequired(t.sections, withSigs, role, answeredBy);
     if (missing.length) return json(400, { error: 'missing_required', fieldIds: missing.map(f => f.id) });
 
-    sub.answers = pruneHidden(t.sections, answers);
+    // Attached files: verify this role's new uploads and move them under
+    // signed-forms/ (see formFiles.ts). Hidden fields were pruned first, so a
+    // file whose "show only if" question is no longer Yes is never kept.
+    const pruned = pruneHidden(t.sections, answers);
+    const committed = await commitFormFiles({
+      brand: caller.brand, childId: caller.childId, templateId, assignmentId, submissionId: sub.submissionId,
+      fileFieldIds: fields.filter(f => f.type === 'file' && answeredBy[f.id] === role).map(f => f.id),
+      answers: pruned, previous: prev?.answers ?? {},
+    });
+    if ('error' in committed) return json(400, { error: committed.error, fieldId: committed.fieldId });
+
+    sub.answers = committed.answers;
     sub.answeredBy = answeredBy;
     sub.signatures.push(...newSigs);
+    // No signature block for this signer → they approve instead (scroll to
+    // the end, tap Approve). The approval itself is the record, shown on the
+    // PDF like an acknowledgment — who, server time, which device.
+    if (!fields.some(f => f.type === 'signature' && f.filledBy === role)) {
+      sub.acknowledgments.push({ role, userId: uid, name: signerProfile ? deriveMemberName(signerProfile) : '', at: now, device, version });
+    }
     signedRoles.push(role);
   }
 

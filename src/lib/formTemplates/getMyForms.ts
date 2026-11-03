@@ -4,7 +4,9 @@ import { FamilyCaller, participatingRoles, resolveFamilyCaller, rolesOnDevice } 
 import {
   computeSubmissionStatus, getProfile, getTemplateVersion, latestByAssignment, listAssignments, listSubmissionsOfChild,
   listTemplateHeads, loadRosters, parentOf, SIGNUP_ASSIGNMENT_ID, targetIncludes, versionToSign,
+  isCoachProfile,
 } from './submissions';
+import { isCoachForm } from './schema';
 import { prefillValues } from './prefill';
 import { evaluateOutcome } from './logic';
 
@@ -63,10 +65,12 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
   const prefill = prefillValues(child as never, parent as never);
 
   const rosters = await loadRosters(caller.brand, assignments);
+  // Coach forms are only for coaches, and coaches get nothing else (see TemplateSettings.audience).
+  const callerIsCoach = isCoachProfile(child);
   const forms: MyFormRow[] = [];
   for (const a of assignments) {
     const head = headById.get(a.templateId);
-    if (!head || !targetIncludes(a.target, trainee, a.createdAt, rosters)) continue;
+    if (!head || isCoachForm(head.settings) !== callerIsCoach || !targetIncludes(a.target, trainee, a.createdAt, rosters)) continue;
     // A sign-up form's own assignment only counts while the form IS a sign-up form.
     if (a.assignmentId === SIGNUP_ASSIGNMENT_ID && head.settings.kind !== 'signup') continue;
     const existing = latest.get(a.assignmentId);
@@ -97,6 +101,8 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       code: t.settings.code,
       description: t.settings.description,
       required: t.settings.required,
+      numberQuestions: t.settings.numberQuestions === true,
+      audience: isCoachForm(head.settings) ? 'coaches' : 'members',
       beforeFirstTraining: t.settings.beforeFirstTraining || a.assignmentId === SIGNUP_ASSIGNMENT_ID,
       kind: a.assignmentId === SIGNUP_ASSIGNMENT_ID ? 'signup' : 'activity',
       activity: a.target.kind === 'activity' ? { name: a.target.className ?? '', date: a.target.date } : null,

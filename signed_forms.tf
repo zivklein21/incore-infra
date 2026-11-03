@@ -130,6 +130,23 @@ resource "aws_s3_bucket_lifecycle_configuration" "signed_forms" {
       noncurrent_days = 1
     }
   }
+
+  # Form file uploads land here first (formFiles.ts) and are copied under
+  # signed-forms/ when the part is submitted — whatever is left was never
+  # submitted (a re-pick, an abandoned form).
+  rule {
+    id     = "expire-pending-form-uploads"
+    status = "Enabled"
+    filter {
+      prefix = "uploads-pending/"
+    }
+    expiration {
+      days = 2
+    }
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
 }
 
 resource "aws_s3_bucket_policy" "signed_forms" {

@@ -6,10 +6,10 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { getExpoPushToken, sendExpoPushBatch, type ExpoPushMessage } from '../push';
 import { formAssignmentKey, parseBrand } from './shared';
-import { DISPLAY_ONLY } from './schema';
+import { isCoachForm, DISPLAY_ONLY } from './schema';
 import { Answers, answerFormatError, FieldAnswer, isAnswered, visibleIds } from './logic';
 import {
-  AssignmentTarget, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, listTrainees, loadRosters, parentOf, getProfile, targetIncludes,
+  AssignmentTarget, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, listFormPeople, loadRosters, parentOf, getProfile, targetIncludes,
 } from './submissions';
 import { writeAudit } from './audit';
 import { participatingRoles, rolesOnDevice } from './familyForms';
@@ -106,6 +106,8 @@ export async function assignForm(input: {
   const raw = (input.target ?? {}) as Record<string, unknown>;
   let target: AssignmentTarget;
   if (raw.kind === 'all') target = { kind: 'all' };
+  // A coach form goes to all coaches (incl. ones added later) or specific coaches — nothing trainee-shaped.
+  else if (isCoachForm(head.settings) && raw.kind !== 'members') return { ok: false, status: 400, body: { error: 'invalid_target' } };
   else if (raw.kind === 'new_members') target = { kind: 'new_members' };
   else if (raw.kind === 'activity' && typeof raw.classId === 'string' && raw.classId) {
     const cls = (await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: { PK: `CLASS#${raw.classId}`, SK: 'METADATA' } }))).Item;
@@ -140,7 +142,7 @@ export async function assignForm(input: {
   const assignedAt = new Date().toISOString();
   // 'new_members' matches nobody yet — it fills up as members join.
   const rosters = await loadRosters(brand, [{ target }]);
-  const trainees = (await listTrainees(brand)).filter(tr => targetIncludes(target, tr, assignedAt, rosters));
+  const trainees = (await listFormPeople(brand, head.settings)).filter(tr => targetIncludes(target, tr, assignedAt, rosters));
   if (target.kind === 'members' && !trainees.length) return { ok: false, status: 400, body: { error: 'no_trainees' } };
 
   const assignmentId = randomUUID();

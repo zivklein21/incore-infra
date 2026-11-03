@@ -343,7 +343,8 @@ locals {
     adminPreviewFormPdf     = "POST" # admin: "Preview PDF" — SAMPLE-watermarked PDF of a draft
     getMyForms              = "GET"  # parent (childId) / trainee: "Forms to sign" for this device
     submitFormPart          = "POST" # parent / trainee: fill + declare + sign their part (server timestamps)
-    getSignedFormPdfUrl     = "GET"  # admin / the child's parent: presigned URL to a signed PDF
+    getSignedFormPdfUrl     = "GET"  # admin / the child's parent: presigned URL to a signed PDF (or, with &fieldId=, an attached file)
+    getFormUploadUrl        = "POST" # parent / trainee: presigned PUT for a form's "File upload" field (formFiles.ts)
     adminListActivities     = "GET"  # admin: upcoming calendar activities to attach a form to
     adminCreateActivity     = "POST" # admin (FORCA): create a special activity in the calendar + attach forms to sign
     # Manage → Forms → First Sign-up Order (same shared integration)

@@ -53,12 +53,15 @@ export async function handler(
 
   let createdAt = new Date().toISOString();
   let createdBy = callerUid;
+  let sessionCopy: Pick<WorkoutPlanItem, 'sessionCopyOf' | 'sessionClassId'> = {};
   if (existingId) {
     const existingRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${existingId}`, SK: 'METADATA' } }));
     const existing = existingRes.Item as WorkoutPlanItem | undefined;
     if (existing) {
       createdAt = existing.createdAt;
       createdBy = existing.createdBy;
+      // A per-session copy stays one — the Put below replaces the whole item.
+      if (existing.sessionCopyOf) sessionCopy = { sessionCopyOf: existing.sessionCopyOf, sessionClassId: existing.sessionClassId };
     }
   }
 
@@ -67,6 +70,7 @@ export async function handler(
     SK: 'METADATA',
     name,
     active: body.active === true,
+    ...sessionCopy,
     createdAt,
     createdBy,
   };

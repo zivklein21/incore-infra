@@ -5,6 +5,7 @@ import { verifyFamilyLink } from '../familyLinks';
 import { listSubmissionsOfTemplate } from './submissions';
 import { parseBrand } from './shared';
 import { ensureSignedPdf, PDF_URL_TTL_SECONDS, presignPdf } from './signedPdf';
+import { isFileAnswer, presignFormFile } from './formFiles';
 
 // GET /getSignedFormPdfUrl?templateId=<id>&submissionId=<id>&brand=incore|forca
 // Auth: Cognito JWT — an admin, the linked PARENT of the submission's child
@@ -28,6 +29,17 @@ export async function handler(
     || uid === sub.childId
     || (uid !== sub.childId && (await verifyFamilyLink(uid, sub.childId)).ok);
   if (!allowed) return json(403, { error: 'forbidden' });
+
+  // &fieldId= → an attached file of that submission instead of its PDF
+  // (formFiles.ts) — available as soon as it was submitted, same access rule.
+  const fieldId = event.queryStringParameters?.fieldId;
+  if (fieldId) {
+    const file = sub.answers[fieldId];
+    const fileUrl = isFileAnswer(file) ? await presignFormFile(brand, file) : null;
+    if (!fileUrl) return json(404, { error: 'file_not_found' });
+    return json(200, { url: fileUrl, expiresIn: PDF_URL_TTL_SECONDS });
+  }
+
   if (sub.status !== 'completed') return json(409, { error: 'not_completed' });
 
   const { key, sha256 } = await ensureSignedPdf(brand, sub, uid);

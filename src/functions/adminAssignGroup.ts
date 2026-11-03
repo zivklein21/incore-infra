@@ -1,10 +1,11 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { DeleteCommand, GetCommand, PutCommand, QueryCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ClassItem, RegistrationItem } from '../lib/entities';
+import { hasActiveForcaMembership, registerMemberOnFutureGroupSessions } from '../lib/sessionInstance';
 
 // POST /adminAssignGroup
 // Body: { memberId: string, groupId: string | null } — null clears the assignment
@@ -89,7 +90,9 @@ export async function handler(
         ddb.send(new UpdateCommand({
           TableName: FORCA_TABLE_NAME,
           Key: { PK: cls.PK, SK: 'METADATA' },
-          UpdateExpression: 'SET allowedMemberIds = :ids ADD capacity :negOne, currentAttendeesCount :negOne',
+          // capacity is a DynamoDB reserved keyword — bare here it fails every call.
+          UpdateExpression: 'SET allowedMemberIds = :ids ADD #capacity :negOne, currentAttendeesCount :negOne',
+          ExpressionAttributeNames: { '#capacity': 'capacity' },
           ExpressionAttributeValues: {
             ':ids': (cls.allowedMemberIds ?? []).filter((id) => id !== memberId),
             ':negOne': -1,
@@ -106,55 +109,8 @@ export async function handler(
   // auto-registered). groupId isn't indexed, so this scans ClassItem the
   // same way adminSaveRecurringSession.ts's own future-instance patch does,
   // an accepted tradeoff at this table's documented ≤50-users-per-brand scale.
-  if (newGroupId) {
-    const start = typeof resolved.profile.membership?.start === 'string' ? new Date(resolved.profile.membership.start as string).getTime() : NaN;
-    const end = typeof resolved.profile.membership?.end === 'string' ? new Date(resolved.profile.membership.end as string).getTime() : NaN;
-    const hasActiveMembership = !Number.isNaN(start) && !Number.isNaN(end) && Date.now() >= start && Date.now() <= end;
-
-    if (hasActiveMembership) {
-      const futureClassesRes = await ddb.send(new ScanCommand({
-        TableName: FORCA_TABLE_NAME,
-        FilterExpression: 'groupId = :gid AND #dt >= :now',
-        ExpressionAttributeNames: { '#dt': 'date' },
-        ExpressionAttributeValues: { ':gid': newGroupId, ':now': nowIso },
-      }));
-      const futureClasses = (futureClassesRes.Items ?? []) as ClassItem[];
-
-      await Promise.all(futureClasses.map(async (cls) => {
-        if ((cls.allowedMemberIds ?? []).includes(memberId)) return;
-        const classId = cls.PK.replace('CLASS#', '');
-
-        await Promise.all([
-          ddb.send(new PutCommand({
-            TableName: FORCA_TABLE_NAME,
-            Item: {
-              PK: cls.PK, SK: `REG#${memberId}`,
-              GSI1PK: `MEMBER#${memberId}`, GSI1SK: `REG##${classId}`,
-              userId: memberId,
-              classId,
-              classDate: cls.date,
-              status: 'REGISTERED',
-              consumedFrom: 'FORCA_AUTO',
-              membershipId: '',
-              targetMonth: '',
-              declaredAttendance: 'pending',
-              actualAttendance: null,
-              registeredAt: nowIso,
-            },
-          })),
-          ddb.send(new UpdateCommand({
-            TableName: FORCA_TABLE_NAME,
-            Key: { PK: cls.PK, SK: 'METADATA' },
-            UpdateExpression: 'SET allowedMemberIds = :ids ADD capacity :one, currentAttendeesCount :one',
-            ExpressionAttributeValues: {
-              ':ids': [...(cls.allowedMemberIds ?? []), memberId],
-              ':one': 1,
-            },
-          })),
-        ]);
-        movedToFutureSessions += 1;
-      }));
-    }
+  if (newGroupId && hasActiveForcaMembership(resolved.profile)) {
+    movedToFutureSessions = await registerMemberOnFutureGroupSessions(memberId, newGroupId);
   }
 
   return json(200, { success: true, movedFromFutureSessions, movedToFutureSessions });

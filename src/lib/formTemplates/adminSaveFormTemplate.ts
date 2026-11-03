@@ -6,7 +6,7 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
 import {
-  defaultRoleFor, normalizeAcknowledgers, normalizeSections, normalizeSettings, normalizeSigners, normalizeTraineeDevice,
+  defaultRoleFor, normalizeAcknowledgers, normalizeSections, isCoachForm, normalizeSettings, normalizeSigners, normalizeTraineeDevice,
   templateContentHash, TemplateValidationError, traineeDeviceFor,
 } from './schema';
 import { writeAudit } from './audit';
@@ -59,11 +59,13 @@ export async function handler(
   }
   // Same system for both brands (INCORE: forms for new members — a minor's
   // parent signs on the member's own device, see familyForms.rolesOnDevice).
-  const signers = normalizeSigners(body.signers, role);
   const rawSettings = (body.settings && typeof body.settings === 'object' ? body.settings : {}) as Record<string, unknown>;
   const settings = normalizeSettings(rawSettings, normalizeTraineeDevice(body.traineeDevice));
+  // A coach form has exactly one participant: the coach (role 'trainee', see TemplateSettings.audience).
+  const coachForm = isCoachForm(settings);
+  const signers = coachForm ? ['trainee' as const] : normalizeSigners(body.signers, role);
   const traineeDevice = traineeDeviceFor(settings.visibleOn);
-  const acknowledgers = normalizeAcknowledgers(body.acknowledgers, signers);
+  const acknowledgers = coachForm ? [] : normalizeAcknowledgers(body.acknowledgers, signers);
   const contentHash = templateContentHash({ signers, sections, traineeDevice, acknowledgers });
 
   const now = new Date().toISOString();

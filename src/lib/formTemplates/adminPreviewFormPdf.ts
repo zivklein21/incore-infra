@@ -35,6 +35,7 @@ export async function handler(
   const bytes = await renderFormPdf({
     title: typeof body.name === 'string' && body.name.trim() ? body.name.trim() : 'טופס ללא שם',
     code: settings.code,
+    numberQuestions: settings.numberQuestions === true,
     version: typeof body.version === 'number' && body.version > 0 ? body.version : 1,
     sections,
     answers: {},

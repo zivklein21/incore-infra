@@ -5,9 +5,10 @@ import { deriveMemberName } from '../entities';
 import { parseBrand } from './shared';
 import { evaluateOutcome } from './logic';
 import {
-  computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listTrainees,
+  computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listFormPeople,
   listSubmissionsOfTemplate, loadRosters, parentOf, targetIncludes, versionToSign,
 } from './submissions';
+import { FileAnswer, isFileAnswer } from './formFiles';
 
 // GET /adminGetFormTracking?templateId=<id>&brand=incore|forca
 // Auth: Cognito JWT, admin only. Per assignment, one row per
@@ -26,7 +27,7 @@ export async function handler(
   const brand = parseBrand(event.queryStringParameters?.brand);
   const head = await getTemplateHead(brand, templateId);
   if (!head) return json(404, { error: 'not_found' });
-  const [assignments, trainees, subs] = await Promise.all([listAssignments(brand, templateId), listTrainees(brand), listSubmissionsOfTemplate(brand, templateId)]);
+  const [assignments, trainees, subs] = await Promise.all([listAssignments(brand, templateId), listFormPeople(brand, head.settings), listSubmissionsOfTemplate(brand, templateId)]);
 
   const rosters = await loadRosters(brand, assignments);
   const parentNames = new Map<string, string>();
@@ -65,6 +66,14 @@ export async function handler(
         outcome: status === 'completed' && sub && t ? evaluateOutcome(head.settings.outcome, t.sections, sub.answers) : null,
         hasPdf: !!sub?.pdfS3Key,
         updatedAt: sub?.updatedAt ?? null,
+        // Attached files (formFiles.ts) — opened via getSignedFormPdfUrl&fieldId=.
+        files: sub && t
+          ? t.sections.flatMap(s => s.fields).filter(f => f.type === 'file')
+            .flatMap(f => {
+              const file = sub.answers[f.id];
+              return isFileAnswer(file) && file.key?.startsWith('signed-forms/') ? [{ fieldId: f.id, label: f.label, name: (file as FileAnswer).name }] : [];
+            })
+          : [],
       });
     }
     rows.sort((x, y) => (x.status === y.status ? x.childName.localeCompare(y.childName, 'he') : x.status === 'completed' ? 1 : y.status === 'completed' ? -1 : 0));
