@@ -77,6 +77,8 @@ export async function handler(
       endDate: session.endDate ?? null,
       className: session.className ?? '',
       location: session.location ?? null,
+      traineeNote: session.traineeNote ?? null,
+      traineeEquipment: session.traineeEquipment ?? [],
       coachName: session.coachName ?? null,
       coachPhone: await resolveCoachPhone(session.coachId),
       groupName: await resolveGroupName(session.groupId),

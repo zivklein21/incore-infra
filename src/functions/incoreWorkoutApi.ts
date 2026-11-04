@@ -26,6 +26,7 @@ import { handler as adminGetSignupFlowConfig } from '../lib/signupFlow/adminGetS
 import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSaveSignupFlowConfig';
 import { handler as getFormWording } from '../lib/formWording/getFormWording';
 import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
+import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -62,6 +63,8 @@ const HANDLERS: Record<string, Handler> = {
   // Built-in forms' wording overrides (Health Declaration, Parental Consent).
   getFormWording,
   adminSaveFormWording,
+  // FORCA: per-session trainee note + equipment list (coach/admin).
+  saveSessionTraineeInfo,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

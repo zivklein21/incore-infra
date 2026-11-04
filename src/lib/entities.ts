@@ -54,6 +54,16 @@ export interface ClassItem {
   // for this session's still-outstanding equipment — prevents re-alerting on
   // every hourly run for the same session.
   equipmentAlertSentAt?: string;
+  // Trainee-facing per-instance info, set by the admin or the session's own
+  // coach (see lib/sessionInfo/saveSessionTraineeInfo.ts): a free-text note
+  // and an ordered free-text "what to bring" list (e.g. "בקבוק מים") —
+  // unrelated to the catalog-backed coach pack list above. Shown on the
+  // trainee/parent upcoming-session card. A changed note pushes to the
+  // session's trainees; traineeNoteUpdatedAt/By record the last change.
+  traineeNote?: string;
+  traineeNoteUpdatedAt?: string;
+  traineeNoteUpdatedBy?: string;
+  traineeEquipment?: string[];
   location?: string;
   // Denormalized at creation time (see createTrainingSession.ts /
   // getCoachOptions.ts) rather than resolved by id on read — a coach lives

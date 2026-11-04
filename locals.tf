@@ -353,6 +353,8 @@ locals {
     # Built-in forms' wording overrides — Health Declaration / Parental Consent (same shared integration)
     getFormWording       = "GET"  # member: a built-in form's admin-edited wording
     adminSaveFormWording = "POST" # admin: save that wording (versioned)
+    # FORCA per-session trainee info (same shared integration)
+    saveSessionTraineeInfo = "POST" # admin / the session's coach: trainee note + equipment list; pushes trainees when the note changes
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

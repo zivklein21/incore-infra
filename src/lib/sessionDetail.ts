@@ -135,6 +135,9 @@ export interface SessionDetail {
   testGroupName: string | null;
   testComponentIds: string[] | null;
   isRunningSession: boolean;
+  /** Trainee-facing note + "what to bring" list — see ClassItem.traineeNote. */
+  traineeNote: string | null;
+  traineeEquipment: string[];
   /** Links this instance back to its RecurringSessionItem template (see
    * lib/sessionInstance.ts's createSessionInstance()) — null for a one-off
    * session created without a template. Lets the admin edit/delete sheets
@@ -271,6 +274,8 @@ export async function resolveSessionDetail(
     testGroupName: access.permissions.testsGrading === 'none' ? null : (session.testGroupName ?? null),
     testComponentIds: access.permissions.testsGrading === 'none' ? null : (session.testComponentIds ?? null),
     isRunningSession: session.isRunningSession === true,
+    traineeNote: session.traineeNote ?? null,
+    traineeEquipment: session.traineeEquipment ?? [],
     recurringSessionId: session.recurringSessionId ?? null,
     roster,
   };
