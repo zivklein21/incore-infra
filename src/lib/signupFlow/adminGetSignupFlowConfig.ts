@@ -2,6 +2,8 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { loadSignupFlow } from './shared';
+import { listTemplateHeads } from '../formTemplates/submissions';
+import { signupCutoffs, withTemplateState } from '../formTemplates/signupTemplates';
 
 // GET /adminGetSignupFlowConfig?brand=incore|forca
 // Auth: Cognito JWT, admin only. The brand's First Sign-up Order steps,
@@ -11,5 +13,6 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   if (!(await isAdmin(getUid(event)))) return json(403, { error: 'forbidden' });
   const brand = event.queryStringParameters?.brand === 'forca' ? 'forca' as const : 'incore' as const;
-  return json(200, { steps: await loadSignupFlow(brand) });
+  const [steps, templates, cutoffs] = await Promise.all([loadSignupFlow(brand), listTemplateHeads(brand), signupCutoffs(brand)]);
+  return json(200, { steps: withTemplateState(steps, templates), cutoffs });
 }

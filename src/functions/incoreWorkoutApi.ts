@@ -27,6 +27,7 @@ import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSav
 import { handler as getFormWording } from '../lib/formWording/getFormWording';
 import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
 import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
+import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -65,6 +66,10 @@ const HANDLERS: Record<string, Handler> = {
   adminSaveFormWording,
   // FORCA: per-session trainee note + equipment list (coach/admin).
   saveSessionTraineeInfo,
+  // FORCA: photo / publication consent.
+  getPhotoConsent,
+  changePhotoConsent,
+  getPhotoConsentPdfUrl,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

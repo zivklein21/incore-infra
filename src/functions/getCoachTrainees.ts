@@ -3,6 +3,7 @@ import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, groupInAccess } from '../lib/coachAccess';
 import { getAllMemberProfiles } from '../lib/memberScan';
+import { allConsentStatuses } from '../lib/photoConsent/store';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import type { GroupItem, MemberProfileItem } from '../lib/entities';
 
@@ -63,6 +64,12 @@ export async function handler(
     ((groupsRes.Items ?? []) as GroupItem[]).map((g) => [g.PK.replace('GROUP#', ''), g.name ?? '']),
   );
 
+  // Best effort: a failure here shouldn't take the trainee list down with it.
+  const consents = await allConsentStatuses().catch((err) => {
+    console.error('[getCoachTrainees] photo consent lookup failed', err);
+    return null;
+  });
+
   const trainees = profiles
     .filter((p) => {
       const role = p.identity?.role ?? p.role;
@@ -80,6 +87,7 @@ export async function handler(
         phone: p.identity?.phone ?? p.phone ?? '',
         groupName: groupNameById.get(p.identity?.groupId ?? '') ?? null,
         age: allAges ? computeAge(p.identity?.birthday ?? p.birthday ?? undefined) : null,
+        photoConsent: consents && p.identity?.accountType !== 'parent_only' ? (consents.get(p.PK.replace('MEMBER#', '')) ?? 'not_approved') : null,
         medicalFlag: allAges && access.permissions.healthDeclarations !== 'none'
           ? Object.values(healthAnswers).some((v) => v === 'yes')
           : false,

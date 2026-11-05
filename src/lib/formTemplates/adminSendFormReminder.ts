@@ -3,7 +3,7 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { getExpoPushToken, sendExpoPush } from '../push';
 import {
-  computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listSubmissionsOfTemplate, parentOf, versionToSign,
+  assignmentKey, computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listSubmissionsOfTemplate, parentOf, versionToSign,
 } from './submissions';
 import { writeAudit } from './audit';
 import { parseBrand } from './shared';
@@ -33,7 +33,7 @@ export async function handler(
   const brand = parseBrand(body.brand);
   const head = await getTemplateHead(brand, templateId);
   if (!head || !head.publishedVersion) return json(404, { error: 'not_found' });
-  const existing = latestByAssignment(await listSubmissionsOfTemplate(brand, templateId), childId).get(assignmentId);
+  const existing = latestByAssignment(await listSubmissionsOfTemplate(brand, templateId), childId).get(assignmentKey(templateId, assignmentId));
   const { version, reuse } = versionToSign(head, existing);
   const t = await getTemplateVersion(brand, templateId, version);
   if (!t) return json(404, { error: 'not_found' });

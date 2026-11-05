@@ -355,6 +355,10 @@ locals {
     adminSaveFormWording = "POST" # admin: save that wording (versioned)
     # FORCA per-session trainee info (same shared integration)
     saveSessionTraineeInfo = "POST" # admin / the session's coach: trainee note + equipment list; pushes trainees when the note changes
+    # FORCA photo / publication consent (same shared integration)
+    getPhotoConsent       = "GET"  # parent (childId) / trainee: where the consent stands + its signed history
+    changePhotoConsent    = "POST" # parent (childId) / trainee: signed change; refusing withdraws at once
+    getPhotoConsentPdfUrl = "GET"  # parent (childId) / trainee: one change's signed PDF
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

@@ -9,7 +9,7 @@ import { getUid, json } from '../http';
 import { formAssignmentKey } from './shared';
 import { resolveFamilyCaller } from './familyForms';
 import type { Answers } from './logic';
-import { Brand, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, latestByAssignment, listSubmissionsOfChild, versionToSign } from './submissions';
+import { assignmentKey, Brand, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, latestByAssignment, listSubmissionsOfChild, versionToSign } from './submissions';
 import { PDF_URL_TTL_SECONDS, signedFormsBucket } from './signedPdf';
 
 // Files a family attaches to a form ("File upload" fields — e.g. a medical
@@ -75,7 +75,7 @@ export async function handler(
   ]);
   const assignment = assignmentRes.Item as FormAssignmentItem | undefined;
   if (!head || head.status !== 'published' || !assignment || assignment.cancelledAt) return json(404, { error: 'not_found' });
-  const { version } = versionToSign(head, latestByAssignment(subs, caller.childId).get(assignmentId));
+  const { version } = versionToSign(head, latestByAssignment(subs, caller.childId).get(assignmentKey(templateId, assignmentId)));
   const t = await getTemplateVersion(caller.brand, templateId, version);
   if (!t?.sections.some(s => s.fields.some(f => f.id === fieldId && f.type === 'file'))) return json(400, { error: 'not_a_file_field' });
 

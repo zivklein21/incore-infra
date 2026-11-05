@@ -1,10 +1,10 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, PutCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, tableForBrand } from '../dynamo';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
-import { formAssignmentKey, formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
-import { SIGNUP_ASSIGNMENT_ID } from './submissions';
+import { formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
+import { syncSignupAssignment } from './signupTemplates';
 import { publishIssues } from './schema';
 import { writeAudit } from './audit';
 
@@ -105,25 +105,4 @@ export async function handler(
   await writeAudit(brand, { action: 'publish', templateId: id, actorUid: uid, detail: { version, requireResign, unarchived: t.status === 'archived' } });
 
   return json(200, { success: true, published: true, version, updatedAt: now });
-}
-
-async function syncSignupAssignment(table: string, templateId: string, isSignup: boolean, uid: string): Promise<void> {
-  const key = formAssignmentKey(templateId, SIGNUP_ASSIGNMENT_ID);
-  const existing = (await ddb.send(new GetCommand({ TableName: table, Key: key }))).Item;
-  const active = !!existing && !existing.cancelledAt;
-  if (isSignup && !active) {
-    await ddb.send(new PutCommand({
-      TableName: table,
-      Item: {
-        ...key, assignmentId: SIGNUP_ASSIGNMENT_ID, templateId, target: { kind: 'new_members' }, adminAnswers: {},
-        version: 0, createdAt: new Date().toISOString(), createdBy: uid,
-      },
-    }));
-  } else if (!isSignup && active) {
-    await ddb.send(new UpdateCommand({
-      TableName: table, Key: key,
-      UpdateExpression: 'SET cancelledAt = :now, cancelledBy = :uid',
-      ExpressionAttributeValues: { ':now': new Date().toISOString(), ':uid': uid },
-    }));
-  }
 }

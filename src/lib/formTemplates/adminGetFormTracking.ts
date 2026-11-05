@@ -5,7 +5,7 @@ import { deriveMemberName } from '../entities';
 import { parseBrand } from './shared';
 import { evaluateOutcome } from './logic';
 import {
-  computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listFormPeople,
+  assignmentKey, computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listFormPeople,
   listSubmissionsOfTemplate, loadRosters, parentOf, targetIncludes, versionToSign,
 } from './submissions';
 import { FileAnswer, isFileAnswer } from './formFiles';
@@ -44,7 +44,7 @@ export async function handler(
   for (const a of assignments.sort((x, y) => y.createdAt.localeCompare(x.createdAt))) {
     const rows = [];
     for (const tr of trainees.filter(x => targetIncludes(a.target, x, a.createdAt, rosters))) {
-      const existing = latestByAssignment(subs, tr.uid).get(a.assignmentId);
+      const existing = latestByAssignment(subs, tr.uid).get(assignmentKey(a.templateId, a.assignmentId));
       const { version, reuse } = head.publishedVersion ? versionToSign(head, existing) : { version: existing?.version ?? 0, reuse: !!existing };
       const t = version ? await getTemplateVersion(brand, templateId, version) : null;
       const sub = reuse ? existing : undefined;

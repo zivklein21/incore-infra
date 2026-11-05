@@ -8,6 +8,7 @@ import { getAllMemberProfiles } from '../lib/memberScan';
 import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import type { MemberProfileItem } from '../lib/entities';
+import { allConsentStatuses } from '../lib/photoConsent/store';
 
 const PHOTO_URL_EXPIRY_SECONDS = 900;
 
@@ -52,6 +53,11 @@ export async function handler(
 
   const brand = event.queryStringParameters?.brand === 'forca' ? 'forca' as const : 'incore' as const;
   const profiles = await getAllMemberProfiles(tableForBrand(brand));
+  // Best effort: a failure here shouldn't take the member list down with it.
+  const consents = brand !== 'forca' ? null : await allConsentStatuses().catch((err) => {
+    console.error('[getAllMembers] photo consent lookup failed', err);
+    return null;
+  });
 
   const members = await Promise.all(profiles
     .filter((p) => (p.identity?.role ?? p.role) !== 'admin')
@@ -121,6 +127,7 @@ export async function handler(
         birthday,
         photoUrl,
         parentalConsentValid: !!pc?.isApproved && !!pc.expiresAt && new Date(pc.expiresAt) > new Date(),
+        photoConsentStatus: isForcaTraineeRow && consents ? (consents.get(id) ?? 'not_approved') : null,
       };
     }));
 

@@ -4,6 +4,8 @@ import { ddb, tableForBrand } from '../dynamo';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { normalizeSteps, signupFlowKey } from './shared';
+import { listTemplateHeads } from '../formTemplates/submissions';
+import { applySignupToggles, signupCutoffs, withTemplateState } from '../formTemplates/signupTemplates';
 
 // POST /adminSaveSignupFlowConfig
 // Body: { steps: { formId: string, included: boolean }[], brand?: 'incore' | 'forca' }
@@ -16,7 +18,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   if (!(await isAdmin(getUid(event)))) return json(403, { error: 'forbidden' });
 
-  let body: { steps?: unknown; brand?: unknown };
+  let body: { steps?: unknown; brand?: unknown; applyTemplates?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -31,5 +33,11 @@ export async function handler(
     Item: { ...signupFlowKey, steps, updatedAt: new Date().toISOString() },
   }));
 
-  return json(200, { success: true, steps });
+  // Only the First Sign-up Order page sends this. Without it the save is
+  // order-only: older app builds send every template as excluded, which must
+  // never cancel a live sign-up form, and Form Templates' remove/restore
+  // re-saves the steps it loaded.
+  if (body.applyTemplates === true) await applySignupToggles(brand, steps, getUid(event));
+
+  return json(200, { success: true, steps: withTemplateState(steps, await listTemplateHeads(brand)), cutoffs: await signupCutoffs(brand) });
 }

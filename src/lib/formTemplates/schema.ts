@@ -603,9 +603,8 @@ export function publishIssues(t: { name: string; signers: SignerRole[]; sections
   if (!t.sections.length) issues.push({ key: 'empty', message: 'The form has no sections.' });
   // A signer with no signature block approves instead (scrolls to the end,
   // taps Approve — see submitFormPart.ts), so a missing block isn't an issue.
-  if (t.multiSigner && t.visibleOn === 'trainee' && t.signers.includes('parent')) {
-    issues.push({ key: 'visible-parent', message: "The parent must sign, but the form is only shown on the trainee's device." });
-  }
+  // visibleOn only places the TRAINEE's part: the parent always signs on the
+  // parent's phone (rolesOnDevice), so every combination with a parent is valid.
   const hasChildSection = new Set(t.sections.map(s => s.parentId).filter(Boolean) as string[]);
   t.sections.forEach((s, i) => {
     if (s.details && !s.fields.length) {

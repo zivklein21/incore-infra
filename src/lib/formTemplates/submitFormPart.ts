@@ -10,7 +10,7 @@ import { Answers, answerFormatError, canFill, detailsKey, FieldAnswer, missingRe
 import { notifyNextSigner, participatingRoles, resolveFamilyCaller, rolesOnDevice } from './familyForms';
 import {
   computeSubmissionStatus, FormAssignmentItem, formsTable, FormSubmissionItem, getProfile, getTemplateHead, getTemplateVersion,
-  latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign, isCoachProfile,
+  assignmentKey, latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign, isCoachProfile,
 } from './submissions';
 import type { SignatureRecord } from './pdf/renderFormPdf';
 import { ensureSignedPdf } from './signedPdf';
@@ -70,7 +70,7 @@ export async function handler(
     return json(404, { error: 'not_found' });
   }
 
-  const existing = latestByAssignment(subs, caller.childId).get(assignmentId);
+  const existing = latestByAssignment(subs, caller.childId).get(assignmentKey(templateId, assignmentId));
   const { version, reuse } = versionToSign(head, existing);
   const t = await getTemplateVersion(caller.brand, templateId, version);
   if (!t) return json(404, { error: 'not_found' });

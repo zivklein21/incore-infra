@@ -6,9 +6,10 @@ import {
   AdminRespondToAuthChallengeCommand,
 } from '@aws-sdk/client-cognito-identity-provider';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb } from '../lib/dynamo';
+import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
+import { generateInitialPassword, sendWelcomeEmail } from '../lib/welcomeEmail';
 import { deriveMemberName, type MemberProfileItem, type FamilyLinkItem, type SwitchNonceItem } from '../lib/entities';
 
 const NONCE_TTL_SECONDS = 60;
@@ -102,7 +103,37 @@ export async function handler(
       ChallengeResponses: { USERNAME: childUid, ANSWER: secret },
     }));
 
-    const auth = respondRes.AuthenticationResult;
+    // A child the admin created but who never logged in herself is still in
+    // Cognito's FORCE_CHANGE_PASSWORD state (adminCreateUser.ts sets a
+    // TemporaryPassword), so Cognito answers even a passed custom challenge
+    // with NEW_PASSWORD_REQUIRED instead of tokens. The parent switching in
+    // to fill her forms is what activates her account: answer the challenge
+    // with a fresh password (her emailed temporary one stops working at
+    // that moment, Cognito has no way to activate without setting one) and
+    // email her the new login details.
+    let auth = respondRes.AuthenticationResult;
+    if (respondRes.ChallengeName === 'NEW_PASSWORD_REQUIRED' && respondRes.Session) {
+      const newPassword = generateInitialPassword();
+      const activateRes = await cognito.send(new AdminRespondToAuthChallengeCommand({
+        UserPoolId: userPoolId,
+        ClientId: clientId,
+        ChallengeName: 'NEW_PASSWORD_REQUIRED',
+        Session: respondRes.Session,
+        ChallengeResponses: { USERNAME: childUid, NEW_PASSWORD: newPassword },
+      }));
+      auth = activateRes.AuthenticationResult;
+      const childEmail = childProfile.identity?.email;
+      console.log(`[switchProfile] activated never-logged-in child ${childUid} via parent ${callerUid}`);
+      if (childEmail) {
+        const brand = table === FORCA_TABLE_NAME ? 'forca' : 'incore';
+        await sendWelcomeEmail(childEmail, deriveMemberName(childProfile), newPassword, brand).catch((err) => {
+          console.error('[switchProfile] activation email failed — child needs a password reset', childUid, err);
+        });
+      } else {
+        console.error('[switchProfile] activated child has no email on file — needs a password reset', childUid);
+      }
+    }
+
     if (!auth?.IdToken || !auth.AccessToken || !auth.RefreshToken || auth.ExpiresIn == null) {
       throw new Error('CUSTOM_AUTH challenge did not issue tokens');
     }

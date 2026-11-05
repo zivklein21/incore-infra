@@ -196,6 +196,7 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     signupOrder: signupFlow.signupOrder,
     // Custom sign-up forms the app opens before the home screen (after the built-in ones).
     pendingSignupForms: signupGate.mine,
+    signupFlowForms: signupGate.flow,
     signupFormsWaitingOnParent: signupGate.waitingOnParent,
     healthDeclaration,
     healthDeclarationValid,

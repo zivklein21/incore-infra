@@ -185,13 +185,17 @@ export async function listSubmissionsOfChild(brand: Brand, childId: string): Pro
   })) as unknown as FormSubmissionItem[];
 }
 
-/** Newest submission per assignment (SKs sort by createdAt within child+assignment). */
+/** An assignment id is unique only within its template: every sign-up form's is SIGNUP_ASSIGNMENT_ID. */
+export const assignmentKey = (templateId: string, assignmentId: string) => `${templateId}#${assignmentId}`;
+
+/** Newest submission per template + assignment (read with assignmentKey). */
 export function latestByAssignment(subs: FormSubmissionItem[], childId: string): Map<string, FormSubmissionItem> {
   const out = new Map<string, FormSubmissionItem>();
   for (const s of subs) {
     if (s.childId !== childId) continue;
-    const prev = out.get(s.assignmentId);
-    if (!prev || s.createdAt > prev.createdAt) out.set(s.assignmentId, s);
+    const key = assignmentKey(s.templateId, s.assignmentId);
+    const prev = out.get(key);
+    if (!prev || s.createdAt > prev.createdAt) out.set(key, s);
   }
   return out;
 }

@@ -9,9 +9,12 @@ import { answerFormatError, canFill, evaluateOutcome, missingRequired, pruneHidd
 import { plain, visualOrder } from '../src/lib/formTemplates/pdf/rtlText';
 import { fitSignature, israelDateTime, renderFormPdf } from '../src/lib/formTemplates/pdf/renderFormPdf';
 import { parseRichText } from '../src/lib/formTemplates/richText';
-import { computeSubmissionStatus, targetIncludes } from '../src/lib/formTemplates/submissions';
+import { assignmentKey, computeSubmissionStatus, latestByAssignment, targetIncludes, type FormSubmissionItem } from '../src/lib/formTemplates/submissions';
 import { rolesOnDevice } from '../src/lib/formTemplates/familyForms';
 import { applySignupFlow, normalizeSteps } from '../src/lib/signupFlow/shared';
+import { inParentSignupFlow, inTraineeSignupFlow, orphanedSignedForms, parentOwesAtSignup, parentPendingCount, parentSection, withParentSections } from '../src/lib/formTemplates/parentForms';
+import { applyConsentChange, consentPdfContent, consentStatus, currentConsent, isPhotoConsentForm, NO_CONSENT, signatureError } from '../src/lib/photoConsent/shared';
+import { signupChanges, sortBySignupOrder, withTemplateState } from '../src/lib/formTemplates/signupTemplates';
 
 const vis = (text: string) => visualOrder(plain(text)).map(c => c.c).join('');
 
@@ -80,14 +83,16 @@ test('publishIssues: signature per required signer, no empty sections, choice op
     sec('c', { fields: [{ id: 'sig', type: 'signature', label: 'S', required: true, filledBy: 'parent' }] }),
   ];
   const keys = publishIssues({ name: 'F', signers: ['parent', 'trainee'], sections, visibleOn: 'both', multiSigner: true }).map(i => i.key);
-  assert.ok(keys.includes('sig-trainee'));
+  // No signature box is fine: that signer approves instead.
+  assert.ok(!keys.includes('sig-trainee'));
   assert.ok(!keys.includes('sig-parent'));
   assert.ok(keys.includes('empty-a'));
   assert.ok(keys.includes('opts-r'));
   const ok = publishIssues({ name: 'F', signers: ['parent'], sections: sections.slice(2), visibleOn: 'parent', multiSigner: true });
   assert.deepEqual(ok, []);
-  const hidden = publishIssues({ name: 'F', signers: ['parent'], sections: sections.slice(2), visibleOn: 'trainee', multiSigner: true });
-  assert.deepEqual(hidden.map(i => i.key), ['visible-parent']);
+  // Parent on the parent's phone, trainee on her own: each signs from their own device.
+  const ownDevices = publishIssues({ name: 'F', signers: ['parent', 'trainee'], sections: sections.slice(2), visibleOn: 'trainee', multiSigner: true });
+  assert.deepEqual(ownDevices, []);
 });
 
 test('logic: a hidden parent section hides its sub-sections; signer fields go to whoever fills first', () => {
@@ -214,4 +219,155 @@ test('outcome: approved only when every condition matches (photo consent: parent
   assert.equal(evaluateOutcome(outcome, sections, { p: 'yes', c: 'no' })?.text, 'לא מאושר');
   assert.equal(evaluateOutcome(outcome, sections, { p: 'no', c: 'no' })?.approved, false);
   assert.equal(evaluateOutcome(undefined, sections, {}), null);
+});
+
+const tpl = (id: string, over: Partial<{ status: string; publishedVersion: number; kind: 'signup' | 'activity'; audience: string }> = {}) => ({
+  id, status: over.status ?? 'published', publishedVersion: over.publishedVersion ?? 1,
+  settings: { kind: over.kind ?? 'activity', audience: over.audience },
+});
+
+test('sign-up order: a template toggle shows the real state, whatever the saved step says', () => {
+  const steps = [{ formId: 'template:a', included: false }, { formId: 'template:b', included: true }, { formId: 'template:gone', included: true }];
+  assert.deepEqual(withTemplateState(steps, [tpl('a', { kind: 'signup' }), tpl('b'), tpl('c', { kind: 'signup' })]), [
+    { formId: 'template:a', included: true },
+    { formId: 'template:b', included: false },
+    { formId: 'template:c', included: true },
+  ]);
+});
+
+test('sign-up order: drafts, archived and coach forms can never be included', () => {
+  const steps = [{ formId: 'template:d', included: true }, { formId: 'template:x', included: true }, { formId: 'template:k', included: true }];
+  const templates = [tpl('d', { status: 'draft', publishedVersion: 0, kind: 'signup' }), tpl('x', { status: 'archived', kind: 'signup' }), tpl('k', { audience: 'coaches' })];
+  assert.ok(withTemplateState(steps, templates).every(s => !s.included));
+  assert.deepEqual(signupChanges(steps, templates), []);
+});
+
+test('sign-up order: toggles only change what differs, and leave unlisted templates alone', () => {
+  const a = tpl('a'); const b = tpl('b', { kind: 'signup' }); const c = tpl('c', { kind: 'signup' }); const d = tpl('d', { kind: 'signup' });
+  const changes = signupChanges([
+    { formId: 'template:a', included: true }, { formId: 'template:b', included: true }, { formId: 'template:c', included: false },
+  ], [a, b, c, d]);
+  assert.deepEqual(changes.map(x => [x.template.id, x.signup, x.kindChanged]), [['a', true, true], ['b', true, false], ['c', false, true]]);
+});
+
+test('sign-up order: pending forms follow the admin order, unlisted last', () => {
+  const steps = [{ formId: 'template:b', included: true }, { formId: 'registration', included: false }, { formId: 'template:a', included: true }];
+  const ids = sortBySignupOrder([{ templateId: 'z' }, { templateId: 'a' }, { templateId: 'b' }, { templateId: 'y' }], steps).map(f => f.templateId);
+  assert.deepEqual(ids, ['b', 'a', 'z', 'y']);
+});
+
+test('a form switched on after an account exists never reaches that account', () => {
+  const on = '2026-11-04T10:00:00.000Z';
+  assert.equal(targetIncludes({ kind: 'new_members' }, { uid: 'old', createdAt: '2026-11-01T00:00:00.000Z' }, on), false);
+  assert.equal(targetIncludes({ kind: 'new_members' }, { uid: 'legacy' }, on), false);
+  assert.equal(targetIncludes({ kind: 'new_members' }, { uid: 'new', createdAt: '2026-11-04T11:00:00.000Z' }, on), true);
+});
+
+const row = (over: Record<string, unknown> = {}) => ({ status: 'pending_parent', myRoles: [] as string[], waiting: [] as string[], signers: ['parent', 'trainee'], acknowledgers: [], ...over });
+
+test('parent forms: to sign only while the parent is missing', () => {
+  assert.equal(parentSection(row({ myRoles: ['parent', 'trainee'] })), 'to_sign');
+  // Parent signed, the trainee still has to — on her own phone, or on the parent's.
+  assert.equal(parentSection(row({ status: 'pending_child', waiting: ['trainee'] })), 'waiting_trainee');
+  assert.equal(parentSection(row({ status: 'pending_child', myRoles: ['trainee'] })), 'waiting_trainee');
+});
+
+test('parent forms: a trainee-only form never asks the parent', () => {
+  assert.equal(parentSection(row({ status: 'pending_child', signers: ['trainee'], myRoles: ['trainee'] })), 'waiting_trainee');
+  const counted = withParentSections([row({ status: 'pending_child', signers: ['trainee'], myRoles: ['trainee'] }), row({ myRoles: ['parent'] }), row({ status: 'completed' })]);
+  assert.equal(parentPendingCount(counted), 1);
+});
+
+test('parent forms: completed forms follow who signed and the admin setting', () => {
+  assert.equal(parentSection(row({ status: 'completed', showIn: 'trainee' })), 'signed');
+  assert.equal(parentSection(row({ status: 'completed', signers: ['trainee'], showIn: 'both' })), 'signed');
+  assert.equal(parentSection(row({ status: 'completed', signers: ['trainee'], showIn: 'trainee' })), 'hidden');
+});
+
+const signedSub = (id: string, over: Record<string, unknown> = {}) => ({
+  submissionId: id, templateId: 't', assignmentId: 'signup', childId: 'c', status: 'completed', createdAt: '2026-11-01', completedAt: '2026-11-01', ...over,
+}) as never;
+
+test('signed forms: nothing signed is lost when its assignment changes', () => {
+  // Shown already → not repeated. Re-sign required → previous version. Assignment ended → still signed.
+  assert.deepEqual(orphanedSignedForms([signedSub('a')], 'c', [{ templateId: 't', assignmentId: 'signup', submissionId: 'a' }]), []);
+  const resigned = orphanedSignedForms([signedSub('a')], 'c', [{ templateId: 't', assignmentId: 'signup', submissionId: null }]);
+  assert.equal(resigned[0].previousVersion, true);
+  const ended = orphanedSignedForms([signedSub('a')], 'c', []);
+  assert.equal(ended[0].previousVersion, false);
+  assert.deepEqual(orphanedSignedForms([signedSub('a', { status: 'pending_child' }), signedSub('b', { childId: 'other' })], 'c', []), []);
+});
+
+test('photo consent: approved only when both agree', () => {
+  assert.equal(consentStatus(NO_CONSENT), 'not_approved');
+  assert.equal(consentStatus({ parent: 'agree', trainee: null }), 'pending');
+  assert.equal(consentStatus({ parent: 'refuse', trainee: 'agree' }), 'pending');
+  assert.equal(consentStatus({ parent: 'agree', trainee: 'agree' }), 'approved');
+});
+
+test('photo consent: either side refusing revokes at once and needs both again', () => {
+  const approved = { parent: 'agree', trainee: 'agree' } as const;
+  const revoked = applyConsentChange(approved, 'trainee', 'refuse');
+  assert.equal(consentStatus(revoked), 'not_approved');
+  // The parent's earlier agreement doesn't survive: agreeing again asks the other side.
+  const again = applyConsentChange(revoked, 'trainee', 'agree');
+  assert.equal(consentStatus(again), 'pending');
+  assert.equal(consentStatus(applyConsentChange(again, 'parent', 'agree')), 'approved');
+});
+
+test('photo consent: the latest of the form and a change wins', () => {
+  const form = { approved: true, at: '2026-11-02' };
+  assert.deepEqual(currentConsent(null, form), { parent: 'agree', trainee: 'agree' });
+  assert.deepEqual(currentConsent(null, { approved: false, at: '2026-11-02' }), NO_CONSENT);
+  assert.deepEqual(currentConsent({ parent: 'refuse', trainee: null, updatedAt: '2026-11-03' }, form), { parent: 'refuse', trainee: null });
+  assert.deepEqual(currentConsent({ parent: 'refuse', trainee: null, updatedAt: '2026-11-01' }, form), { parent: 'agree', trainee: 'agree' });
+  assert.equal(isPhotoConsentForm('הודעת פרטיות והסכמה לצילום'), true);
+  assert.equal(isPhotoConsentForm('תקנון ותנאי הרשמה'), false);
+});
+
+test('photo consent: a change must really be signed', () => {
+  assert.equal(signatureError('', ['M1,1']), 'missing_name');
+  assert.equal(signatureError('דנה', []), 'missing_signature');
+  assert.equal(signatureError('דנה', ['M1,1 L2,2']), null);
+});
+
+test('photo consent: each change renders a signed PDF', async () => {
+  const { sections, answers } = consentPdfContent({ role: 'parent', decision: 'refuse', status: 'not_approved', childName: 'נועה' });
+  const bytes = await renderFormPdf({
+    title: 'הסכמה לצילום ולפרסום', code: 'PHOTO-CONSENT', version: 1, sections, answers,
+    signatures: [{ fieldId: 'signature', role: 'parent', userId: 'u', name: 'דנה', paths: ['M1,1 L20,20'], signedAt: '2026-11-04T12:00:00Z', device: 'parent_phone', version: 1 }],
+    submissionId: 'x', childName: 'נועה', generatedAt: new Date(),
+  });
+  assert.ok((await PDFDocument.load(bytes)).getPageCount() >= 1);
+});
+
+test('first login: the parent is held only by their own part, or a trainee part that must happen on their phone', () => {
+  assert.equal(parentOwesAtSignup({ myRoles: ['parent', 'trainee'], traineeDevice: 'either' }), true);
+  assert.equal(parentOwesAtSignup({ myRoles: ['parent'], traineeDevice: 'own_phone' }), true);
+  // Parent already signed: the trainee can do hers on her own phone.
+  assert.equal(parentOwesAtSignup({ myRoles: ['trainee'], traineeDevice: 'either' }), false);
+  assert.equal(parentOwesAtSignup({ myRoles: ['trainee'], traineeDevice: 'parent_phone' }), true);
+  assert.equal(parentOwesAtSignup({ myRoles: [], traineeDevice: 'parent_phone' }), false);
+});
+
+test('two sign-up forms share an assignment id, but never each other\'s signature', () => {
+  const sub = (templateId: string, createdAt: string) => ({ templateId, assignmentId: 'signup', childId: 'c', createdAt }) as FormSubmissionItem;
+  const latest = latestByAssignment([sub('terms', '2026-11-05T09:00:00Z'), sub('terms', '2026-11-05T09:09:00Z'), sub('health', '2026-11-05T08:00:00Z')], 'c');
+  assert.equal(latest.get(assignmentKey('terms', 'signup'))?.createdAt, '2026-11-05T09:09:00Z');
+  assert.equal(latest.get(assignmentKey('health', 'signup'))?.createdAt, '2026-11-05T08:00:00Z');
+  assert.equal(latest.get(assignmentKey('photo', 'signup')), undefined);
+});
+
+test('sign-up steps: a user\'s own forms stay steps once done; other people\'s and ended forms never are', () => {
+  const row = (r: object) => ({ myRoles: [], deviceRoles: ['parent'], signedRoles: [], ackRoles: [], traineeDevice: 'own_phone', ...r });
+  assert.equal(inParentSignupFlow(row({ myRoles: ['parent'] })), true);
+  assert.equal(inParentSignupFlow(row({ signedRoles: ['parent'] })), true);
+  // Trainee-only form on her own phone: not a step for the parent.
+  assert.equal(inParentSignupFlow(row({ deviceRoles: [], signedRoles: ['trainee'] })), false);
+  assert.equal(inParentSignupFlow(row({ traineeDevice: 'parent_phone', deviceRoles: ['trainee'], signedRoles: ['trainee'] })), true);
+  // An ended form the parent signed has no part on the device any more.
+  assert.equal(inParentSignupFlow(row({ deviceRoles: [], signedRoles: ['parent'] })), false);
+  assert.equal(inTraineeSignupFlow(row({ deviceRoles: ['trainee'], myRoles: ['trainee'] })), true);
+  assert.equal(inTraineeSignupFlow(row({ deviceRoles: ['trainee'], signedRoles: ['trainee'] })), true);
+  assert.equal(inTraineeSignupFlow(row({ deviceRoles: ['trainee'], signedRoles: ['parent'] })), false);
 });

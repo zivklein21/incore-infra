@@ -1,14 +1,18 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { ddb } from '../dynamo';
 import { getUid, json } from '../http';
+import { resolveMemberProfile } from '../memberLookup';
 import { FamilyCaller, participatingRoles, resolveFamilyCaller, rolesOnDevice } from './familyForms';
 import {
-  computeSubmissionStatus, getProfile, getTemplateVersion, latestByAssignment, listAssignments, listSubmissionsOfChild,
+  assignmentKey, computeSubmissionStatus, getProfile, getTemplateVersion, latestByAssignment, listAssignments, listSubmissionsOfChild,
   listTemplateHeads, loadRosters, parentOf, SIGNUP_ASSIGNMENT_ID, targetIncludes, versionToSign,
   isCoachProfile,
 } from './submissions';
 import { isCoachForm } from './schema';
 import { prefillValues } from './prefill';
 import { evaluateOutcome } from './logic';
+import { orphanedSignedForms, parentPendingCount, withParentSections } from './parentForms';
 
 // GET /getMyForms?childId=<uid>
 // Auth: Cognito JWT, either brand (the caller's profile table decides). A
@@ -38,11 +42,40 @@ export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const uid = getUid(event);
+  if (event.queryStringParameters?.scope === 'family') return json(200, await familyForms(uid));
   const caller = await resolveFamilyCaller(uid, event.queryStringParameters?.childId || undefined);
   if (!caller) return json(403, { error: 'forbidden' });
-  const forms = await formsForCaller(caller);
-  if (!forms) return json(404, { error: 'member_not_found' });
-  return json(200, { forms, pendingCount: forms.filter(f => f.myRoles.length > 0).length });
+  const rows = await formsForCaller(caller);
+  if (!rows) return json(404, { error: 'member_not_found' });
+  if (caller.device !== 'parent_phone') return json(200, { forms: rows, pendingCount: rows.filter(f => f.myRoles.length > 0).length });
+  const forms = withParentSections(rows);
+  return json(200, { forms, pendingCount: parentPendingCount(forms) });
+}
+
+/**
+ * ?scope=family — every linked child's forms in one call, for the parent's
+ * forms card. Children come from the caller's own FAMILY# links and each one
+ * still goes through resolveFamilyCaller's link check, so nothing here can
+ * reach a child who isn't theirs.
+ */
+async function familyForms(uid: string) {
+  const self = await resolveMemberProfile(uid);
+  if (!self) return { children: [], pendingCount: 0 };
+  const links = await ddb.send(new QueryCommand({
+    TableName: self.table,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'FAMILY#' },
+  }));
+  const children = [];
+  for (const link of links.Items ?? []) {
+    const childId = String(link.childUid ?? String(link.SK).replace(/^FAMILY#/, ''));
+    const caller = await resolveFamilyCaller(uid, childId);
+    const rows = caller ? await formsForCaller(caller) : null;
+    if (!rows) continue;
+    const forms = withParentSections(rows);
+    children.push({ childId, forms, pendingCount: parentPendingCount(forms) });
+  }
+  return { children, pendingCount: children.reduce((sum, c) => sum + c.pendingCount, 0) };
 }
 
 export type MyFormRow = {
@@ -73,7 +106,7 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
     if (!head || isCoachForm(head.settings) !== callerIsCoach || !targetIncludes(a.target, trainee, a.createdAt, rosters)) continue;
     // A sign-up form's own assignment only counts while the form IS a sign-up form.
     if (a.assignmentId === SIGNUP_ASSIGNMENT_ID && head.settings.kind !== 'signup') continue;
-    const existing = latest.get(a.assignmentId);
+    const existing = latest.get(assignmentKey(a.templateId, a.assignmentId));
     const { version, reuse } = versionToSign(head, existing);
     const t = await getTemplateVersion(caller.brand, a.templateId, version);
     if (!t) continue;
@@ -127,6 +160,52 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       outcome: status === 'completed' && sub ? evaluateOutcome(head.settings.outcome, t.sections, sub.answers) : null,
       hasPdf: !!sub?.pdfS3Key,
       assignedAt: a.createdAt,
+    });
+  }
+
+  // A signature is never lost from view: a version that was re-signed past,
+  // or a form whose assignment ended (cancelled, archived, no longer a
+  // sign-up form, moved group) has no row above but stays listed as signed.
+  for (const { sub, previousVersion } of orphanedSignedForms(subs, caller.childId, forms)) {
+    const t = await getTemplateVersion(caller.brand, sub.templateId, sub.version);
+    if (!t || isCoachForm(t.settings) !== callerIsCoach) continue;
+    const head = heads.find(h => h.id === sub.templateId);
+    const settings = head?.settings ?? t.settings;
+    forms.push({
+      templateId: sub.templateId,
+      assignmentId: sub.assignmentId,
+      submissionId: sub.submissionId,
+      title: t.name,
+      code: t.settings.code,
+      description: t.settings.description,
+      required: t.settings.required,
+      numberQuestions: t.settings.numberQuestions === true,
+      audience: isCoachForm(t.settings) ? 'coaches' : 'members',
+      beforeFirstTraining: false,
+      kind: sub.assignmentId === SIGNUP_ASSIGNMENT_ID ? 'signup' : 'activity',
+      activity: null,
+      version: sub.version,
+      previousVersion,
+      signers: t.signers,
+      acknowledgers: t.acknowledgers,
+      traineeDevice: t.traineeDevice,
+      sections: t.sections,
+      status: 'completed',
+      deviceRoles: [],
+      myRoles: [],
+      waiting: [],
+      signedRoles: sub.signedRoles,
+      ackRoles: sub.ackRoles,
+      answers: sub.answers,
+      answeredBy: sub.answeredBy,
+      signatures: sub.signatures.map(s => ({ fieldId: s.fieldId, role: s.role, name: s.name, paths: s.paths, signedAt: s.signedAt })),
+      prefill,
+      completedAt: sub.completedAt ?? null,
+      showIn: settings.showIn,
+      // A replaced version's result no longer applies — the current one decides.
+      outcome: previousVersion ? null : evaluateOutcome(settings.outcome, t.sections, sub.answers),
+      hasPdf: !!sub.pdfS3Key,
+      assignedAt: sub.createdAt,
     });
   }
 
