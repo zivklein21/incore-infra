@@ -448,7 +448,7 @@ locals {
 
   # "report" logs what the check before a charge would cancel; "enforce" cancels
   # (lib/chargeSafety.ts). Must be "enforce" before the 1st of the month.
-  charge_safety_mode = "report"
+  charge_safety_mode = "enforce"
   charge_functions   = ["chargeForcaSubscriptions", "chargeHypBillingAgreements", "adminChargeHypAgreementNow", "adminRunHypBillingCycle"]
 
   cognito_custom_auth_functions = [
