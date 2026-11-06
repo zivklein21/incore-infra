@@ -21,6 +21,13 @@ resource "aws_apigatewayv2_stage" "api_stage" {
   api_id      = aws_apigatewayv2_api.incore_api.id
   name        = "$default"
   auto_deploy = true
+
+  # Access logging (-> /aws/apigateway/incore-api) was enabled directly in the
+  # AWS console, never in Terraform — without this, every apply would
+  # silently switch it back off.
+  lifecycle {
+    ignore_changes = [access_log_settings]
+  }
 }
 
 # Create the Cognito Authorizer to secure our API endpoints
@@ -74,6 +81,32 @@ resource "aws_lambda_permission" "apigw" {
   function_name = aws_lambda_function.fn[each.key].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.incore_api.execution_arn}/*/*"
+}
+
+# ── Routes sharing incoreWorkoutApi's single integration ─────────────────────
+# See locals.tf's incore_workout_routes / incoreWorkoutApi.ts: extra routes
+# cost nothing against the 300-integrations-per-API cap, new integrations do.
+# aws_lambda_permission.apigw's /*/* source_arn already covers these.
+
+resource "aws_apigatewayv2_route" "incore_workout" {
+  for_each = local.incore_workout_routes
+
+  api_id    = aws_apigatewayv2_api.incore_api.id
+  route_key = "${each.value} /${each.key}"
+  target    = "integrations/${aws_apigatewayv2_integration.fn["incoreWorkoutApi"].id}"
+
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito_auth.id
+}
+
+# The first (failed, partial) deploy of these endpoints had already created
+# an integration for the then-standalone getMyWorkoutJournal Lambda before
+# hitting the cap. Re-key it onto incoreWorkoutApi so Terraform updates it in
+# place (new integration_uri) instead of destroying one and creating another
+# — a create-before-destroy race there would trip the cap again.
+moved {
+  from = aws_apigatewayv2_integration.fn["getMyWorkoutJournal"]
+  to   = aws_apigatewayv2_integration.fn["incoreWorkoutApi"]
 }
 
 # ── Dedicated OPTIONS routes for browser CORS preflight ─────────────────────

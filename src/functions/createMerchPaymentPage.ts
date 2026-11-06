@@ -4,7 +4,7 @@ import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getMemberFirstLastName, getMemberFullName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
-import { createHypSignedPaymentUrl, HypSignError } from '../lib/hypClient';
+import { createHypSignedPaymentUrl, HypSignError, redactHypFields } from '../lib/hypClient';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProductItem } from '../lib/entities';
 
@@ -177,7 +177,7 @@ export async function handler(
       ExpressionAttributeValues: { ':failed': 'failed', ':now': new Date().toISOString() },
     }));
     if (err instanceof HypSignError) {
-      return json(502, { error: 'hyp_sign_failed', ccode: err.ccode, hypFields: err.fields });
+      return json(502, { error: 'hyp_sign_failed', ccode: err.ccode, hypFields: redactHypFields(err.fields) });
     }
     return json(502, { error: 'hyp_sign_failed' });
   }

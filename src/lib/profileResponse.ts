@@ -5,6 +5,8 @@ import { ddb } from './dynamo';
 import { resolveMemberProfile } from './memberLookup';
 import { s3, BUCKET_NAME } from './s3';
 import { computeComplianceFlags, type ForcaBillingAgreementItem, type GroupItem, type MembershipItem } from './entities';
+import { applySignupFlow, loadSignupFlow } from './signupFlow/shared';
+import { signupGateFor } from './formTemplates/signupGate';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -61,10 +63,19 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   // configured form has zero questions (submits as {}), leaving members
   // stuck being routed back to a form that already succeeded.
   const registrationFormFilled = forms.registration_form === true;
+  const rawFlags = computeComplianceFlags(profile);
+  // Health validity (below) is about the form itself, so it reads the raw
+  // flag; the requires* fields returned for routing go through the brand's
+  // First Sign-up Order (excluded forms never gate) — see signupFlow/shared.ts.
+  const { requiresHealthDeclaration } = rawFlags;
+  const signupFlow = applySignupFlow(rawFlags, await loadSignupFlow(profile.identity?.brand ?? 'incore'));
   const {
-    requiresRegistrationForm, requiresHealthDeclaration, requiresPoliciesAgreement,
+    requiresRegistrationForm, requiresPoliciesAgreement,
     requiresParentalAuthorization, requiresOrthopedicForm,
-  } = computeComplianceFlags(profile);
+  } = signupFlow.flags;
+
+  // Custom sign-up forms (Form Templates, type "Sign-up") still to sign at first login — see signupGate.ts.
+  const signupGate = await signupGateFor(memberId, table, profile);
 
   const birthday = profile.identity?.birthday ?? profile.birthday ?? null;
   const age = computeAge(birthday ?? undefined);
@@ -176,10 +187,17 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     medicalConditionChangedAt: forms.medical_condition_changed_at ?? null,
     medicalConditionNote: forms.medical_condition_note ?? null,
     requiresRegistrationForm,
-    requiresHealthDeclaration,
+    requiresHealthDeclaration: signupFlow.flags.requiresHealthDeclaration,
     requiresPoliciesAgreement,
     requiresParentalAuthorization,
     requiresOrthopedicForm,
+    // Included built-in onboarding forms in the admin's First Sign-up Order —
+    // the app's post-login/post-submit routing walks these in order.
+    signupOrder: signupFlow.signupOrder,
+    // Custom sign-up forms the app opens before the home screen (after the built-in ones).
+    pendingSignupForms: signupGate.mine,
+    signupFlowForms: signupGate.flow,
+    signupFormsWaitingOnParent: signupGate.waitingOnParent,
     healthDeclaration,
     healthDeclarationValid,
     registrationForm: registrationFormFilled,

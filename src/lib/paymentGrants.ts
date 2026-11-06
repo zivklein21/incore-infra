@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
-import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { DeleteCommand, GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { ConditionalCheckFailedException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import type { ProductItem, RegistrationItem } from './entities';
+import type { MembershipItem, ProductItem, RegistrationItem } from './entities';
 import { putPunchCardItem } from './punchCards';
 import { queryFutureSubscriptionRegistrations, queryAllActiveMemberships, queryMembershipForMonth, queryMembershipsForMonth } from './membershipQueries';
 
@@ -57,6 +58,26 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
       console.warn('[paymentGrants] product fallback fetch failed:', err);
     }
   }
+
+  // ── Product already gone (a זמני store product, deleted on purchase) ────
+  // Auto-renew charges (hypBillingAgreements) send 0 limits and rely on the
+  // product lookup above, so fall back to this member's own last membership
+  // on the same productId — otherwise renewal would grant 0 sessions.
+  if (productId && (monthlyLimit === 0 || weeklyLimit === 0)) {
+    const prev = await findLatestMembershipForProduct(userId, productId);
+    if (prev) {
+      if (monthlyLimit === 0) monthlyLimit = prev.monthlyLimit;
+      if (weeklyLimit === 0) weeklyLimit = prev.weeklyLimit;
+      allowedLegalCancellationsPerMonth = prev.allowedLegalCancellationsPerMonth ?? allowedLegalCancellationsPerMonth;
+      if (!productName) productName = (prev as MembershipItem & { productName?: string }).productName ?? '';
+      if (!productType) productType = 'subscription';
+    }
+  }
+
+  // ── זמני (temporary) plans are single-use: delete once purchased ────────
+  // Conditional so a קבוע plan can never be hit, and a no-op on later
+  // renewals once the product is already gone.
+  if (productId) await deleteTemporaryProduct(productId, userId);
 
   // ── Punch card / single ticket purchases go to the wallet, not memberships ──
   if (productType === 'punch_card' || productType === 'single_ticket') {
@@ -153,6 +174,32 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
   }
 
   console.log(`[paymentGrants] payment_success userId=${userId} month=${targetMonth} membershipId=${membershipId} migratedRegistrations=${futureRegs.length}`);
+}
+
+async function findLatestMembershipForProduct(userId: string, productId: string): Promise<MembershipItem | null> {
+  const res = await ddb.send(new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+    FilterExpression: 'productId = :pid',
+    ExpressionAttributeValues: { ':pk': `MEMBER#${userId}`, ':prefix': 'MEMBERSHIP#', ':pid': productId },
+  }));
+  const items = (res.Items ?? []) as (MembershipItem & { createdAt?: string })[];
+  return items.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))[0] ?? null;
+}
+
+async function deleteTemporaryProduct(productId: string, userId: string): Promise<void> {
+  try {
+    await ddb.send(new DeleteCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: `PRODUCT#${productId}`, SK: 'METADATA' },
+      ConditionExpression: 'isTemporary = :t',
+      ExpressionAttributeValues: { ':t': true },
+    }));
+    console.log(`[paymentGrants] deleted temporary product=${productId} after purchase by ${userId}`);
+  } catch (err) {
+    if (err instanceof ConditionalCheckFailedException) return; // קבוע, or already deleted
+    console.error(`[paymentGrants] failed to delete temporary product=${productId}:`, err);
+  }
 }
 
 // ─── Punch card grant ──────────────────────────────────────────────────────

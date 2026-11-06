@@ -2,7 +2,8 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { HypBillingAgreementItem, MemberProfileItem, ProductItem, MembershipItem } from './entities';
-import { monthKey, endOfMonth, addMonths, firstOfNextMonth } from './entities';
+import { applyChargeSafety, chargeBlockReason } from './chargeSafety';
+import { monthKey, endOfMonth, firstOfNextMonth, israelDateStr } from './entities';
 import { chargeHypToken } from './hypClient';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
@@ -20,6 +21,17 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
 
   const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${agreement.userId}`, SK: 'PROFILE' } }));
   const member = memberRes.Item as MemberProfileItem | undefined;
+  const blocked = chargeBlockReason([member], agreement.token);
+  if (blocked && applyChargeSafety('incore', agreement.agreementId, agreement.userId, blocked)) {
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: agreement.PK, SK: agreement.SK },
+      UpdateExpression: 'SET #status = :cancelled, updatedAt = :now REMOVE GSI3PK, GSI3SK',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': new Date().toISOString() },
+    }));
+    return { success: false, ccode: -1 };
+  }
   const chargeUserId = (member && getMemberIdNumber(member)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = member ? getMemberFullName(member) : 'Member';
   const chargeEmail = member?.identity?.email || member?.email || '';
@@ -50,6 +62,12 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
   }
 
   const nowIso = new Date().toISOString();
+  // The month this charge pays for = the Israel month it runs in. Never the
+  // agreement's stored targetMonth: that falls behind whenever a month passes
+  // without a charge (e.g. a custom/admin membership covered it and the next
+  // charge was pushed out), which filed a November payment as October and
+  // skipped creating the membership because October's was still active.
+  const chargeMonth = israelDateStr(new Date()).slice(0, 7);
 
   if (result.success) {
     const paymentsCompleted = agreement.paymentsCompleted + 1;
@@ -90,11 +108,10 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
     }));
 
     if (agreement.kind === 'subscription') {
-      const nextMonth = agreement.targetMonth ?? monthKey(new Date());
       const payload: PaymentSuccessPayload = {
         event: 'payment_success',
         userId: agreement.userId,
-        targetMonth: nextMonth,
+        targetMonth: chargeMonth,
         productId: agreement.productId,
         productName: agreement.productName,
         productType: 'subscription',
@@ -109,7 +126,6 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
     }
     // store_installment: sessions were already granted up front — nothing further to do.
 
-    const currentTargetMonthDate = agreement.targetMonth ? new Date(`${agreement.targetMonth}-01`) : new Date();
     const newNextChargeDate = firstOfNextMonth(new Date());
 
     // DynamoDB rejects any ExpressionAttributeValues key the expression
@@ -140,7 +156,8 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         : agreement.kind === 'subscription'
           ? {
             UpdateExpression: 'SET paymentsCompleted = :pc, #status = :active, consecutiveFailures = :zero, nextChargeDate = :ncd, targetMonth = :tm, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :g3sk',
-            ExpressionAttributeValues: { ...ongoing, ':tm': monthKey(addMonths(currentTargetMonthDate, 1)) },
+            // The month the NEXT charge pays for — always the next charge date's own month.
+            ExpressionAttributeValues: { ...ongoing, ':tm': monthKey(newNextChargeDate) },
           }
           : {
             UpdateExpression: 'SET paymentsCompleted = :pc, #status = :active, consecutiveFailures = :zero, nextChargeDate = :ncd, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :g3sk',
@@ -148,10 +165,10 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
           }),
     }));
   } else {
-    if (agreement.kind === 'subscription' && agreement.targetMonth) {
+    if (agreement.kind === 'subscription') {
       // Also closes out whatever membership the member currently has —
       // there's no successful charge to hang a new one off of.
-      await handlePaymentFailure(agreement.userId, agreement.targetMonth);
+      await handlePaymentFailure(agreement.userId, chargeMonth);
     }
 
     const transactionType: PaymentFailureTransactionType =
@@ -256,6 +273,7 @@ export async function runHypBillingCycle(): Promise<{ processed: number; succeed
   let succeeded = 0;
   let failed = 0;
   for (const agreement of due) {
+    if (agreement.status !== 'active' && applyChargeSafety('incore', agreement.agreementId, agreement.userId, 'not_active')) continue;
     // One bad agreement must never abort the rest of the cycle.
     try {
       const { success } = await chargeOneAgreement(agreement);

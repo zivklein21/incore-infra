@@ -23,13 +23,14 @@ locals {
     adminClearMemberSavedCard               = { method = "POST" }
     adminClearMemberships                   = { method = "POST" }
     adminCreateUser                         = { method = "POST" } # IAM-privileged (AdminCreateUser) — see handler comment
+    adminCreateMembershipOverride           = { method = "POST" } # INCORE: admin manual subscription override (supersedes current)
     adminDeleteClassType                    = { method = "POST" }
     adminDeleteCoach                        = { method = "POST" } # FORCA Coach feature
     adminDeleteEquipment                    = { method = "POST" } # FORCA Coach feature
     adminDeleteExercise                     = { method = "POST" } # FORCA Tracker feature
     adminDeleteExerciseLogEntry             = { method = "POST" } # FORCA Tracker feature: admin edit/delete of a trainee's logged history entry
     adminDeleteExtraTraining                = { method = "POST" } # FORCA Extra Training feature
-    adminDeleteMeasurementType               = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
+    adminDeleteMeasurementType              = { method = "POST" } # FORCA Exercise Pool: custom measurement type management
     adminDeleteForcaSubscriptionProduct     = { method = "POST" } # FORCA Subscription & Recurring Billing feature
     adminDeleteGroup                        = { method = "POST" } # FORCA Coach feature
     adminDeleteMember                       = { method = "POST" }
@@ -44,7 +45,7 @@ locals {
     adminDeleteTestGroup                    = { method = "POST" } # FORCA Tracker feature
     adminDeleteTrainingType                 = { method = "POST" } # FORCA Coach feature
     adminDeleteWeeklyTask                   = { method = "POST" } # FORCA Weekly Tasks feature
-    adminDeleteWorkoutMethodType             = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
+    adminDeleteWorkoutMethodType            = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
     adminDeleteWorkoutPackageType           = { method = "POST" } # FORCA Workout Plan builder: Package dropdown management
     adminDeleteWorkoutPlan                  = { method = "POST" } # FORCA Workout Plan builder
     adminDeleteWorkoutPlanBlock             = { method = "POST" } # FORCA Workout Plan builder
@@ -114,7 +115,7 @@ locals {
     adminSaveTestGroup                      = { method = "POST" } # FORCA Tracker feature
     adminSaveTrainingType                   = { method = "POST" } # FORCA Coach feature
     adminSaveWeeklyTask                     = { method = "POST" } # FORCA Weekly Tasks feature
-    adminSaveWorkoutMethodType               = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
+    adminSaveWorkoutMethodType              = { method = "POST" } # FORCA Workout Plan builder: Working Method dropdown management
     adminSaveWorkoutPackageType             = { method = "POST" } # FORCA Workout Plan builder: Package dropdown management
     adminSaveWorkoutPlan                    = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
     adminSaveWorkoutPlanBlock               = { method = "POST" } # FORCA Workout Plan builder: admin or coach with workoutPlans:'write'
@@ -155,7 +156,7 @@ locals {
     createHypCardUpdatePage                 = { method = "POST" }
     createHypPaymentPage                    = { method = "POST" }
     createHypTokenPurchase                  = { method = "POST" }
-    createForcaMerchTokenPurchase            = { method = "POST" } # FORCA Merch Store feature — saved-card checkout
+    createForcaMerchTokenPurchase           = { method = "POST" } # FORCA Merch Store feature — saved-card checkout
     createMerchPaymentPage                  = { method = "POST" } # FORCA Merch Store feature
     createSupportInquiry                    = { method = "POST" }
     createTrainingSession                   = { method = "POST" } # FORCA Coach feature: admin-only, auto-registers a Group
@@ -203,6 +204,7 @@ locals {
     getForcaSubscriptionProductsForParent   = { method = "ANY" } # FORCA Subscription & Recurring Billing feature
     getGroupWeeklyTaskStatus                = { method = "ANY" } # FORCA Weekly Tasks: coach/admin group completion tracker
     getHypOrderStatus                       = { method = "ANY" }
+    incoreWorkoutApi                        = { method = "POST" } # INCORE Exercise Catalog + Workout Journal: one Lambda behind incore_workout_routes below (integration-quota workaround)
     getInquiryMessages                      = { method = "ANY" }
     getMemberBookingSources                 = { method = "ANY" }
     getMemberCancellations                  = { method = "ANY" }
@@ -242,7 +244,7 @@ locals {
     getTrainingHistory                      = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                        = { method = "GET" } # FORCA Coach feature
     getUploadUrl                            = { method = "POST" }
-    getWorkoutMethodTypes                    = { method = "ANY" } # FORCA Workout Plan builder: Working Method dropdown source
+    getWorkoutMethodTypes                   = { method = "ANY" } # FORCA Workout Plan builder: Working Method dropdown source
     getWorkoutPackageTypes                  = { method = "ANY" } # FORCA Workout Plan builder: Package dropdown source
     getWallet                               = { method = "ANY" }
     grantPunchCard                          = { method = "POST" }
@@ -265,7 +267,7 @@ locals {
     saveRunningReport                       = { method = "POST" } # FORCA running-session post-workout report: trainee's own RPE/pace for one session
     saveScheduleAlertSettings               = { method = "POST" }
     saveSupportSettings                     = { method = "POST" }
-    searchForca                             = { method = "ANY" } # FORCA Global Search: trainees/groups/workout plans
+    searchForca                             = { method = "ANY" }  # FORCA Global Search: trainees/groups/workout plans
     sendCoachNotification                   = { method = "POST" } # FORCA Coach feature: admin or coach with notifications:'write', scoped to her own assigned-group trainees
     sendForcaSupportMessage                 = { method = "POST" } # FORCA Chat feature
     sendSupportMessage                      = { method = "POST" }
@@ -313,6 +315,57 @@ locals {
     verifyOtp                        = { method = "POST" } # pre-login forgot-password flow
   }
 
+  # INCORE Exercise Catalog + Workout Journal endpoints. Each is its own
+  # route but they all SHARE incoreWorkoutApi's single integration (see
+  # api_gateway.tf's aws_apigatewayv2_route.incore_workout and
+  # incoreWorkoutApi.ts) — this API is at AWS's hard cap of 300
+  # integrations, one per standalone Lambda, so new endpoints can't each be
+  # their own function anymore. All JWT-authenticated. GET/POST only (not
+  # ANY), so none needs a dedicated OPTIONS preflight route either.
+  incore_workout_routes = {
+    adminDeleteIncoreExercise = "POST" # admin: delete a catalog exercise
+    adminListIncoreExercises  = "GET"  # admin: catalog incl. drafts
+    adminSaveIncoreExercise   = "POST" # admin: create/edit (name, description, image, muscle group, metric combination)
+    adminSeedIncoreExercises  = "POST" # admin: import the starter library (idempotent)
+    deleteMyWorkoutLog        = "POST" # trainee: delete one of their own logs
+    getIncoreExercises        = "GET"  # trainee: active catalog exercises
+    getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
+    saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
+    # Manage → Forms → Form Templates (custom admin-built templates; same shared integration)
+    adminListFormTemplates   = "GET"  # admin: list custom form templates for a brand
+    adminSaveFormTemplate    = "POST" # admin: create/edit a custom form template (name + sections)
+    adminDeleteFormTemplate  = "POST" # admin: delete a custom form template (archives it instead once anyone signed)
+    adminPublishFormTemplate = "POST" # admin: publish the saved draft as the next version (publish checks, optional re-sign)
+    removeMySavedCard        = "POST" # FORCA member: remove own saved card, refused while a subscription uses it (same shared integration)
+    adminListDeletedMembers  = "GET"  # admin: deleted members + records past retention (same shared integration)
+    adminGetDeletedMember    = "GET"  # admin: one deleted member's retained records
+    adminGetArchivedFileUrl  = "GET"  # admin: presigned URL to a retained file
+    adminSetMemberTestFlag   = "POST" # admin: mark a member as a test account (logged)
+    # FORCA forms system (same shared integration)
+    adminAssignFormTemplate = "POST" # admin: assign a published form to all / a group / specific trainees (+ admin-filled fields), or cancel
+    adminGetFormTracking    = "GET"  # admin: per assignment, each trainee's Pending Parent / Pending Child / Completed
+    adminSendFormReminder   = "POST" # admin: push a reminder to whoever a form is waiting on
+    adminPreviewFormPdf     = "POST" # admin: "Preview PDF" — SAMPLE-watermarked PDF of a draft
+    getMyForms              = "GET"  # parent (childId) / trainee: "Forms to sign" for this device
+    submitFormPart          = "POST" # parent / trainee: fill + declare + sign their part (server timestamps)
+    getSignedFormPdfUrl     = "GET"  # admin / the child's parent: presigned URL to a signed PDF (or, with &fieldId=, an attached file)
+    getFormUploadUrl        = "POST" # parent / trainee: presigned PUT for a form's "File upload" field (formFiles.ts)
+    adminListActivities     = "GET"  # admin: upcoming calendar activities to attach a form to
+    adminCreateActivity     = "POST" # admin (FORCA): create a special activity in the calendar + attach forms to sign
+    # Manage → Forms → First Sign-up Order (same shared integration)
+    adminGetSignupFlowConfig  = "GET"  # admin: a brand's onboarding form order + include/exclude
+    adminSaveSignupFlowConfig = "POST" # admin: save that order
+    # Built-in forms' wording overrides — Health Declaration / Parental Consent (same shared integration)
+    getFormWording       = "GET"  # member: a built-in form's admin-edited wording
+    adminSaveFormWording = "POST" # admin: save that wording (versioned)
+    # FORCA per-session trainee info (same shared integration)
+    saveSessionTraineeInfo = "POST" # admin / the session's coach: trainee note + equipment list; pushes trainees when the note changes
+    # FORCA photo / publication consent (same shared integration)
+    getPhotoConsent       = "GET"  # parent (childId) / trainee: where the consent stands + its signed history
+    changePhotoConsent    = "POST" # parent (childId) / trainee: signed change; refusing withdraws at once
+    getPhotoConsentPdfUrl = "GET"  # parent (childId) / trainee: one change's signed PDF
+  }
+
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
 
   # Only method="ANY" routes actually swallow OPTIONS and need a dedicated
@@ -329,6 +382,7 @@ locals {
   # exactly rather than requiring manual UTC/DST conversion.
   scheduled_functions = {
     expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
+    expireWalletCredits            = "cron(20 0 1 * ? *)"      # 00:20 on the 1st — credit lapses a month after the month it was earned
     activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
     clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
@@ -343,10 +397,18 @@ locals {
     chargeHypBillingAgreements     = "cron(0 3 * * ? *)"       # 03:00 daily
     chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
+    checkPushReceipts              = "cron(0/30 * * * ? *)"    # every 30 minutes — Expo push receipts (see lib/push.ts)
   }
 
   # DynamoDB Streams consumers — every one of these must filter internally
   # by PK/SK since the stream carries change events for the whole table.
+  # Scheduled functions whose schedule exists but is DISABLED (eventbridge.tf)
+  # — deployed and invocable by hand, never fired automatically. Empty:
+  # expireWalletCredits was enabled 2026-10-22 after its Nov 1 / Dec 1 dry
+  # runs removed nothing (launch grace period) and every wallet's buckets
+  # matched its balance.
+  disabled_schedules = []
+
   stream_functions = [
     "processMail",
     "onMemberDeleted",
@@ -363,6 +425,11 @@ locals {
     "processDlqMessage",
   ]
 
+  # SNS-triggered — SES bounce/complaint/reject events (see ses.tf).
+  sns_functions = [
+    "onSesNotification",
+  ]
+
   # Shared no-op OPTIONS handler — see api_gateway.tf's aws_apigatewayv2_route.cors_preflight
   # and corsPreflight.ts for why every path needs its own unauthenticated
   # OPTIONS route. Not part of all_http_functions: it's deployed once here
@@ -375,6 +442,15 @@ locals {
   # via API Gateway, so — like cors_preflight_function above — these are
   # built here (for a Lambda to exist) but deliberately excluded from
   # all_http_functions/http_authenticated_functions so no route is created.
+  retention_job_name = "incore-member-retention-job"
+  # Only these get the archive settings, so adding one doesn't redeploy every Lambda.
+  member_archive_functions = ["adminDeleteMember", "incoreWorkoutApi"]
+
+  # "report" logs what the check before a charge would cancel; "enforce" cancels
+  # (lib/chargeSafety.ts). Must be "enforce" before the 1st of the month.
+  charge_safety_mode = "enforce"
+  charge_functions   = ["chargeForcaSubscriptions", "chargeHypBillingAgreements", "adminChargeHypAgreementNow", "adminRunHypBillingCycle"]
+
   cognito_custom_auth_functions = [
     "cognitoDefineAuthChallenge",
     "cognitoCreateAuthChallenge",
@@ -386,7 +462,9 @@ locals {
     keys(local.scheduled_functions),
     local.stream_functions,
     local.sqs_functions,
+    local.sns_functions,
     [local.cors_preflight_function],
     local.cognito_custom_auth_functions,
+    ["memberRetentionJob"],
   ))
 }

@@ -3,7 +3,9 @@ import { GetCommand, QueryCommand, TransactWriteCommand, type TransactWriteComma
 import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
+import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships } from '../lib/entities';
+import { chooseCredit, spendFromBucketItem, CREDITS_EXPIRED_MESSAGE } from '../lib/creditSpend';
+import { membershipForClass } from '../lib/registrationMembership';
 
 // ─── Entity key design (DynamoDB single-table) ─────────────────────────────
 //
@@ -23,45 +25,8 @@ import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardIte
 
 type ConsumedFrom = 'MEMBERSHIP' | 'FUTURE_SUBSCRIPTION' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
 
-function findAvailableAdminCard(cards: PunchCardItem[], classDate: Date): PunchCardItem | null {
-  return (
-    cards.find((card) => {
-      if (card.remainingPunches <= 0) return false;
-      if (card.expiryDate && new Date(card.expiryDate) < classDate) return false;
-      return true;
-    }) ?? null
-  );
-}
-
-type WalletCreditResult =
-  | { consumedFrom: 'EXTRA_PUNCH' | 'ADMIN_CARD'; adminCardId: string }
-  | { error: 'no_credits' | 'card_unavailable' };
-
-function resolveWalletCredit(
-  extraPunches: number,
-  adminPunchCards: PunchCardItem[],
-  classDate: Date,
-  walletCardId: string | null,
-  allowExtraPunch: boolean,
-): WalletCreditResult {
-  if (walletCardId) {
-    if (walletCardId === 'extra_punch') {
-      if (!allowExtraPunch || extraPunches <= 0) return { error: 'card_unavailable' };
-      return { consumedFrom: 'EXTRA_PUNCH', adminCardId: '' };
-    }
-    const card = adminPunchCards.find((c) => c.cardId === walletCardId);
-    if (!card || card.remainingPunches <= 0) return { error: 'card_unavailable' };
-    if (card.expiryDate && new Date(card.expiryDate) < classDate) return { error: 'card_unavailable' };
-    return { consumedFrom: 'ADMIN_CARD', adminCardId: card.cardId };
-  }
-
-  if (allowExtraPunch && extraPunches > 0) {
-    return { consumedFrom: 'EXTRA_PUNCH', adminCardId: '' };
-  }
-  const card = findAvailableAdminCard(adminPunchCards, classDate);
-  if (card) return { consumedFrom: 'ADMIN_CARD', adminCardId: card.cardId };
-  return { error: 'no_credits' };
-}
+// Which credit pays (soonest-expiring valid credit first, lapsed credit
+// skipped) — see lib/creditSpend.ts.
 
 // ─── Handler ────────────────────────────────────────────────────────────────
 //
@@ -130,16 +95,20 @@ export async function handler(
   const wKey = computeWeekKey(classDate);
   const isFutureBooking = classTargetMonth > currentMonth;
 
-  const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
+  const walletItem = walletRes.Item as WalletItem | undefined;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
+  // All of the member's memberships (a handful per member) — the weekly
+  // limit below needs every month's record, not just queryMonth's.
   const queryMonth = isFutureBooking ? currentMonth : classTargetMonth;
   const membershipsRes = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': `MEMBERSHIP#${queryMonth}#` },
+    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'MEMBERSHIP#' },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
+  const allMemberships = (membershipsRes.Items ?? []) as MembershipItem[];
+  // Filed under the class's month — or an earlier bridge that covers it.
+  const membership = membershipForClass(allMemberships, classDate, queryMonth, !isFutureBooking);
 
   // A membership whose real endDate already reaches the class date isn't
   // actually "future" from the member's own plan's point of view — it's
@@ -157,6 +126,9 @@ export async function handler(
   let consumedFrom: ConsumedFrom;
   let membershipId = '';
   let adminCardId = '';
+  // Wallet batch ('YYYY-MM' or 'untracked') an EXTRA_PUNCH booking was paid
+  // from — recorded so a refund returns it to the same batch (creditSpend.ts).
+  let creditBucket = '';
 
   if (treatAsFuture) {
     if (!membership) {
@@ -190,7 +162,9 @@ export async function handler(
     consumedFrom = 'FUTURE_SUBSCRIPTION';
     membershipId = membership.membershipId;
   } else if (membership) {
-    const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
+    // Across every membership record — a week spanning two months still has
+    // one weekly limit (see weeklyUsedAcrossMemberships).
+    const weeklyUsed = weeklyUsedAcrossMemberships(allMemberships, wKey);
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
     const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
@@ -199,24 +173,31 @@ export async function handler(
       consumedFrom = 'MEMBERSHIP';
       membershipId = membership.membershipId;
     } else {
-      const result = resolveWalletCredit(extraPunches, adminPunchCards, classDate, walletCardId, true);
+      const result = chooseCredit(walletItem, adminPunchCards, classDate, { walletCardId, allowWallet: true });
       if ('error' in result) {
         const overLimitReason = !withinWeekly ? 'weekly_limit_reached' : 'monthly_limit_reached';
         return json(403, {
           error: result.error,
           reason: overLimitReason,
-          message: result.error === 'card_unavailable'
-            ? 'The selected wallet credit is no longer available.'
-            : 'No remaining training credits or membership capacity exceeded.',
+          message: result.error === 'credits_expired'
+            ? CREDITS_EXPIRED_MESSAGE
+            : result.error === 'card_unavailable'
+              ? 'The selected wallet credit is no longer available.'
+              : 'No remaining training credits or membership capacity exceeded.',
         });
       }
       consumedFrom = result.consumedFrom;
       membershipId = membership.membershipId;
-      adminCardId = result.adminCardId;
+      if (result.consumedFrom === 'ADMIN_CARD') adminCardId = result.adminCardId;
+      else creditBucket = result.creditBucket;
     }
   } else {
-    const result = resolveWalletCredit(extraPunches, adminPunchCards, classDate, walletCardId, false);
+    // No membership: punch cards only (wallet credit needs a membership, as before).
+    const result = chooseCredit(walletItem, adminPunchCards, classDate, { walletCardId, allowWallet: false });
     if ('error' in result) {
+      if (result.error === 'credits_expired') {
+        return json(403, { error: 'credits_expired', message: CREDITS_EXPIRED_MESSAGE });
+      }
       return json(403, {
         error: 'membership_required',
         message: result.error === 'card_unavailable'
@@ -225,7 +206,8 @@ export async function handler(
       });
     }
     consumedFrom = result.consumedFrom;
-    adminCardId = result.adminCardId;
+    if (result.consumedFrom === 'ADMIN_CARD') adminCardId = result.adminCardId;
+    else creditBucket = result.creditBucket;
   }
 
   // ── Same-day conflict check (blocking, fail-open on error) ──────────────
@@ -276,6 +258,7 @@ export async function handler(
     registeredAt: nowIso,
   };
   if (adminCardId) registrationPayload.adminCardId = adminCardId;
+  if (creditBucket) registrationPayload.creditBucket = creditBucket;
 
   const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [
     {
@@ -328,15 +311,8 @@ export async function handler(
   let balanceItemIndex = -1;
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${uid}`, SK: 'WALLET#PRIMARY' },
-        UpdateExpression: 'ADD extraPunches :negOne SET updatedAt = :now',
-        ConditionExpression: 'extraPunches > :zero',
-        ExpressionAttributeValues: { ':negOne': -1, ':zero': 0, ':now': nowIso },
-      },
-    });
+    // The batch chooseCredit picked (soonest-expiring valid batch).
+    transactItems.push(spendFromBucketItem(uid, walletItem, creditBucket, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD') {
     balanceItemIndex = transactItems.length;
     transactItems.push({

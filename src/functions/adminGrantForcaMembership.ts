@@ -5,6 +5,7 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ForcaBillingAgreementItem, MemberProfileItem } from '../lib/entities';
 import { firstOfNextMonth } from '../lib/entities';
+import { hasActiveForcaMembership, registerMemberOnFutureGroupSessions } from '../lib/sessionInstance';
 
 // POST /adminGrantForcaMembership
 // Body: { memberId: string, title: string, startDate: string, endDate: string }
@@ -30,7 +31,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { memberId?: unknown; title?: unknown; startDate?: unknown; endDate?: unknown };
+  let body: { memberId?: unknown; title?: unknown; startDate?: unknown; endDate?: unknown; remove?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -38,6 +39,26 @@ export async function handler(
   }
 
   const memberId = typeof body.memberId === 'string' ? body.memberId.trim() : '';
+
+  // { memberId, remove: true } clears the window instead (shares this route —
+  // API Gateway is at its integration cap). Same "new registrations only"
+  // scope as the grant: sessions she's already registered for are untouched.
+  if (body.remove === true) {
+    if (!memberId) return json(400, { error: 'missing_fields' });
+    try {
+      await ddb.send(new UpdateCommand({
+        TableName: FORCA_TABLE_NAME,
+        Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' },
+        UpdateExpression: 'REMOVE membership',
+        ConditionExpression: 'attribute_exists(PK)',
+      }));
+    } catch (err: any) {
+      if (err?.name === 'ConditionalCheckFailedException') return json(404, { error: 'member_not_found' });
+      throw err;
+    }
+    return json(200, { success: true, removed: true });
+  }
+
   const title = typeof body.title === 'string' ? body.title.trim() : '';
   const startDate = typeof body.startDate === 'string' ? body.startDate : '';
   const endDate = typeof body.endDate === 'string' ? body.endDate : '';
@@ -99,5 +120,14 @@ export async function handler(
     }
   }
 
-  return json(200, { success: true, membership });
+  // She may already be in a group whose sessions were materialized while she
+  // had no active window (e.g. new member: assigned a group first, granted
+  // membership second) — createSessionInstance() and adminAssignGroup.ts both
+  // skipped her then, so pick those future sessions up now.
+  const groupId = profile.identity?.groupId;
+  const registeredFutureSessions = groupId && hasActiveForcaMembership({ membership })
+    ? await registerMemberOnFutureGroupSessions(memberId, groupId)
+    : 0;
+
+  return json(200, { success: true, membership, registeredFutureSessions });
 }

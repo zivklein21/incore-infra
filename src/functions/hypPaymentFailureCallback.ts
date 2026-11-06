@@ -2,7 +2,7 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { HypOrderItem } from '../lib/entities';
-import { verifyHypTransaction } from '../lib/hypClient';
+import { verifyHypTransaction, redactHypFields } from '../lib/hypClient';
 import { markOrderFailedAndNotifyAdmins } from '../lib/hypPaymentGrant';
 import { handleMerchOrderCallback } from '../lib/merchPayments';
 import { handleForcaSubscriptionOrderCallback } from '../lib/forcaSubscriptionPayments';
@@ -66,8 +66,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     const { verified, fields } = await verifyHypTransaction(event.rawQueryString);
     const ccode = Number(fields.CCode ?? q.CCode);
 
-    console.log(`[hypPaymentFailureCallback] order=${orderId} raw redirect query:`, JSON.stringify(q));
-    console.log(`[hypPaymentFailureCallback] order=${orderId} raw VERIFY fields:`, JSON.stringify(fields));
+    console.log(`[hypPaymentFailureCallback] order=${orderId} raw redirect query:`, JSON.stringify(redactHypFields(q as Record<string, string>)));
+    console.log(`[hypPaymentFailureCallback] order=${orderId} raw VERIFY fields:`, JSON.stringify(redactHypFields(fields)));
 
     if (!verified) {
       console.error(`[hypPaymentFailureCallback] order=${orderId} redirect failed signature verification — ignoring`);

@@ -37,6 +37,8 @@ resource "aws_scheduler_schedule" "fn" {
   name                         = "incore-${lower(replace(each.key, "/([A-Z])/", "-$1"))}"
   schedule_expression          = each.value
   schedule_expression_timezone = "Asia/Jerusalem"
+  # Created but not firing until removed from locals.tf's disabled_schedules.
+  state = contains(local.disabled_schedules, each.key) ? "DISABLED" : "ENABLED"
 
   flexible_time_window {
     mode = "OFF"

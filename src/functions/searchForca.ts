@@ -87,6 +87,7 @@ export async function handler(
     .map(({ id, name }) => ({ id, name }));
 
   const workoutPlans = ((plansRes.Items ?? []) as (WorkoutPlanItem & { PK: string })[])
+    .filter((p) => !p.sessionCopyOf) // private per-session copies — see entities.ts
     .map((p) => ({ id: p.PK.replace('WORKOUTPLAN#', ''), name: p.name ?? '', active: p.active, rank: matchRank(p.name ?? '', q) }))
     .filter((p) => p.rank !== -1)
     .sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name))

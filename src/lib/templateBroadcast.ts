@@ -2,14 +2,11 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, tableForBrand } from './dynamo';
 import { deriveMemberName, type NotificationTemplateItem, type MemberProfileItem } from './entities';
-import { getExpoPushToken } from './push';
+import { getExpoPushToken, sendExpoPushBatch } from './push';
 import { getAllMemberProfiles } from './memberScan';
 import { getFamilyLinkSets } from './familyLinks';
 
 export type BroadcastAudience = 'children' | 'parents' | 'both';
-
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const EXPO_CHUNK_SIZE = 100;
 
 interface PushMessage {
   to: string;
@@ -25,12 +22,6 @@ function resolvePlaceholders(text: string, vars: Record<string, string>): string
 
 function isMemberAdmin(profile: MemberProfileItem): boolean {
   return profile.identity?.role === 'admin' || profile.role === 'admin';
-}
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size));
-  return result;
 }
 
 async function writeBroadcastLog(tableName: string, adminUserId: string, templateId: string, rawTitle: string, rawBody: string, dispatchedCount: number): Promise<void> {
@@ -150,23 +141,7 @@ export async function sendTemplateBroadcast(
     }));
   }));
 
-  const msgChunks = chunk(pushMessages, EXPO_CHUNK_SIZE);
-  let dispatchedCount = 0;
-
-  for (const batch of msgChunks) {
-    try {
-      const resp = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(batch),
-      });
-      const result = await resp.json();
-      console.log(`[sendTemplateBroadcast] batch (${batch.length}):`, JSON.stringify(result));
-      dispatchedCount += batch.length;
-    } catch (err: any) {
-      console.error('[sendTemplateBroadcast] push batch failed:', err);
-    }
-  }
+  const dispatchedCount = await sendExpoPushBatch(pushMessages, 'templateBroadcast');
 
   await writeBroadcastLog(tableName, triggeredBy, templateId, rawTitle, rawBody, dispatchedCount);
 

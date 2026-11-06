@@ -1,0 +1,110 @@
+import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { isBackgroundJob, type BackgroundJob } from '../lib/backgroundJobTypes';
+import { json } from '../lib/http';
+import { handleBackgroundJob } from '../lib/formTemplates/pdfJobs';
+import { handler as adminListIncoreExercises } from '../lib/incoreWorkout/adminListIncoreExercises';
+import { handler as adminSaveIncoreExercise } from '../lib/incoreWorkout/adminSaveIncoreExercise';
+import { handler as adminDeleteIncoreExercise } from '../lib/incoreWorkout/adminDeleteIncoreExercise';
+import { handler as adminSeedIncoreExercises } from '../lib/incoreWorkout/adminSeedIncoreExercises';
+import { handler as getIncoreExercises } from '../lib/incoreWorkout/getIncoreExercises';
+import { handler as getMyWorkoutJournal } from '../lib/incoreWorkout/getMyWorkoutJournal';
+import { handler as saveMyWorkoutLog } from '../lib/incoreWorkout/saveMyWorkoutLog';
+import { handler as deleteMyWorkoutLog } from '../lib/incoreWorkout/deleteMyWorkoutLog';
+import { handler as adminListFormTemplates } from '../lib/formTemplates/adminListFormTemplates';
+import { handler as adminSaveFormTemplate } from '../lib/formTemplates/adminSaveFormTemplate';
+import { handler as adminDeleteFormTemplate } from '../lib/formTemplates/adminDeleteFormTemplate';
+import { handler as adminPublishFormTemplate } from '../lib/formTemplates/adminPublishFormTemplate';
+import { handler as adminAssignFormTemplate } from '../lib/formTemplates/adminAssignFormTemplate';
+import { handler as adminGetFormTracking } from '../lib/formTemplates/adminGetFormTracking';
+import { handler as adminSendFormReminder } from '../lib/formTemplates/adminSendFormReminder';
+import { handler as adminPreviewFormPdf } from '../lib/formTemplates/adminPreviewFormPdf';
+import { handler as getMyForms } from '../lib/formTemplates/getMyForms';
+import { handler as submitFormPart } from '../lib/formTemplates/submitFormPart';
+import { handler as getSignedFormPdfUrl } from '../lib/formTemplates/getSignedFormPdfUrl';
+import { handler as getFormUploadUrl } from '../lib/formTemplates/formFiles';
+import { handler as adminListActivities } from '../lib/formTemplates/adminListActivities';
+import { handler as adminCreateActivity } from '../lib/formTemplates/adminCreateActivity';
+import { handler as adminGetSignupFlowConfig } from '../lib/signupFlow/adminGetSignupFlowConfig';
+import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSaveSignupFlowConfig';
+import { handler as getFormWording } from '../lib/formWording/getFormWording';
+import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
+import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
+import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
+import { handler as removeMySavedCard } from '../lib/removeMySavedCard';
+import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers } from '../lib/memberArchive';
+import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
+
+type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
+
+// Keys must match locals.tf's incore_workout_routes exactly.
+const HANDLERS: Record<string, Handler> = {
+  adminListIncoreExercises,
+  adminSaveIncoreExercise,
+  adminDeleteIncoreExercise,
+  adminSeedIncoreExercises,
+  getIncoreExercises,
+  getMyWorkoutJournal,
+  saveMyWorkoutLog,
+  deleteMyWorkoutLog,
+  // Not workout-related — Manage → Forms → Form Templates. Rides this
+  // Lambda's integration for the same 300-integration-cap reason.
+  adminListFormTemplates,
+  adminSaveFormTemplate,
+  adminDeleteFormTemplate,
+  adminPublishFormTemplate,
+  // FORCA forms: assignment, tracking, family signing, signed PDFs.
+  adminAssignFormTemplate,
+  adminGetFormTracking,
+  adminSendFormReminder,
+  adminPreviewFormPdf,
+  getMyForms,
+  submitFormPart,
+  getSignedFormPdfUrl,
+  getFormUploadUrl,
+  adminListActivities,
+  adminCreateActivity,
+  // Manage → Forms → First Sign-up Order.
+  adminGetSignupFlowConfig,
+  adminSaveSignupFlowConfig,
+  // Built-in forms' wording overrides (Health Declaration, Parental Consent).
+  getFormWording,
+  adminSaveFormWording,
+  // FORCA: per-session trainee note + equipment list (coach/admin).
+  saveSessionTraineeInfo,
+  // FORCA: a member removing their own saved card.
+  removeMySavedCard,
+  // Deleted members' retained records.
+  adminListDeletedMembers,
+  adminGetDeletedMember,
+  adminGetArchivedFileUrl,
+  adminSetMemberTestFlag,
+  // FORCA: photo / publication consent.
+  getPhotoConsent,
+  changePhotoConsent,
+  getPhotoConsentPdfUrl,
+};
+
+// Single Lambda behind every INCORE Exercise Catalog + Workout Journal
+// endpoint (see the handlers under lib/incoreWorkout/ for each one's
+// contract). Exists because this HTTP API sits at AWS's hard cap of 300
+// integrations, and every standalone Lambda costs one: API Gateway lets
+// many routes share one integration, so these 8 routes (locals.tf's
+// incore_workout_routes, api_gateway.tf's aws_apigatewayv2_route
+// .incore_workout) all target this function's single integration, which
+// dispatches on the matched route's path. The client still calls the same
+// /<name> URLs as if each were its own function.
+export async function handler(
+  event: APIGatewayProxyEventV2WithJWTAuthorizer | BackgroundJob,
+): Promise<APIGatewayProxyStructuredResultV2> {
+  if (isBackgroundJob(event)) {
+    await handleBackgroundJob(event);
+    return json(200, { success: true });
+  }
+
+  // routeKey is e.g. "POST /saveMyWorkoutLog" — the route template that
+  // matched, not the raw path, so it's immune to stage prefixes.
+  const name = event.routeKey.split(' /')[1] ?? '';
+  const target = HANDLERS[name];
+  if (!target) return json(404, { error: 'not_found' });
+  return target(event);
+}

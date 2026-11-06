@@ -4,17 +4,11 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { json } from '../lib/http';
 import type { ClassItem, MembershipItem, WalletItem, PunchCardItem } from '../lib/entities';
-import { monthKey, computeWeekKey, isMembershipUsableForClass, getEffectiveMonthlyLimit } from '../lib/entities';
+import { monthKey, computeWeekKey, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships } from '../lib/entities';
+import { chooseCredit, spendFromBucketItem, CREDITS_EXPIRED_MESSAGE } from '../lib/creditSpend';
+import { membershipForClass } from '../lib/registrationMembership';
 
 type ConsumedFrom = 'MEMBERSHIP' | 'EXTRA_PUNCH' | 'ADMIN_CARD';
-
-function findAvailableAdminCard(cards: PunchCardItem[], classDate: Date): PunchCardItem | null {
-  return cards.find((c) => {
-    if (c.remainingPunches <= 0) return false;
-    if (c.expiryDate && new Date(c.expiryDate) < classDate) return false;
-    return true;
-  }) ?? null;
-}
 
 // POST /confirmWaitlistSpot
 // Body: { memberId, classId }
@@ -62,22 +56,28 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   const targetMonth = monthKey(classDate);
   const wKey = computeWeekKey(classDate);
 
+  // Same record and limits as self-booking (bookClass.ts): all of the
+  // member's memberships, so a bridge filed under an earlier month that
+  // covers this class is found, and a week spanning two months has one
+  // weekly limit (weeklyUsedAcrossMemberships).
   const membershipsRes = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': `MEMBERSHIP#${targetMonth}#` },
+    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'MEMBERSHIP#' },
   }));
-  const membership = ((membershipsRes.Items ?? []) as MembershipItem[]).find((m) => isMembershipUsableForClass(m, classDate)) ?? null;
+  const allMemberships = (membershipsRes.Items ?? []) as MembershipItem[];
+  const membership = membershipForClass(allMemberships, classDate, targetMonth, true);
 
-  const extraPunches = (walletRes.Item as WalletItem | undefined)?.extraPunches ?? 0;
+  const walletItem = walletRes.Item as WalletItem | undefined;
   const adminPunchCards = (cardsRes.Items ?? []) as PunchCardItem[];
 
   let consumedFrom: ConsumedFrom;
   let membershipId = '';
   let adminCardId = '';
+  let creditBucket = ''; // wallet batch an EXTRA_PUNCH booking was paid from (refunds go back to it)
 
   if (membership) {
-    const weeklyUsed = membership.weeklyUsage?.[wKey] ?? 0;
+    const weeklyUsed = weeklyUsedAcrossMemberships(allMemberships, wKey);
     const monthlyUsed = membership.usage?.totalMonthlyUsed ?? 0;
     const withinWeekly = weeklyUsed < membership.weeklyLimit;
     const withinMonthly = monthlyUsed < getEffectiveMonthlyLimit(membership);
@@ -85,21 +85,29 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     if (withinWeekly && withinMonthly) {
       consumedFrom = 'MEMBERSHIP';
       membershipId = membership.membershipId;
-    } else if (extraPunches > 0) {
-      consumedFrom = 'EXTRA_PUNCH';
-      membershipId = membership.membershipId;
     } else {
-      const card = findAvailableAdminCard(adminPunchCards, classDate);
-      if (!card) return json(403, { error: 'no_credits' });
-      consumedFrom = 'ADMIN_CARD';
+      // Soonest-expiring credit still valid on the class date (lib/creditSpend.ts).
+      const choice = chooseCredit(walletItem, adminPunchCards, classDate);
+      if ('error' in choice) {
+        return json(403, choice.error === 'credits_expired'
+          ? { error: 'credits_expired', message: CREDITS_EXPIRED_MESSAGE }
+          : { error: 'no_credits' });
+      }
+      consumedFrom = choice.consumedFrom;
       membershipId = membership.membershipId;
-      adminCardId = card.cardId;
+      if (choice.consumedFrom === 'ADMIN_CARD') adminCardId = choice.adminCardId;
+      else creditBucket = choice.creditBucket;
     }
   } else {
-    const card = findAvailableAdminCard(adminPunchCards, classDate);
-    if (!card) return json(403, { error: 'membership_required' });
-    consumedFrom = 'ADMIN_CARD';
-    adminCardId = card.cardId;
+    // No membership: punch cards only, as before.
+    const choice = chooseCredit(walletItem, adminPunchCards, classDate, { allowWallet: false });
+    if ('error' in choice) {
+      return json(403, choice.error === 'credits_expired'
+        ? { error: 'credits_expired', message: CREDITS_EXPIRED_MESSAGE }
+        : { error: 'membership_required' });
+    }
+    consumedFrom = choice.consumedFrom;
+    if (choice.consumedFrom === 'ADMIN_CARD') adminCardId = choice.adminCardId;
   }
 
   const newWaitlist = waitlist.filter((e) => e.member !== memberId);
@@ -122,6 +130,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     registeredAt: nowIso,
   };
   if (adminCardId) regPayload.adminCardId = adminCardId;
+  if (creditBucket) regPayload.creditBucket = creditBucket;
 
   const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [
     {
@@ -145,11 +154,13 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     },
   ];
 
-  if (membershipId && consumedFrom === 'MEMBERSHIP') {
+  if (membershipId && consumedFrom === 'MEMBERSHIP' && membership) {
     transactItems.push({
       Update: {
         TableName: TABLE_NAME,
-        Key: { PK: `MEMBER#${memberId}`, SK: `MEMBERSHIP#${targetMonth}#${membershipId}` },
+        // The membership's own filing month (a bridge can be filed under an
+        // earlier month than the class) — same as bookClass.ts.
+        Key: { PK: `MEMBER#${memberId}`, SK: `MEMBERSHIP#${membership.targetMonth}#${membershipId}` },
         // usage is a DynamoDB reserved keyword — bare here it fails every call.
         UpdateExpression: 'ADD #usage.totalMonthlyUsed :one, weeklyUsage.#wk :one SET updatedAt = :now',
         ExpressionAttributeNames: { '#wk': wKey, '#usage': 'usage' },
@@ -161,15 +172,8 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
   let balanceItemIndex = -1;
   if (consumedFrom === 'EXTRA_PUNCH') {
     balanceItemIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: walletKey,
-        UpdateExpression: 'ADD extraPunches :negOne SET updatedAt = :now',
-        ConditionExpression: 'extraPunches > :zero',
-        ExpressionAttributeValues: { ':negOne': -1, ':zero': 0, ':now': nowIso },
-      },
-    });
+    // Oldest (soonest-to-expire) credit first — see lib/walletCredit.ts.
+    transactItems.push(spendFromBucketItem(memberId, walletItem, creditBucket, nowIso));
   } else if (consumedFrom === 'ADMIN_CARD') {
     balanceItemIndex = transactItems.length;
     transactItems.push({

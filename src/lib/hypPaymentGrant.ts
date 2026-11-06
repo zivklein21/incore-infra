@@ -8,7 +8,6 @@ import { getPolicySettings, getMemberFullName } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from './paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
-import { bridgeTokenToBillingAgreement } from './hypBillingAgreements';
 
 type OrderKey = { PK: string; SK: string };
 
@@ -255,12 +254,10 @@ export async function applyHypPaymentSuccess(
       })).catch(() => {});
     }
 
-    // This order's own needsBillingAgreement branch above already covers
-    // itself — this call is for any OTHER plan (a pending_membership, or an
-    // active membership admin-granted without a checkout) that had no
-    // agreement yet and can now use the token this order just (re)saved.
-    // bridgeTokenToBillingAgreement no-ops instantly if one already exists.
-    await bridgeTokenToBillingAgreement(order.userId);
+    // A saved card from some other purchase (e.g. a store product) does NOT
+    // start recurring billing for a pending_membership — only paying for the
+    // membership itself creates its billing agreement (needsBillingAgreement
+    // branch above).
   }
 
   await ddb.send(new UpdateCommand({

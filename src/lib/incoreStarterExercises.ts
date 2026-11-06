@@ -1,0 +1,106 @@
+import type { IncoreExerciseMetric, IncoreMuscleGroup } from './entities';
+
+// Starter library for the INCORE exercise catalog — adminSeedIncoreExercises.ts
+// writes these (skipping any id that already exists). Generated from
+// incore-app's bundled src/data/exercises.ts, ids preserved so trainees'
+// pre-catalog on-device workout history maps onto it 1:1.
+
+type Preset = 'wr' | 'rw' | 't' | 'tdkm' | 'tdm';
+
+const WEIGHT: IncoreExerciseMetric = { key: 'weight', kind: 'weight', unit: 'kg' };
+const REPS: IncoreExerciseMetric = { key: 'reps', kind: 'reps', unit: 'reps' };
+const TIME: IncoreExerciseMetric = { key: 'time', kind: 'time', unit: 'sec' };
+
+export const PRESET_METRICS: Record<Preset, IncoreExerciseMetric[]> = {
+  wr: [WEIGHT, REPS],
+  // Bodyweight movements: reps first (primary), optional added load second.
+  rw: [REPS, WEIGHT],
+  t: [TIME],
+  tdkm: [TIME, { key: 'distance', kind: 'distance', unit: 'km' }],
+  tdm: [TIME, { key: 'distance', kind: 'distance', unit: 'm' }],
+};
+
+// [id, Hebrew name, English name, muscle group, metric preset]
+export const STARTER_EXERCISES: [string, string, string, IncoreMuscleGroup, Preset][] = [
+  ["chest_barbell_bench_press", "לחיצת חזה במוט", "Barbell Bench Press", "chest", "wr"],
+  ["chest_incline_barbell_press", "לחיצת חזה בשיפוע במוט", "Incline Barbell Press", "chest", "wr"],
+  ["chest_dumbbell_bench_press", "לחיצת חזה במשקולות", "Dumbbell Bench Press", "chest", "wr"],
+  ["chest_incline_dumbbell_press", "לחיצת חזה בשיפוע במשקולות", "Incline Dumbbell Press", "chest", "wr"],
+  ["chest_dumbbell_fly", "פרפר משקולות", "Dumbbell Fly", "chest", "wr"],
+  ["chest_cable_crossover", "פרפר בכבלים (קרוסאובר)", "Cable Crossover", "chest", "wr"],
+  ["chest_chest_press_machine", "לחיצת חזה במכונה", "Chest Press Machine", "chest", "wr"],
+  ["chest_pec_deck", "פרפר במכונה (פק דק)", "Pec Deck Fly", "chest", "wr"],
+  ["chest_pushup", "שכיבות סמיכה", "Push-Up", "chest", "rw"],
+  ["chest_dips", "מקבילים לחזה", "Chest Dips", "chest", "rw"],
+  ["back_deadlift", "דדליפט", "Deadlift", "back", "wr"],
+  ["back_barbell_row", "חתירה במוט", "Barbell Row", "back", "wr"],
+  ["back_pullup", "מתח", "Pull-Up", "back", "rw"],
+  ["back_lat_pulldown", "משיכת פולי עליון", "Lat Pulldown", "back", "wr"],
+  ["back_seated_cable_row", "חתירה בכבל בישיבה", "Seated Cable Row", "back", "wr"],
+  ["back_dumbbell_row", "חתירה במשקולת יד אחת", "One-Arm Dumbbell Row", "back", "wr"],
+  ["back_t_bar_row", "חתירת טי-בר", "T-Bar Row", "back", "wr"],
+  ["back_face_pull", "פייס פול", "Face Pull", "back", "wr"],
+  ["back_hyperextension", "היפראקסטנשן לגב תחתון", "Back Hyperextension", "back", "rw"],
+  ["back_straight_arm_pulldown", "משיכת פולי בזרוע ישרה", "Straight-Arm Pulldown", "back", "wr"],
+  ["shoulders_overhead_press", "לחיצת כתפיים במוט", "Barbell Overhead Press", "shoulders", "wr"],
+  ["shoulders_dumbbell_shoulder_press", "לחיצת כתפיים במשקולות", "Dumbbell Shoulder Press", "shoulders", "wr"],
+  ["shoulders_lateral_raise", "הרחקת כתפיים צידית", "Dumbbell Lateral Raise", "shoulders", "wr"],
+  ["shoulders_front_raise", "הרמת משקולות קדמית", "Dumbbell Front Raise", "shoulders", "wr"],
+  ["shoulders_rear_delt_fly", "פרפר לדלתא אחורית", "Rear Delt Fly", "shoulders", "wr"],
+  ["shoulders_arnold_press", "לחיצת ארנולד", "Arnold Press", "shoulders", "wr"],
+  ["shoulders_cable_lateral_raise", "הרחקה צידית בכבל", "Cable Lateral Raise", "shoulders", "wr"],
+  ["shoulders_upright_row", "חתירה זקופה", "Upright Row", "shoulders", "wr"],
+  ["shoulders_shrug", "משיכת כתפיים במוט (שראגס)", "Barbell Shrug", "shoulders", "wr"],
+  ["biceps_barbell_curl", "כפיפת מרפקים במוט", "Barbell Curl", "biceps", "wr"],
+  ["biceps_dumbbell_curl", "כפיפת מרפקים במשקולות", "Dumbbell Curl", "biceps", "wr"],
+  ["biceps_hammer_curl", "כפיפת פטיש", "Hammer Curl", "biceps", "wr"],
+  ["biceps_preacher_curl", "כפיפת מרפקים בספסל מטיף", "Preacher Curl", "biceps", "wr"],
+  ["biceps_incline_dumbbell_curl", "כפיפת מרפקים בשיפוע", "Incline Dumbbell Curl", "biceps", "wr"],
+  ["biceps_cable_curl", "כפיפת מרפקים בכבל", "Cable Curl", "biceps", "wr"],
+  ["biceps_concentration_curl", "כפיפת מרפקים בריכוז", "Concentration Curl", "biceps", "wr"],
+  ["triceps_pushdown", "פשיטת מרפקים בכבל", "Triceps Pushdown", "triceps", "wr"],
+  ["triceps_skull_crusher", "פשיטת מרפקים שוכב", "Skull Crusher", "triceps", "wr"],
+  ["triceps_overhead_extension", "פשיטת מרפקים מעל הראש", "Overhead Triceps Extension", "triceps", "wr"],
+  ["triceps_close_grip_bench", "לחיצת חזה באחיזה צרה", "Close-Grip Bench Press", "triceps", "wr"],
+  ["triceps_dips", "מקבילים לטרייספס", "Triceps Dips", "triceps", "rw"],
+  ["triceps_kickback", "קיקבק במשקולת", "Dumbbell Kickback", "triceps", "wr"],
+  ["quads_back_squat", "סקוואט גב במוט", "Barbell Back Squat", "quads", "wr"],
+  ["quads_front_squat", "סקוואט קדמי", "Front Squat", "quads", "wr"],
+  ["quads_leg_press", "לחיצת רגליים", "Leg Press", "quads", "wr"],
+  ["quads_leg_extension", "פשיטת ברך במכונה", "Leg Extension", "quads", "wr"],
+  ["quads_bulgarian_split_squat", "סקוואט בולגרי", "Bulgarian Split Squat", "quads", "wr"],
+  ["quads_goblet_squat", "סקוואט גביע", "Goblet Squat", "quads", "wr"],
+  ["quads_hack_squat", "סקוואט האק", "Hack Squat", "quads", "wr"],
+  ["quads_walking_lunge", "לאנג' הליכה", "Walking Lunge", "quads", "wr"],
+  ["hamstrings_romanian_deadlift", "דדליפט רומני", "Romanian Deadlift", "hamstrings", "wr"],
+  ["hamstrings_leg_curl", "כפיפת ברך במכונה", "Leg Curl", "hamstrings", "wr"],
+  ["hamstrings_good_morning", "גוד מורנינג", "Good Morning", "hamstrings", "wr"],
+  ["hamstrings_dumbbell_rdl", "דדליפט רומני במשקולות", "Dumbbell Romanian Deadlift", "hamstrings", "wr"],
+  ["hamstrings_glute_ham_raise", "הרמת ישבן-האמסטרינג", "Glute-Ham Raise", "hamstrings", "rw"],
+  ["glutes_hip_thrust", "היפ תראסט במוט", "Barbell Hip Thrust", "glutes", "wr"],
+  ["glutes_glute_bridge", "גשר ישבן", "Glute Bridge", "glutes", "rw"],
+  ["glutes_cable_kickback", "בעיטה אחורית בכבל", "Cable Glute Kickback", "glutes", "wr"],
+  ["glutes_sumo_deadlift", "דדליפט סומו", "Sumo Deadlift", "glutes", "wr"],
+  ["glutes_step_up", "עלייה לספסל עם משקולות", "Dumbbell Step-Up", "glutes", "wr"],
+  ["calves_standing_raise", "הרמת עקבים בעמידה", "Standing Calf Raise", "calves", "wr"],
+  ["calves_seated_raise", "הרמת עקבים בישיבה", "Seated Calf Raise", "calves", "wr"],
+  ["calves_dumbbell_calf_raise", "הרמת עקבים עם משקולות", "Dumbbell Calf Raise", "calves", "wr"],
+  ["calves_leg_press_calf_raise", "הרמת עקבים במכונת לחיצת רגליים", "Leg Press Calf Raise", "calves", "wr"],
+  ["core_plank", "פלאנק", "Plank", "core", "t"],
+  ["core_hanging_leg_raise", "הרמת רגליים בתלייה", "Hanging Leg Raise", "core", "rw"],
+  ["core_cable_crunch", "כפיפת בטן בכבל", "Cable Crunch", "core", "wr"],
+  ["core_russian_twist", "פיתול רוסי", "Russian Twist", "core", "wr"],
+  ["core_ab_wheel_rollout", "גלגלת בטן", "Ab Wheel Rollout", "core", "rw"],
+  ["core_weighted_situp", "כפיפות בטן עם משקולת", "Weighted Sit-Up", "core", "wr"],
+  ["core_side_plank", "פלאנק צידי", "Side Plank", "core", "t"],
+  ["forearms_wrist_curl", "כפיפת שורש כף היד במוט", "Barbell Wrist Curl", "forearms", "wr"],
+  ["forearms_reverse_curl", "כפיפה הפוכה", "Reverse Curl", "forearms", "wr"],
+  ["forearms_farmers_carry", "נשיאת חקלאי", "Farmer's Carry", "forearms", "wr"],
+  ["forearms_dead_hang", "תלייה פסיבית", "Dead Hang", "forearms", "t"],
+  ["cardio_treadmill_run", "ריצה בהליכון", "Treadmill Run", "cardio", "tdkm"],
+  ["cardio_rowing_machine", "חתירה במכונה", "Rowing Machine", "cardio", "tdm"],
+  ["cardio_stationary_bike", "אופניים נייחים", "Stationary Bike", "cardio", "tdkm"],
+  ["cardio_jump_rope", "קפיצה בחבל", "Jump Rope", "cardio", "t"],
+  ["cardio_stair_climber", "מדרגות (סטפר)", "Stair Climber", "cardio", "t"],
+  ["cardio_battle_ropes", "חבלי קרב", "Battle Ropes", "cardio", "t"],
+];

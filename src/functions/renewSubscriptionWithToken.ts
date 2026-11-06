@@ -4,7 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MemberProfileItem, ProductItem } from '../lib/entities';
-import { monthKey, endOfMonth } from '../lib/entities';
+import { monthKey, endOfMonth, israelDayStart } from '../lib/entities';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from '../lib/paymentGrants';
@@ -56,8 +56,7 @@ export async function handler(
 
   const clientName = getMemberFullName(member);
 
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
+  const start = israelDayStart(new Date());
   const end = endOfMonth(start);
   const targetMonth = monthKey(start);
 

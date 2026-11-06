@@ -5,6 +5,8 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { CancellationItem } from '../lib/entities';
+import { ensureCreditBuckets } from '../lib/walletCredit';
+import { refundCreditItem } from '../lib/creditSpend';
 
 // POST /adminRevertLateCancellation
 // Body: { userId, classId }
@@ -90,14 +92,8 @@ export async function handler(
       },
     });
   } else if (cancelItem.consumedFrom === 'EXTRA_PUNCH') {
-    transactItems.push({
-      Update: {
-        TableName: TABLE_NAME,
-        Key: walletKey,
-        UpdateExpression: 'ADD extraPunches :one SET updatedAt = :now',
-        ExpressionAttributeValues: { ':one': 1, ':now': nowIso },
-      },
-    });
+    await ensureCreditBuckets(userId);
+    transactItems.push(refundCreditItem(userId, cancelItem.creditBucket, nowIso));
   }
 
   try {

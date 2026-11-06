@@ -2,8 +2,9 @@ import { randomUUID } from 'crypto';
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { MemberProfileItem, ProductItem, HypOrderItem, HypProductType, HypPaymentMethod } from './entities';
-import { monthKey, endOfMonth } from './entities';
+import { monthKey, endOfMonth, firstOfNextMonth, israelDayStart } from './entities';
 import { queryAllActiveMemberships } from './membershipQueries';
+import { normalizeIsraeliId } from './israeliId';
 
 // HYP's `UserId` param doubles as the cardholder's Israeli ID number when the
 // terminal is configured to require one (confirmed: our terminal is). Per
@@ -12,8 +13,13 @@ import { queryAllActiveMemberships } from './membershipQueries';
 // string, never the cardholder's real ID; sending it risks a CCode 6 decline).
 export const HYP_NO_ID_PLACEHOLDER = '000000000';
 
+// Always the normalized 9-digit string: if an ID ever reached the table as a
+// number (or lost its leading zero some other way), it's padded back here
+// rather than sent to HYP as 8 digits.
 export function getMemberIdNumber(member: MemberProfileItem): string {
-  return member.forms?.health_declaration?.id_number ?? '';
+  const raw: unknown = member.forms?.health_declaration?.id_number;
+  if (raw === undefined || raw === null) return '';
+  return normalizeIsraeliId(String(raw));
 }
 
 // Members are created with separate identity.first_name/last_name — used as
@@ -177,10 +183,9 @@ export async function buildOrderFromProduct(
 
     let start: Date;
     if (hasActiveMembership) {
-      start = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1, 0, 0, 0, 0);
+      start = firstOfNextMonth(new Date());
     } else {
-      start = new Date();
-      start.setHours(0, 0, 0, 0);
+      start = israelDayStart(new Date());
     }
 
     const end = endOfMonth(start);
@@ -189,8 +194,7 @@ export async function buildOrderFromProduct(
     endDate = end.toISOString();
   } else if (productType === 'mid_month') {
     const now = new Date();
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
+    const start = israelDayStart(now);
     const end = endOfMonth(now);
     targetMonth = monthKey(start);
     startDate = start.toISOString();

@@ -169,6 +169,7 @@ export async function handler(
     email: p.identity?.email ?? p.email ?? '',
     role: p.identity?.role ?? p.role ?? 'member',
     accountType: p.identity?.accountType ?? 'member',
+    isTest: p.isTest === true,
     adminAlertMessage: p.admin?.alertMessage ?? '',
     healthDeclaration,
     healthDeclarationValid,

@@ -3,7 +3,9 @@ import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/li
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { ForcaBillingAgreementItem, ForcaSubscriptionOrderItem, MemberProfileItem } from './entities';
 import { endOfMonth, firstOfNextMonth } from './entities';
+import { applyChargeSafety, chargeBlockReason } from './chargeSafety';
 import { chargeHypToken } from './hypClient';
+import { registerPaidMemberOnFutureSessions } from './forcaSubscriptionPayments';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { getExpoPushToken, sendExpoPush } from './push';
 // Admin accounts only ever live in the INCORE table (isAdmin() itself always
@@ -21,8 +23,19 @@ import { notifyAdminsPaymentFailed } from './adminNotify';
 // hypClient.ts's own credentials comment. Used by both the daily cron
 // (chargeForcaSubscriptions.ts) and any future admin "charge now" override.
 export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementItem): Promise<{ success: boolean; ccode: number }> {
-  const payerRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${agreement.payerUid}`, SK: 'PROFILE' } }));
+  const [payerRes, traineeRes] = await Promise.all([
+    ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${agreement.payerUid}`, SK: 'PROFILE' } })),
+    ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${agreement.userId}`, SK: 'PROFILE' } })),
+  ]);
   const payer = payerRes.Item as MemberProfileItem | undefined;
+  const trainee = traineeRes.Item as MemberProfileItem | undefined;
+  // A missing profile also throws after the charge below, leaving the
+  // agreement due and charged again the next day: enforce mode stops that.
+  const blocked = chargeBlockReason([payer, trainee], agreement.token);
+  if (blocked && applyChargeSafety('forca', agreement.agreementId, agreement.userId, blocked)) {
+    await setForcaAgreementStatus(agreement, 'cancelled');
+    return { success: false, ccode: -1 };
+  }
   const chargeUserId = (payer && getMemberIdNumber(payer)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = payer ? getMemberFullName(payer) : agreement.payerName || 'Parent';
   const chargeEmail = payer?.identity?.email || payer?.email || '';
@@ -120,6 +133,9 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
         ':g3sk': newNextChargeDate.toISOString(),
       },
     }));
+
+    // After nextChargeDate is saved, so nothing here can cause a second charge.
+    await registerPaidMemberOnFutureSessions(agreement.userId, agreement.groupId);
   } else {
     // Deliberately does NOT touch the trainee's membership window on
     // failure — whatever's left of the last successfully-paid period stays
@@ -170,18 +186,28 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
       await ddb.send(new UpdateCommand({
         TableName: FORCA_TABLE_NAME,
         Key: { PK: agreement.PK, SK: agreement.SK },
-        UpdateExpression: giveUp
-          ? 'SET consecutiveFailures = :cf, #status = :failed, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK'
-          : 'SET consecutiveFailures = :cf, #status = :active, nextChargeDate = :now, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :now',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':cf': consecutiveFailures,
-          ':failed': 'failed',
-          ':active': 'active',
-          ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
-          ':now': nowIso,
-          ':g3pk': 'FORCA_AGREEMENT_STATUS#active',
-        },
+        // DynamoDB rejects unused values — each branch passes only its own.
+        ...(giveUp
+          ? {
+            UpdateExpression: 'SET consecutiveFailures = :cf, #status = :failed, lastChargeResult = :lcr, updatedAt = :now REMOVE nextChargeDate, GSI3PK, GSI3SK',
+            ExpressionAttributeValues: {
+              ':cf': consecutiveFailures,
+              ':failed': 'failed',
+              ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
+              ':now': nowIso,
+            },
+          }
+          : {
+            UpdateExpression: 'SET consecutiveFailures = :cf, #status = :active, nextChargeDate = :now, lastChargeResult = :lcr, updatedAt = :now, GSI3PK = :g3pk, GSI3SK = :now',
+            ExpressionAttributeValues: {
+              ':cf': consecutiveFailures,
+              ':active': 'active',
+              ':lcr': { at: nowIso, ccode: result.ccode, hypTransactionId: null, success: false },
+              ':now': nowIso,
+              ':g3pk': 'FORCA_AGREEMENT_STATUS#active',
+            },
+          }),
       }));
     }
   }
@@ -287,8 +313,15 @@ export async function runForcaBillingCycle(): Promise<{ processed: number; succe
   let succeeded = 0;
   let failed = 0;
   for (const agreement of due) {
-    const { success } = await chargeOneForcaAgreement(agreement);
-    if (success) succeeded++; else failed++;
+    if (agreement.status !== 'active' && applyChargeSafety('forca', agreement.agreementId, agreement.userId, 'not_active')) continue;
+    // One bad agreement must never abort the rest of the cycle.
+    try {
+      const { success } = await chargeOneForcaAgreement(agreement);
+      if (success) succeeded++; else failed++;
+    } catch (err: any) {
+      console.error(`[chargeForcaSubscriptions] agreement=${agreement.agreementId} user=${agreement.userId} threw:`, err);
+      failed++;
+    }
   }
 
   console.log(`[chargeForcaSubscriptions] processed=${due.length} succeeded=${succeeded} failed=${failed}`);

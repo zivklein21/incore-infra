@@ -6,7 +6,8 @@
   },
   "scripts": {
     "build": "tsc --noEmit && node scripts/build.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npx --yes --package=tsx@4.19.2 -- tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.600.0",
@@ -18,9 +19,11 @@
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "@aws-sdk/s3-request-presigner": "^3.1090.0",
     "@aws-sdk/util-dynamodb": "^3.600.0",
+    "@pdf-lib/fontkit": "^1.1.1",
     "fast-xml-parser": "^5.10.1",
     "iconv-lite": "^0.7.3",
     "nodemailer": "^9.0.3",
+    "pdf-lib": "^1.17.1",
     "sharp": "^0.33.5"
   },
   "devDependencies": {

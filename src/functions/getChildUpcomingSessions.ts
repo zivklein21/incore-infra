@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
+import { isStillUpcomingForTrainee } from '../lib/sessionVisibility';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import type { ClassItem, GroupItem, RegistrationItem } from '../lib/entities';
 
@@ -57,6 +58,8 @@ export async function handler(
       endDate: session.endDate ?? null,
       className: session.className ?? '',
       location: session.location ?? null,
+      traineeNote: session.traineeNote ?? null,
+      traineeEquipment: session.traineeEquipment ?? [],
       coachName: session.coachName ?? null,
       coachPhone: null,
       groupName: await resolveGroupName(session.groupId),
@@ -67,7 +70,7 @@ export async function handler(
 
   const now = Date.now();
   const upcoming = sessions
-    .filter((s): s is NonNullable<typeof s> => !!s && new Date(s.date).getTime() >= now)
+    .filter((s): s is NonNullable<typeof s> => !!s && isStillUpcomingForTrainee(s, now))
     .sort((a, b) => a.date.localeCompare(b.date));
 
   return json(200, { sessions: upcoming });

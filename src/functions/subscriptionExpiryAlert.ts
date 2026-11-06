@@ -6,7 +6,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { deriveMemberName, type MembershipItem } from '../lib/entities';
 import { monthKey } from '../lib/entities';
 import { getAllMemberProfiles } from '../lib/memberScan';
-import { getExpoPushToken } from '../lib/push';
+import { getExpoPushToken, sendExpoPushBatch } from '../lib/push';
 import { resolveTemplate, getMemberLang, fmtDate } from '../lib/templateResolver';
 
 // Used whenever no admin-configured SUBSCRIPTION_EXPIRY template exists yet
@@ -15,14 +15,6 @@ const EXPIRY_TITLE = '⏰ תזכורת: המנוי שלך מסתיים הליל�
 const EXPIRY_BODY = 'מחר מתחיל חודש חדש וזה הזמן לחדש את המנוי שלך ב-INCORE כדי להבטיח את מקומך באימונים הקרובים. היכנסי לאפליקציה להסדרת המנוי! 🤍';
 const EXPIRY_BG = '#5C3A8F';
 const EXPIRY_TEXT = '#FFFFFF';
-const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send';
-const EXPO_CHUNK = 100;
-
-function chunk<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
-  return out;
-}
 
 export async function handler(): Promise<void> {
   const now = new Date();
@@ -155,21 +147,10 @@ export async function handler(): Promise<void> {
     })));
   }
 
-  let totalPushed = 0;
-  for (const batch of chunk(pushMessages, EXPO_CHUNK)) {
-    try {
-      const resp = await fetch(EXPO_PUSH_URL, {
-        method: 'POST',
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(batch.map((m) => ({ to: m.to, title: m.title, body: m.body, sound: 'default' as const, data: { type: 'subscription_expiry_alert' } }))),
-      });
-      await resp.json();
-      totalPushed += batch.length;
-      console.log(`[subscriptionExpiryAlert] push batch ${batch.length} sent`);
-    } catch (err: any) {
-      console.error('[subscriptionExpiryAlert] push batch error:', err);
-    }
-  }
+  const totalPushed = await sendExpoPushBatch(
+    pushMessages.map((m) => ({ to: m.to, title: m.title, body: m.body, sound: 'default' as const, data: { type: 'subscription_expiry_alert' } })),
+    'subscriptionExpiryAlert',
+  );
 
   await Promise.all(dbWrites.map((fn) => fn()));
 

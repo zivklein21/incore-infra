@@ -54,6 +54,16 @@ export interface ClassItem {
   // for this session's still-outstanding equipment — prevents re-alerting on
   // every hourly run for the same session.
   equipmentAlertSentAt?: string;
+  // Trainee-facing per-instance info, set by the admin or the session's own
+  // coach (see lib/sessionInfo/saveSessionTraineeInfo.ts): a free-text note
+  // and an ordered free-text "what to bring" list (e.g. "בקבוק מים") —
+  // unrelated to the catalog-backed coach pack list above. Shown on the
+  // trainee/parent upcoming-session card. A changed note pushes to the
+  // session's trainees; traineeNoteUpdatedAt/By record the last change.
+  traineeNote?: string;
+  traineeNoteUpdatedAt?: string;
+  traineeNoteUpdatedBy?: string;
+  traineeEquipment?: string[];
   location?: string;
   // Denormalized at creation time (see createTrainingSession.ts /
   // getCoachOptions.ts) rather than resolved by id on read — a coach lives
@@ -212,6 +222,8 @@ export interface RegistrationItem {
   targetMonth: string;
   weekKey?: string;
   adminCardId?: string;
+  /** Wallet batch an EXTRA_PUNCH booking was paid from ('YYYY-MM' | 'untracked') — see lib/creditSpend.ts. Absent on bookings made before it was recorded. */
+  creditBucket?: string | null;
   reminderSent?: boolean;
   reminderSentAt?: string;
   // Denormalized display name for trial (guest) registrations, i.e.
@@ -989,6 +1001,16 @@ export interface WorkoutPlanItem {
   timingStructure?: string; // זמני עבודה — e.g. "1 min work / 30s rest | 2-3 sets | 1 min between sets"
   /** Superseded by the 6 fields above — kept only so any plan saved before this redesign still round-trips its old text instead of silently losing it. Not written or shown by the current builder UI. */
   description?: string;
+  /**
+   * Set only on a private per-session copy (see assignSessionWorkoutPlan.ts's
+   * customizeForSession) — the plan it was copied from, and the one ClassItem
+   * it belongs to. Edited in the normal builder like any plan, so logging/
+   * equipment/reports work unchanged, but hidden from every plan list/picker
+   * (library, recurring-template picker, search) — the original plan is
+   * never touched by edits to its copy.
+   */
+  sessionCopyOf?: string;
+  sessionClassId?: string;
   createdAt: string;
   createdBy: string;
 }
@@ -1092,7 +1114,9 @@ export interface MembershipItem {
   monthlyLimit: number;
   weeklyLimit: number;
   allowedLegalCancellationsPerMonth: number;
-  usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number };
+  // rolledToCredit: unused sessions already moved into wallet credit this
+  // month (Thursday job + month-end together), capped at MAX_MONTHLY_ROLLOVER.
+  usage: { totalMonthlyUsed: number; legalCancellationsUsed: number; lateCancellationsUsed: number; rolledToCredit?: number };
   weeklyUsage: Record<string, number>;
   // Admin manual balance nudge (+/-), applied on top of monthlyLimit without
   // touching the contracted total or usage history — see getEffectiveMonthlyLimit.
@@ -1283,6 +1307,8 @@ export interface WeeklyTaskExerciseLogItem {
 export interface MailItem {
   PK: string; SK: string;
   to: string;
+  /** Picks the sender display name (INCORE/FORCA); absent on items queued before it existed → INCORE. */
+  brand?: 'incore' | 'forca';
   message: { subject?: string; html?: string };
 }
 
@@ -1294,6 +1320,8 @@ export interface CancellationItem {
   consumedFrom: string;
   membershipId: string;
   adminCardId?: string | null;
+  /** Wallet batch an EXTRA_PUNCH booking was paid from ('YYYY-MM' | 'untracked'), copied from the registration — refunds return it there (lib/creditSpend.ts). */
+  creditBucket?: string | null;
   weekKey?: string | null;
   targetMonth: string;
   cancelledAt: string; // ISO 8601
@@ -1356,6 +1384,10 @@ export interface MemberProfileItem {
   };
   phone?: string;
   birthday?: string | number;
+  /** A delete started but hasn't finished: never charge this member (memberDeletion.ts). */
+  deletionPending?: boolean;
+  /** Test account: a delete keeps nothing (memberDeletion.ts). */
+  isTest?: boolean;
   // S3 object key (incore_uploads is fully private, see s3.tf) for the
   // member's profile photo — resolved to a short-lived presigned URL by
   // getProfile.ts, never stored/returned as a raw fetchable URL.
@@ -1549,14 +1581,19 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   // Agreement and fills her own Registration Form, in that order, on her
   // first login — see resolvePostLoginRoute.ts).
   const isParentOnly = profile.identity?.accountType === 'parent_only';
+  // A coach (FORCA staff) only ever accepts the app's privacy policy —
+  // never a trainee's Registration/Health/Parental/Orthopedic forms, even
+  // if an admin.require_* flag was set on the account. This only ever
+  // REMOVES requirements, so no one is newly asked to fill anything.
+  const isCoach = role === 'coach';
 
   const registrationFormFilled = forms.registration_form === true;
-  const requiresRegistrationForm = !isParentOnly && admin.require_registration_form === true && !registrationFormFilled;
+  const requiresRegistrationForm = !isParentOnly && !isCoach && admin.require_registration_form === true && !registrationFormFilled;
 
   const hdSubmittedAt = forms.health_declaration?.submitted_at;
   const twoYearsAgo = new Date();
   twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-  const requiresHealthDeclaration = !isParentOnly && role !== 'admin' && admin.require_health_form === true
+  const requiresHealthDeclaration = !isParentOnly && !isCoach && role !== 'admin' && admin.require_health_form === true
     && (!hdSubmittedAt || new Date(hdSubmittedAt) < twoYearsAgo);
 
   const requiresPoliciesAgreement = role !== 'admin' && forms.agreedToPolicies !== true;
@@ -1564,13 +1601,13 @@ export function computeComplianceFlags(profile: MemberProfileItem): ComplianceFl
   // Same parent-fills-it-for-her pattern as Registration/Health — see the
   // forms.parental_authorization comment above for why this is a distinct
   // field from parental_consent.
-  const requiresParentalAuthorization = !isParentOnly && admin.require_parental_authorization === true
+  const requiresParentalAuthorization = !isParentOnly && !isCoach && admin.require_parental_authorization === true
     && !forms.parental_authorization?.submitted_at;
 
   // Mandatory onboarding, filled by the parent right after Health
   // Declaration (see resolvePostLoginRoute.ts) — same parent-fills-it-for-her
   // shape as Registration/Health/Parental Authorization above.
-  const requiresOrthopedicForm = !isParentOnly && admin.require_orthopedic_form === true
+  const requiresOrthopedicForm = !isParentOnly && !isCoach && admin.require_orthopedic_form === true
     && forms.orthopedic_form !== true;
 
   return {
@@ -1747,12 +1784,21 @@ export interface ProductItem {
   popular?: boolean;
   priority_book?: boolean;
   allowed_class_ids?: string[];
+  // Store product lifetime, set in StoreManageScreen: true = זמני (deleted
+  // from the table by handlePaymentSuccess once it's purchased), absent/
+  // false = קבוע (stays in the store).
+  isTemporary?: boolean;
   createdAt?: string;
 }
 
 export interface WalletItem {
   PK: string; SK: string;
   extraPunches: number;
+  // How many of extraPunches were earned in each month ('YYYY-MM'). Credit
+  // expires at the end of the month after the one it was earned in (terms of
+  // service) — see lib/walletCredit.ts and expireWalletCredits.ts. Credit
+  // older than this field (sum < extraPunches) is untracked and never expires.
+  creditBuckets?: Record<string, number>;
 }
 
 // PK=MEMBER#<parentUid>  SK=FAMILY#<childUid>
@@ -1823,12 +1869,38 @@ export function isMembershipUsableForClass(m: MembershipItem, classDate: Date): 
   return false;
 }
 
+/** The Israel calendar month of `date`, as YYYY-MM. */
 export function monthKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return israelDateStr(date).slice(0, 7);
 }
 
 export function getEffectiveMonthlyLimit(m: MembershipItem): number {
   return m.monthlyLimit + (m.manualAdjustment ?? 0);
+}
+
+// At most this many unused membership sessions become wallet credit per
+// membership month — the Thursday job and month-end rollover share the cap.
+export const MAX_MONTHLY_ROLLOVER = 2;
+
+export function rolloverRoomLeft(m: MembershipItem): number {
+  return Math.max(0, MAX_MONTHLY_ROLLOVER - (m.usage?.rolledToCredit ?? 0));
+}
+
+// A week has ONE weekly limit even when it spans two months (e.g. Sun 30 Aug
+// – Sat 5 Sep): each class counts on its own month's membership, so that
+// week's usage is split across two records and has to be summed. Records that
+// share a membershipId are copies of the same migration bridge filed under
+// several months (the copy carries the original's weeklyUsage), so those take
+// the max instead of being added twice.
+export function weeklyUsedAcrossMemberships(memberships: MembershipItem[], weekKey: string): number {
+  const byId = new Map<string, number>();
+  for (const m of memberships) {
+    const used = m.weeklyUsage?.[weekKey] ?? 0;
+    byId.set(m.membershipId, Math.max(byId.get(m.membershipId) ?? 0, used));
+  }
+  let total = 0;
+  for (const used of byId.values()) total += used;
+  return total;
 }
 
 export function computeWeekKey(date: Date): string {
@@ -1878,9 +1950,20 @@ export function israelWallTimeToDate(year: number, month0: number, day: number, 
   return new Date(guessUtcMs - offsetMin * 60000);
 }
 
-/** Last millisecond of the last day of the month containing `date`. */
+function israelYearMonth0(date: Date): [number, number] {
+  const [year, month] = israelDateStr(date).split('-').map(Number);
+  return [year, month - 1];
+}
+
+/** 00:00 in Israel on the day containing `date`. */
+export function israelDayStart(date: Date): Date {
+  const [year, month, day] = israelDateStr(date).split('-').map(Number);
+  return israelWallTimeToDate(year, month - 1, day, 0, 0);
+}
+
+/** Last millisecond of the last day, in Israel, of the month containing `date`. */
 export function endOfMonth(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+  return new Date(firstOfNextMonth(date).getTime() - 1);
 }
 
 /** One month later, same time-of-day. */
@@ -1890,7 +1973,116 @@ export function addMonths(date: Date, months: number): Date {
   return d;
 }
 
-/** 00:00 on the 1st of the month following `from`. */
+/** 00:00 in Israel on the 1st of the month following `from`. */
 export function firstOfNextMonth(from: Date): Date {
-  return new Date(from.getFullYear(), from.getMonth() + 1, 1, 0, 0, 0, 0);
+  const [year, month0] = israelYearMonth0(from);
+  return israelWallTimeToDate(year, month0 + 1, 1, 0, 0);
 }
+
+// ─── INCORE Exercise Catalog + Workout Journal ─────────────────────────────
+// INCORE-only, lives in the INCORE table (TABLE_NAME) exclusively — a
+// separate model from FORCA's ExerciseDefinitionItem/ExerciseLogEntryItem
+// rather than a brand flag on them (same absolute-separation rule as every
+// other FORCA/INCORE pair, see dynamo.ts). Also a different measurement
+// model: FORCA composes a fixed set of string literals ('weight_reps',
+// 'weight_bodyweight_reps_band_level', ...), which can't express time +
+// distance or an admin-named metric; INCORE instead stores an ordered list
+// of metric components, any combination of which is valid. See
+// lib/incoreExercises.ts for validation and adminSaveIncoreExercise.ts.
+
+export type IncoreMuscleGroup =
+  | 'chest' | 'back' | 'shoulders' | 'biceps' | 'triceps' | 'quads'
+  | 'hamstrings' | 'adductors' | 'glutes' | 'calves' | 'core' | 'forearms' | 'cardio';
+
+export type IncoreMetricKind = 'weight' | 'reps' | 'time' | 'distance' | 'band' | 'custom';
+
+// One measured component of an exercise. key is what a logged set's values
+// are keyed by (built-ins use their own kind as key, e.g. 'weight'; customs
+// get a generated 'c_...' key) so renaming a custom metric's label never
+// orphans already-logged values. unit is fixed for weight ('kg'), reps
+// ('reps') and time ('sec' — always stored as total seconds); admin-chosen
+// for distance ('m'/'km') and custom (free text, e.g. "RPE", "level").
+// lowerIsBetter flips "best"/PR detection for e.g. a timed run.
+// 'band' (resistance band level) stores a logged value as the 0-based index
+// into levels, which the admin orders lightest -> heaviest — so a higher
+// value is always a heavier band and charts/PR detection need no special
+// case. Logs snapshot metrics (levels included), so renaming or reordering
+// levels later never reinterprets an old entry.
+export interface IncoreExerciseMetric {
+  key: string;
+  kind: IncoreMetricKind;
+  label?: string;
+  unit: string;
+  lowerIsBetter?: boolean;
+  /** 'band' only — level labels, lightest first. */
+  levels?: string[];
+}
+
+// PK=INCOREEXERCISE SK=EX#<id>
+// The whole catalog shares one partition so listing it is a single Query —
+// not a Scan with a filter like FORCA's adminListExercises.ts, which would
+// have to page through the entire (much larger) INCORE table. The catalog
+// is admin-authored and small (low hundreds of rows), far below any
+// partition throughput concern. Ids of the starter library (adminSeedIncoreExercises.ts) are the same
+// slugs incore-app's bundled src/data/exercises.ts used, so workouts a
+// trainee logged on-device before this catalog existed can be migrated
+// onto it 1:1 (see incore-app's useWorkoutJournal.ts).
+export interface IncoreExerciseItem {
+  PK: string; SK: string;
+  name: string;
+  nameEn?: string;
+  description?: string;
+  /** Primary group — always muscleGroups[0]. Kept as its own field so every
+   *  single-group reader (badges, older log snapshots) keeps working. */
+  muscleGroup: IncoreMuscleGroup;
+  /** Every group the exercise works, primary first. Absent on exercises
+   *  saved before multi-group support — read as [muscleGroup]. */
+  muscleGroups?: IncoreMuscleGroup[];
+  /** S3 key under exercise-images/ — resolved to a short-lived signed URL on every read. */
+  imageKey?: string;
+  /** S3 key (.gif) under exercise-images/ — an animated demo of the movement, shown first in the trainee's preview. Same signed-URL handling as imageKey. */
+  gifKey?: string;
+  /** Ordered — metrics[0] is the exercise's primary metric (the Progress Graphs default). */
+  metrics: IncoreExerciseMetric[];
+  active: boolean;
+  createdAt: string;
+  createdBy: string;
+  updatedAt: string;
+}
+
+// One exercise performed inside a logged workout. exerciseName/muscleGroup/
+// metrics are snapshotted at save time so a later catalog edit or delete
+// never reinterprets or breaks old entries (same rationale as
+// ExerciseLogEntryItem.measurementType). Each set maps metric key -> value.
+export interface IncoreWorkoutLogExercise {
+  exerciseId: string;
+  exerciseName: string;
+  muscleGroup: IncoreMuscleGroup;
+  /** Snapshot of the exercise's muscleGroups (absent on older logs). */
+  muscleGroups?: IncoreMuscleGroup[];
+  metrics: IncoreExerciseMetric[];
+  sets: Record<string, number>[];
+}
+
+// PK=MEMBER#<uid> SK=WORKOUTLOG#<id>
+// Lives in the member's own partition (next to PROFILE/CANCEL#/MEMBERSHIP#)
+// so a member's whole journal is a single Query, no GSI needed. A log tied to a
+// booked class uses the deterministic id `cls_<classId>` — re-logging the
+// same class overwrites instead of duplicating, and getMyWorkoutJournal.ts
+// uses it to tell which past classes are still unlogged. A free (non-class)
+// workout gets a random id.
+export interface IncoreWorkoutLogItem {
+  PK: string; SK: string;
+  userId: string;
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string;
+  title?: string;
+  classId?: string;
+  className?: string;
+  exercises: IncoreWorkoutLogExercise[];
+  /** Set by the one-time on-device history import, so re-running it is idempotent. */
+  importedFrom?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+

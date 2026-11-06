@@ -3,6 +3,7 @@ import { UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../lib/dynamo';
 import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
+import { isValidIsraeliId, normalizeIsraeliId } from '../lib/israeliId';
 
 // POST /submitHealthDeclaration
 // Auth: Cognito JWT (any signed-in member)
@@ -27,7 +28,14 @@ export async function handler(
     return json(400, { error: 'invalid_json' });
   }
 
-  const idNumber = typeof body.idNumber === 'string' ? body.idNumber : '';
+  // Stored as the normalized 9-digit STRING (leading zero kept) — it's what
+  // every HYP charge sends as UserId (see hypOrders.ts getMemberIdNumber).
+  // Rejected outright if the check digit fails: a mistyped ID used to be
+  // saved as-is and only surfaced later as a HYP decline.
+  const idNumber = typeof body.idNumber === 'string' ? normalizeIsraeliId(body.idNumber) : '';
+  if (!isValidIsraeliId(idNumber)) {
+    return json(400, { error: 'invalid_id_number', message: 'מספר תעודת הזהות אינו תקין. יש לבדוק את הספרות ולנסות שוב.' });
+  }
   const name = typeof body.name === 'string' ? body.name : '';
   const answers = (body.answers && typeof body.answers === 'object') ? body.answers : {};
 

@@ -4,7 +4,6 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ProductItem } from '../lib/entities';
-import { bridgeTokenToBillingAgreement } from '../lib/hypBillingAgreements';
 
 // POST /adminUpdatePendingMembership
 // Auth: Cognito JWT, caller must be admin
@@ -52,10 +51,9 @@ export async function handler(
 
   console.log(`[adminUpdatePendingMembership] member=${memberId} -> pending plan=${membershipId} by ${callerUid}`);
 
-  // If this member already has a usable saved token (from some earlier,
-  // unrelated order), this immediately wires it up for 1st-of-month
-  // auto-billing instead of leaving it stranded until they manually pay.
-  await bridgeTokenToBillingAgreement(memberId);
+  // Only the field changes. The plan is used when the member herself next
+  // pays (first payment / renewal in the app) — that payment creates the
+  // billing agreement. No agreement is created here from an old saved card.
 
   return json(200, { success: true, membershipId });
 }
