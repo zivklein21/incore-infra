@@ -13,9 +13,8 @@ import {
   assignmentKey, latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign, isCoachProfile,
 } from './submissions';
 import type { SignatureRecord } from './pdf/renderFormPdf';
-import { ensureSignedPdf } from './signedPdf';
+import { runInBackground } from '../backgroundJobs';
 import { rememberPrefill } from './prefill';
-import { writeAudit } from './audit';
 import { commitFormFiles } from './formFiles';
 
 // POST /submitFormPart
@@ -189,16 +188,9 @@ export async function handler(
     throw err;
   }
 
-  await writeAudit(caller.brand, { action: body.acknowledge === true ? 'acknowledge' : 'sign', templateId, submissionId: sub.submissionId, childId: caller.childId, actorUid: uid, detail: { role, version, device } });
 
   if (after.status === 'completed') {
-    await writeAudit(caller.brand, { action: 'complete', templateId, submissionId: sub.submissionId, childId: caller.childId, actorUid: uid, detail: { version } });
-    try {
-      await ensureSignedPdf(caller.brand, sub, uid);
-    } catch (err) {
-      // The submission is complete regardless; the PDF is (re)generated on the first download.
-      console.error('[submitFormPart] PDF generation failed', sub.submissionId, err);
-    }
+    await runInBackground({ job: 'signed_form_pdf', brand: caller.brand, pk: sub.PK, sk: sub.SK, actorUid: uid });
   } else {
     await notifyNextSigner(caller.brand, sub, after.missing.filter(r => r !== role), t.name);
   }

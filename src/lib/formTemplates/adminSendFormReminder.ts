@@ -5,7 +5,6 @@ import { getExpoPushToken, sendExpoPush } from '../push';
 import {
   assignmentKey, computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listSubmissionsOfTemplate, parentOf, versionToSign,
 } from './submissions';
-import { writeAudit } from './audit';
 import { parseBrand } from './shared';
 
 // POST /adminSendFormReminder
@@ -54,6 +53,5 @@ export async function handler(
     await sendExpoPush(token, 'תזכורת: טופס מחכה לחתימה', `"${t.name}" עדיין מחכה לחתימה שלך באפליקציה`, { type: 'form_to_sign', templateId });
     sent++;
   }
-  await writeAudit(brand, { action: 'remind', templateId, childId, actorUid: uid, detail: { assignmentId, to: missing, sent } });
   return json(200, { success: true, sent, to: missing });
 }

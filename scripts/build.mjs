@@ -31,7 +31,7 @@ const pkg = JSON.parse(readFileSync(path.join(rootDir, 'package.json'), 'utf8'))
 // Plus packages the Lambda nodejs20.x runtime itself provides (full AWS SDK
 // v3) that are deliberately NOT in package.json — see
 // src/types/client-sesv2.d.ts for why adding them there is avoided.
-const RUNTIME_PROVIDED = ['@aws-sdk/client-sesv2'];
+const RUNTIME_PROVIDED = ['@aws-sdk/client-sesv2', '@aws-sdk/client-lambda'];
 const external = [...Object.keys(pkg.dependencies ?? {}), ...RUNTIME_PROVIDED];
 
 const entryPoints = readdirSync(functionsDir)

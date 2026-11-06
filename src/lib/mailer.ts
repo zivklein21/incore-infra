@@ -15,9 +15,12 @@ import * as nodemailer from 'nodemailer';
 export type MailProvider = 'gmail' | 'ses_with_fallback' | 'ses';
 export const MAIL_PROVIDER: MailProvider = 'ses_with_fallback';
 
-export const SES_FROM_ADDRESS = 'no-reply@incoretraining.com';
-export const SES_CONFIGURATION_SET = 'incore-transactional';
-export const REPLY_TO_ADDRESS = 'incoreworkout@gmail.com';
+// Sender settings: set the env var to override, otherwise these defaults apply.
+// A new From address must also match ses.tf's local.ses_from_address — the
+// Lambda role may only send as that address.
+export const SES_FROM_ADDRESS = process.env.MAIL_FROM_ADDRESS || 'no-reply@incoretraining.com';
+export const SES_CONFIGURATION_SET = process.env.MAIL_CONFIGURATION_SET || 'incore-transactional';
+export const REPLY_TO_ADDRESS = process.env.MAIL_REPLY_TO || 'incoreworkout@gmail.com';
 const SES_REGION = 'eu-central-1';
 const GMAIL_ADDRESS = 'incoreworkout@gmail.com';
 

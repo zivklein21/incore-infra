@@ -112,7 +112,6 @@ export function fromStored(item: Record<string, unknown>, brand: 'incore' | 'for
 //   PK=FORMSUB#<templateId> SK=<childId>#<assignmentId>#<createdAt>
 //                          one family's copy (answers, signatures, PDF key);
 //                          GSI1PK=MEMBER#<childId> lists a child's copies
-//   PK=FORM_AUDIT          SK=<iso>#<uuid>   see audit.ts
 export const FORM_ASSIGNMENT_SK_PREFIX = 'FORM_ASSIGNMENT#';
 export const formAssignmentKey = (templateId: string, assignmentId: string) =>
   ({ PK: 'APPCONFIG', SK: `${FORM_ASSIGNMENT_SK_PREFIX}${templateId}#${assignmentId}` });

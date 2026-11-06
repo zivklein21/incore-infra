@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { MemberProfileItem, ProductItem, HypOrderItem, HypProductType, HypPaymentMethod } from './entities';
-import { monthKey, endOfMonth } from './entities';
+import { monthKey, endOfMonth, firstOfNextMonth, israelDayStart } from './entities';
 import { queryAllActiveMemberships } from './membershipQueries';
 import { normalizeIsraeliId } from './israeliId';
 
@@ -183,10 +183,9 @@ export async function buildOrderFromProduct(
 
     let start: Date;
     if (hasActiveMembership) {
-      start = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 1, 0, 0, 0, 0);
+      start = firstOfNextMonth(new Date());
     } else {
-      start = new Date();
-      start.setHours(0, 0, 0, 0);
+      start = israelDayStart(new Date());
     }
 
     const end = endOfMonth(start);
@@ -195,8 +194,7 @@ export async function buildOrderFromProduct(
     endDate = end.toISOString();
   } else if (productType === 'mid_month') {
     const now = new Date();
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
+    const start = israelDayStart(now);
     const end = endOfMonth(now);
     targetMonth = monthKey(start);
     startDate = start.toISOString();

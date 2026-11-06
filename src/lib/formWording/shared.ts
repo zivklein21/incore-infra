@@ -11,7 +11,8 @@
 // wording catalog, src/shared/forms/builtInWording.ts) to per-language
 // overrides; a missing language means "keep the app's current text".
 
-export const WORDING_FORM_IDS = ['health', 'parental_consent'] as const;
+// parent_forms_intro isn't a form: it's the admin's message above the parent's forms list.
+export const WORDING_FORM_IDS = ['health', 'parental_consent', 'parent_forms_intro'] as const;
 export type WordingFormId = typeof WORDING_FORM_IDS[number];
 
 export const isWordingFormId = (v: unknown): v is WordingFormId =>

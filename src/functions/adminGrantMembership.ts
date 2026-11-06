@@ -4,11 +4,7 @@ import { GetCommand, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { monthKey } from '../lib/entities';
-
-function endOfMonth(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
-}
+import { endOfMonth, israelDayStart, monthKey } from '../lib/entities';
 
 // POST /adminGrantMembership
 // Auth: Cognito JWT, caller must be admin
@@ -53,13 +49,11 @@ export async function handler(
   let startDate: Date, endDate: Date, isAutoRenew: boolean;
 
   if (subType === 'mid_month') {
-    startDate = new Date(now);
-    startDate.setHours(0, 0, 0, 0);
+    startDate = israelDayStart(now);
     endDate = endOfMonth(now);
     isAutoRenew = typeof body.isAutoRenew === 'boolean' ? body.isAutoRenew : false;
   } else {
-    startDate = new Date(now);
-    startDate.setHours(0, 0, 0, 0);
+    startDate = israelDayStart(now);
     endDate = endOfMonth(startDate);
     isAutoRenew = typeof body.isAutoRenew === 'boolean' ? body.isAutoRenew : true;
   }

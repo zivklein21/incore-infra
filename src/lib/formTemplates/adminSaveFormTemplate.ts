@@ -9,7 +9,6 @@ import {
   defaultRoleFor, normalizeAcknowledgers, normalizeSections, isCoachForm, normalizeSettings, normalizeSigners, normalizeTraineeDevice,
   templateContentHash, TemplateValidationError, traineeDeviceFor,
 } from './schema';
-import { writeAudit } from './audit';
 
 type TransactItems = NonNullable<ConstructorParameters<typeof TransactWriteCommand>[0]['TransactItems']>;
 
@@ -130,7 +129,6 @@ export async function handler(
     throw err;
   }
 
-  await writeAudit(brand, { action: existingId ? 'edit' : 'create', templateId: id, actorUid: uid, detail: { name } });
 
   return json(200, { success: true, id, status, version: publishedVersion, hasUnpublishedChanges: contentHash !== publishedHash, updatedAt: now });
 }

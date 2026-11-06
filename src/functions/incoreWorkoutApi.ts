@@ -1,5 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { isBackgroundJob, type BackgroundJob } from '../lib/backgroundJobTypes';
 import { json } from '../lib/http';
+import { handleBackgroundJob } from '../lib/formTemplates/pdfJobs';
 import { handler as adminListIncoreExercises } from '../lib/incoreWorkout/adminListIncoreExercises';
 import { handler as adminSaveIncoreExercise } from '../lib/incoreWorkout/adminSaveIncoreExercise';
 import { handler as adminDeleteIncoreExercise } from '../lib/incoreWorkout/adminDeleteIncoreExercise';
@@ -28,6 +30,9 @@ import { handler as getFormWording } from '../lib/formWording/getFormWording';
 import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
 import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
 import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
+import { handler as removeMySavedCard } from '../lib/removeMySavedCard';
+import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers } from '../lib/memberArchive';
+import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -66,6 +71,13 @@ const HANDLERS: Record<string, Handler> = {
   adminSaveFormWording,
   // FORCA: per-session trainee note + equipment list (coach/admin).
   saveSessionTraineeInfo,
+  // FORCA: a member removing their own saved card.
+  removeMySavedCard,
+  // Deleted members' retained records.
+  adminListDeletedMembers,
+  adminGetDeletedMember,
+  adminGetArchivedFileUrl,
+  adminSetMemberTestFlag,
   // FORCA: photo / publication consent.
   getPhotoConsent,
   changePhotoConsent,
@@ -82,8 +94,13 @@ const HANDLERS: Record<string, Handler> = {
 // dispatches on the matched route's path. The client still calls the same
 // /<name> URLs as if each were its own function.
 export async function handler(
-  event: APIGatewayProxyEventV2WithJWTAuthorizer,
+  event: APIGatewayProxyEventV2WithJWTAuthorizer | BackgroundJob,
 ): Promise<APIGatewayProxyStructuredResultV2> {
+  if (isBackgroundJob(event)) {
+    await handleBackgroundJob(event);
+    return json(200, { success: true });
+  }
+
   // routeKey is e.g. "POST /saveMyWorkoutLog" — the route template that
   // matched, not the raw path, so it's immune to stage prefixes.
   const name = event.routeKey.split(' /')[1] ?? '';

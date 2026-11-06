@@ -4,7 +4,6 @@ import type { SignupFlowStep } from '../signupFlow/shared';
 import { isCoachForm, type FormKind } from './schema';
 import { formAssignmentKey, formTemplateKey } from './shared';
 import { formsTable, listAssignments, listTemplateHeads, SIGNUP_ASSIGNMENT_ID, type Brand } from './submissions';
-import { writeAudit } from './audit';
 
 // Custom templates in the First Sign-up Order. A template step's `included`
 // is NOT stored truth: what really decides whether members get a form is the
@@ -114,6 +113,5 @@ export async function applySignupToggles(brand: Brand, steps: SignupFlowStep[], 
       }));
     }
     await syncSignupAssignment(table, template.id, signup, uid);
-    if (kindChanged) await writeAudit(brand, { action: signup ? 'assign' : 'unassign', templateId: template.id, actorUid: uid, detail: { assignmentId: SIGNUP_ASSIGNMENT_ID, via: 'first_signup_order' } });
   }
 }

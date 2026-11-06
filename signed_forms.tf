@@ -7,8 +7,10 @@
 #   - SSE-KMS with a dedicated customer-managed key
 #   - versioning on, and a bucket policy that DENIES every delete of a
 #     signed-forms/ object or object version — for everyone, admins
-#     included. The Lambda writes with If-None-Match: * so it can't
-#     overwrite one either. Signed PDFs are never overwritten or deleted.
+#     included — except the retention job's own role (retention.tf). The
+#     Lambdas write with If-None-Match: * so they can't overwrite one either.
+#     A deleted member's files are tagged archived=true and move to Glacier
+#     Instant Retrieval.
 #   - reads only via short-lived presigned URLs (getSignedFormPdfUrl.ts)
 #
 # previews/ holds "Preview PDF" samples (SAMPLE watermark, dummy data); a
@@ -117,6 +119,27 @@ resource "aws_s3_bucket_lifecycle_configuration" "signed_forms" {
   bucket     = aws_s3_bucket.signed_forms[each.key].id
   depends_on = [aws_s3_bucket_versioning.signed_forms]
 
+  # A deleted member's retained files (lib/memberDeletion.ts). Still open
+  # instantly; S3 leaves files under 128 KB in Standard, where they're cheaper.
+  rule {
+    id     = "archive-deleted-members"
+    status = "Enabled"
+    filter {
+      tag {
+        key   = "archived"
+        value = "true"
+      }
+    }
+    transition {
+      days          = 30
+      storage_class = "GLACIER_IR"
+    }
+    noncurrent_version_transition {
+      noncurrent_days = 30
+      storage_class   = "GLACIER_IR"
+    }
+  }
+
   rule {
     id     = "expire-preview-samples"
     status = "Enabled"
@@ -163,6 +186,7 @@ resource "aws_s3_bucket_policy" "signed_forms" {
         Principal = "*"
         Action    = ["s3:DeleteObject", "s3:DeleteObjectVersion"]
         Resource  = "${aws_s3_bucket.signed_forms[each.key].arn}/signed-forms/*"
+        Condition = { ArnNotEquals = { "aws:PrincipalArn" = aws_iam_role.retention_job.arn } }
       },
       {
         Sid       = "DenyInsecureTransport"
@@ -176,7 +200,7 @@ resource "aws_s3_bucket_policy" "signed_forms" {
   })
 }
 
-# Read + write only — no delete permission for the Lambdas at all.
+# Read, write, list and tag — no delete permission for these Lambdas at all.
 resource "aws_iam_role_policy" "lambda_signed_forms" {
   name = "incore-lambda-signed-forms"
   role = aws_iam_role.lambda_execution_role.id
@@ -186,8 +210,20 @@ resource "aws_iam_role_policy" "lambda_signed_forms" {
     Statement = [
       {
         Effect   = "Allow"
-        Action   = ["s3:GetObject", "s3:PutObject"]
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:PutObjectTagging", "s3:PutObjectVersionTagging"]
         Resource = [for b in aws_s3_bucket.signed_forms : "${b.arn}/*"]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket", "s3:ListBucketVersions"]
+        Resource = [for b in aws_s3_bucket.signed_forms : b.arn]
+      },
+      {
+        # Signed PDFs render in the background (lib/backgroundJobs.ts), and
+        # deleting a test account asks the retention job to remove its files.
+        Effect   = "Allow"
+        Action   = ["lambda:InvokeFunction"]
+        Resource = [aws_lambda_function.fn["incoreWorkoutApi"].arn, aws_lambda_function.member_retention_job.arn]
       },
       {
         Effect   = "Allow"

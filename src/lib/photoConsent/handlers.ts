@@ -1,11 +1,11 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { getUid, json } from '../http';
 import { getExpoPushToken, sendExpoPush } from '../push';
-import { writeAudit } from '../formTemplates/audit';
 import { resolveFamilyCaller, type FamilyCaller } from '../formTemplates/familyForms';
 import { presignPdf } from '../formTemplates/signedPdf';
 import { getProfile, isCoachProfile, parentOf } from '../formTemplates/submissions';
 import { consentStatus, otherSide, signatureError, type ConsentDecision, type ConsentRole, type ConsentStatus } from './shared';
+import { runInBackground } from '../backgroundJobs';
 import { ConsentConflict, consentHistory, ensureConsentPdf, loadConsent, recordConsentChange } from './store';
 
 type Event = APIGatewayProxyEventV2WithJWTAuthorizer;
@@ -83,16 +83,7 @@ export async function changePhotoConsent(event: Event): Promise<Result> {
     throw err;
   }
 
-  await writeAudit('forca', {
-    action: 'sign', templateId: 'photo_consent', submissionId: change.log.id, childId: caller.childId, actorUid: uid,
-    detail: { role: caller.role, decision, status: change.status, device: caller.device },
-  });
-  try {
-    await ensureConsentPdf(change.log);
-  } catch (err) {
-    // The change already stands; the PDF is generated on its first download.
-    console.error('[photoConsent] PDF generation failed', change.log.id, err);
-  }
+  await runInBackground({ job: 'photo_consent_pdf', childId: change.log.childId, logId: change.log.id });
   await notifyOtherSide(caller, change.status);
 
   return json(200, { success: true, status: change.status, parent: change.state.parent, trainee: change.state.trainee, signedAt: change.log.signedAt });

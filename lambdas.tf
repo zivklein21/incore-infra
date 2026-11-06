@@ -33,6 +33,7 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
       Resource = [
         aws_dynamodb_table.incore_table.arn, "${aws_dynamodb_table.incore_table.arn}/index/*",
         aws_dynamodb_table.forca_table.arn, "${aws_dynamodb_table.forca_table.arn}/index/*",
+        aws_dynamodb_table.member_archive.arn,
       ]
     }]
   })
@@ -158,9 +159,12 @@ resource "null_resource" "stage_layer" {
 # therefore Lambda updates, to only the functions whose bundled output
 # actually changed — previously every function shared the same hash, so any
 # single-function change forced a redeploy of all ~137 Lambdas.
+#
+# Reads dist/ at plan time, so run `npm run build` before `terraform plan`. A
+# depends_on on build_functions would defer every hash to apply and show all
+# Lambdas as changing; this way a plan lists only the code that really changed.
 data "archive_file" "function_code" {
   for_each    = toset(local.all_function_names)
-  depends_on  = [null_resource.build_functions]
   type        = "zip"
   source_file = "${path.module}/dist/${each.key}.js"
   output_path = "${path.module}/exports/${each.key}.zip"
@@ -197,7 +201,7 @@ resource "aws_lambda_function" "fn" {
   # do), the whole resource depends on the user pool, and the user pool's
   # own lambda_config (cognito.tf) depending back on 3 specific "fn"
   # instances is a real cycle. Splitting the resource is the only clean fix.
-  for_each = toset([for name in local.all_function_names : name if !contains(local.cognito_custom_auth_functions, name)])
+  for_each = toset([for name in local.all_function_names : name if !contains(concat(local.cognito_custom_auth_functions, ["memberRetentionJob"]), name)])
 
   function_name    = "incore-${lower(replace(each.key, "/([A-Z])/", "-$1"))}"
   filename         = data.archive_file.function_code[each.key].output_path
@@ -227,7 +231,7 @@ resource "aws_lambda_function" "fn" {
   layers      = [aws_lambda_layer_version.dependencies.arn]
 
   environment {
-    variables = {
+    variables = merge({
       TABLE_NAME              = aws_dynamodb_table.incore_table.name
       FORCA_TABLE_NAME        = aws_dynamodb_table.forca_table.name
       BUCKET_NAME             = aws_s3_bucket.incore_uploads.bucket
@@ -241,7 +245,12 @@ resource "aws_lambda_function" "fn" {
       HYP_ENTERPRISE_USER     = var.hyp_enterprise_user
       HYP_ENTERPRISE_PASSWORD = var.hyp_enterprise_password
       HYP_ENTERPRISE_TERMINAL = var.hyp_enterprise_terminal
-    }
+      }, contains(local.member_archive_functions, each.key) ? {
+      ARCHIVE_TABLE_NAME     = aws_dynamodb_table.member_archive.name
+      RETENTION_JOB_FUNCTION = local.retention_job_name
+      } : {}, contains(local.charge_functions, each.key) ? {
+      CHARGE_SAFETY_MODE = local.charge_safety_mode
+    } : {})
   }
 }
 

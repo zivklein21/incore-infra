@@ -11,7 +11,6 @@ import { Answers, answerFormatError, FieldAnswer, isAnswered, visibleIds } from 
 import {
   AssignmentTarget, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, listFormPeople, loadRosters, parentOf, getProfile, targetIncludes,
 } from './submissions';
-import { writeAudit } from './audit';
 import { participatingRoles, rolesOnDevice } from './familyForms';
 
 // POST /adminAssignFormTemplate
@@ -64,7 +63,6 @@ export async function handler(
       if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return json(404, { error: 'not_found' });
       throw err;
     }
-    await writeAudit(brand, { action: 'unassign', templateId, actorUid: uid, detail: { assignmentId } });
     return json(200, { success: true });
   }
 
@@ -152,7 +150,6 @@ export async function assignForm(input: {
     version: head.publishedVersion, createdAt: now, createdBy: uid,
   };
   await ddb.send(new PutCommand({ TableName: formsTable(brand), Item: item, ConditionExpression: 'attribute_not_exists(SK)' }));
-  await writeAudit(brand, { action: 'assign', templateId, actorUid: uid, detail: { assignmentId, target, trainees: trainees.length } });
 
   let notified = 0;
   if (input.notify !== false) {

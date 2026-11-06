@@ -12,8 +12,27 @@ import type { ForcaBillingAgreementItem, ForcaSubscriptionOrderItem, MemberProfi
 import { endOfMonth, firstOfNextMonth } from './entities';
 import { verifyHypTransaction, getHypToken, inquireCardBrand } from './hypClient';
 import { recordSystemAlert } from './alerts';
+import { registerMemberOnFutureGroupSessions } from './sessionInstance';
 
 const APP_REDIRECT_SCHEME = 'incore://payment-complete';
+
+// A paid month activates the membership, so the member joins the group's
+// already-created future sessions, same as adminGrantForcaMembership.ts.
+// Never throws: the card is already charged by now, and a failure here must
+// not fail the payment or stop the agreement's next charge date being kept.
+export async function registerPaidMemberOnFutureSessions(userId: string, groupId: string): Promise<void> {
+  try {
+    await registerMemberOnFutureGroupSessions(userId, groupId);
+  } catch (err: any) {
+    console.error(`[forcaSubscriptionPayments] user=${userId} group=${groupId} future session registration failed:`, err);
+    await recordSystemAlert({
+      severity: 'critical',
+      source: 'forcaSubscriptionPayments',
+      message: `FORCA member ${userId} paid but could not be added to future sessions of group ${groupId} — assign the group again to retry`,
+      context: { userId, groupId },
+    }).catch(() => undefined);
+  }
+}
 
 // Shared by both purchase paths for a FORCA subscription's first charge —
 // the fresh-hosted-page flow below (handleForcaSubscriptionOrderCallback,
@@ -165,6 +184,8 @@ export async function applyForcaSubscriptionCharge(
       ...(billingAgreementId ? { ':bid': billingAgreementId } : {}),
     },
   }));
+
+  await registerPaidMemberOnFutureSessions(order.userId, order.groupId);
 
   console.log(`[forcaSubscriptionPayments] order=${orderId} user=${order.userId} completed transId=${hypTransactionId} agreement=${billingAgreementId ?? 'none'}`);
   return { billingAgreementId };

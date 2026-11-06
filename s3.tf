@@ -63,13 +63,34 @@ resource "aws_iam_role_policy" "lambda_s3" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      # s3:DeleteObject is only exercised by adminDeleteS3Object.ts (Admin
-      # Portal Assets Manager) — every other S3-touching function only
-      # reads/writes.
-      Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject"]
+      # s3:DeleteObject is exercised by adminDeleteS3Object.ts (Admin Portal
+      # Assets Manager) and member deletion (lib/memberDeletion.ts), which
+      # also tags retained files.
+      Action   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket", "s3:DeleteObject", "s3:PutObjectTagging"]
       Resource = [aws_s3_bucket.incore_uploads.arn, "${aws_s3_bucket.incore_uploads.arn}/*"]
     }]
   })
+}
+
+# A deleted member's retained medical files (lib/memberDeletion.ts). Still open
+# instantly; S3 leaves files under 128 KB in Standard, where they're cheaper.
+resource "aws_s3_bucket_lifecycle_configuration" "incore_uploads" {
+  bucket = aws_s3_bucket.incore_uploads.id
+
+  rule {
+    id     = "archive-deleted-members"
+    status = "Enabled"
+    filter {
+      tag {
+        key   = "archived"
+        value = "true"
+      }
+    }
+    transition {
+      days          = 30
+      storage_class = "GLACIER_IR"
+    }
+  }
 }
 
 output "uploads_bucket_name" {

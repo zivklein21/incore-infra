@@ -6,7 +6,6 @@ import { isAdmin } from '../auth';
 import { formTemplateKey, formTemplateVersionKey, fromStored, parseBrand } from './shared';
 import { syncSignupAssignment } from './signupTemplates';
 import { publishIssues } from './schema';
-import { writeAudit } from './audit';
 
 // POST /adminPublishFormTemplate
 // Body: { id: string, requireResign?: boolean, expectedUpdatedAt?: string, brand?: 'incore' | 'forca' }
@@ -102,7 +101,6 @@ export async function handler(
 
   await syncSignupAssignment(table, id, t.settings.kind === 'signup', uid);
 
-  await writeAudit(brand, { action: 'publish', templateId: id, actorUid: uid, detail: { version, requireResign, unarchived: t.status === 'archived' } });
 
   return json(200, { success: true, published: true, version, updatedAt: now });
 }

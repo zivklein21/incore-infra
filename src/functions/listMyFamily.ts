@@ -7,6 +7,7 @@ import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { computeComplianceFlags, deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from '../lib/entities';
+import { hasActiveForcaMembership } from '../lib/sessionInstance';
 import { applySignupFlow, loadSignupFlow, type Brand, type SignupFlowStep } from '../lib/signupFlow/shared';
 
 const PHOTO_URL_EXPIRY_SECONDS = 900;
@@ -63,6 +64,11 @@ export async function handler(
       name: deriveMemberName(profile),
       photoUrl,
       membershipStatus: deriveStatus(profile.membership?.status),
+      // FORCA's real membership is the admin-granted start/end window (see
+      // adminGrantForcaMembership.ts) — membership.status above doesn't track
+      // it. Drives the parent Home's "membership expired — renew" alert.
+      hasActiveMembership: hasActiveForcaMembership(profile),
+      membershipEnd: typeof profile.membership?.end === 'string' ? profile.membership.end : null,
       brand: profile.identity?.brand ?? 'incore',
       ...applySignupFlow(computeComplianceFlags(profile), await flowFor(profile.identity?.brand ?? 'incore')).flags,
     };

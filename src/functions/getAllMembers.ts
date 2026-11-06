@@ -103,6 +103,7 @@ export async function handler(
       return {
         id,
         accountType,
+        isTest: p.isTest === true,
         hasParentLinked,
         name: deriveName(p),
         email: p.identity?.email ?? p.email ?? '',

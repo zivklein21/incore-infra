@@ -1384,6 +1384,10 @@ export interface MemberProfileItem {
   };
   phone?: string;
   birthday?: string | number;
+  /** A delete started but hasn't finished: never charge this member (memberDeletion.ts). */
+  deletionPending?: boolean;
+  /** Test account: a delete keeps nothing (memberDeletion.ts). */
+  isTest?: boolean;
   // S3 object key (incore_uploads is fully private, see s3.tf) for the
   // member's profile photo — resolved to a short-lived presigned URL by
   // getProfile.ts, never stored/returned as a raw fetchable URL.
@@ -1865,8 +1869,9 @@ export function isMembershipUsableForClass(m: MembershipItem, classDate: Date): 
   return false;
 }
 
+/** The Israel calendar month of `date`, as YYYY-MM. */
 export function monthKey(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  return israelDateStr(date).slice(0, 7);
 }
 
 export function getEffectiveMonthlyLimit(m: MembershipItem): number {
@@ -1945,9 +1950,20 @@ export function israelWallTimeToDate(year: number, month0: number, day: number, 
   return new Date(guessUtcMs - offsetMin * 60000);
 }
 
-/** Last millisecond of the last day of the month containing `date`. */
+function israelYearMonth0(date: Date): [number, number] {
+  const [year, month] = israelDateStr(date).split('-').map(Number);
+  return [year, month - 1];
+}
+
+/** 00:00 in Israel on the day containing `date`. */
+export function israelDayStart(date: Date): Date {
+  const [year, month, day] = israelDateStr(date).split('-').map(Number);
+  return israelWallTimeToDate(year, month - 1, day, 0, 0);
+}
+
+/** Last millisecond of the last day, in Israel, of the month containing `date`. */
 export function endOfMonth(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+  return new Date(firstOfNextMonth(date).getTime() - 1);
 }
 
 /** One month later, same time-of-day. */
@@ -1957,9 +1973,10 @@ export function addMonths(date: Date, months: number): Date {
   return d;
 }
 
-/** 00:00 on the 1st of the month following `from`. */
+/** 00:00 in Israel on the 1st of the month following `from`. */
 export function firstOfNextMonth(from: Date): Date {
-  return new Date(from.getFullYear(), from.getMonth() + 1, 1, 0, 0, 0, 0);
+  const [year, month0] = israelYearMonth0(from);
+  return israelWallTimeToDate(year, month0 + 1, 1, 0, 0);
 }
 
 // ─── INCORE Exercise Catalog + Workout Journal ─────────────────────────────

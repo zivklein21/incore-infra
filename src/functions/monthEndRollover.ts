@@ -4,7 +4,7 @@
 import { ScanCommand, GetCommand, UpdateCommand, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { MembershipItem, SupportInquiryItem } from '../lib/entities';
-import { monthKey, endOfMonth } from '../lib/entities';
+import { monthKey } from '../lib/entities';
 
 export async function handler(): Promise<void> {
   const now = new Date();
@@ -65,7 +65,11 @@ export async function handler(): Promise<void> {
       // its own endDate has actually passed. Missing endDate falls back to
       // the old unconditional-expiry behavior rather than staying active
       // forever on bad data.
-      const stillActive = isCustomMigration && !!fresh.endDate && new Date(fresh.endDate) > endOfMonth(now);
+      // Compared to the UTC month end on purpose: end dates saved before the
+      // Israel-time fix sit two hours after the Israel month end, and must not
+      // read as running into next month.
+      const utcMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0, 23, 59, 59, 999));
+      const stillActive = isCustomMigration && !!fresh.endDate && new Date(fresh.endDate) > utcMonthEnd;
 
       // usage is a DynamoDB reserved keyword — bare here it fails every call.
       let memUpdateExpr: string;

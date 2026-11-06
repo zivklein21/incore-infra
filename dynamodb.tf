@@ -201,3 +201,38 @@ resource "aws_dynamodb_table" "forca_table" {
     Project     = "forca"
   }
 }
+
+# What's kept of deleted members (lib/memberArchive.ts). Rarely read, so it
+# sits on the cheaper Standard-IA storage class. Protected from being destroyed.
+resource "aws_dynamodb_table" "member_archive" {
+  name                        = "incore-member-archive"
+  billing_mode                = "PAY_PER_REQUEST"
+  table_class                 = "STANDARD_INFREQUENT_ACCESS"
+  deletion_protection_enabled = true
+  hash_key                    = "memberId"
+  range_key                   = "recordKey"
+
+  attribute {
+    name = "memberId"
+    type = "S"
+  }
+
+  attribute {
+    name = "recordKey"
+    type = "S"
+  }
+
+  # Rows remove themselves 7 years after archiving. The stream is how each
+  # removal gets logged (memberRetentionJob.ts).
+  ttl {
+    attribute_name = "deleteAfter"
+    enabled        = true
+  }
+
+  stream_enabled   = true
+  stream_view_type = "OLD_IMAGE"
+
+  point_in_time_recovery {
+    enabled = true
+  }
+}

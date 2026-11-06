@@ -336,6 +336,11 @@ locals {
     adminSaveFormTemplate    = "POST" # admin: create/edit a custom form template (name + sections)
     adminDeleteFormTemplate  = "POST" # admin: delete a custom form template (archives it instead once anyone signed)
     adminPublishFormTemplate = "POST" # admin: publish the saved draft as the next version (publish checks, optional re-sign)
+    removeMySavedCard        = "POST" # FORCA member: remove own saved card, refused while a subscription uses it (same shared integration)
+    adminListDeletedMembers  = "GET"  # admin: deleted members + records past retention (same shared integration)
+    adminGetDeletedMember    = "GET"  # admin: one deleted member's retained records
+    adminGetArchivedFileUrl  = "GET"  # admin: presigned URL to a retained file
+    adminSetMemberTestFlag   = "POST" # admin: mark a member as a test account (logged)
     # FORCA forms system (same shared integration)
     adminAssignFormTemplate = "POST" # admin: assign a published form to all / a group / specific trainees (+ admin-filled fields), or cancel
     adminGetFormTracking    = "GET"  # admin: per assignment, each trainee's Pending Parent / Pending Child / Completed
@@ -437,6 +442,15 @@ locals {
   # via API Gateway, so — like cors_preflight_function above — these are
   # built here (for a Lambda to exist) but deliberately excluded from
   # all_http_functions/http_authenticated_functions so no route is created.
+  retention_job_name = "incore-member-retention-job"
+  # Only these get the archive settings, so adding one doesn't redeploy every Lambda.
+  member_archive_functions = ["adminDeleteMember", "incoreWorkoutApi"]
+
+  # "report" logs what the check before a charge would cancel; "enforce" cancels
+  # (lib/chargeSafety.ts). Must be "enforce" before the 1st of the month.
+  charge_safety_mode = "report"
+  charge_functions   = ["chargeForcaSubscriptions", "chargeHypBillingAgreements", "adminChargeHypAgreementNow", "adminRunHypBillingCycle"]
+
   cognito_custom_auth_functions = [
     "cognitoDefineAuthChallenge",
     "cognitoCreateAuthChallenge",
@@ -451,5 +465,6 @@ locals {
     local.sns_functions,
     [local.cors_preflight_function],
     local.cognito_custom_auth_functions,
+    ["memberRetentionJob"],
   ))
 }

@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { HypBillingAgreementItem, MemberProfileItem, ProductItem, MembershipItem } from './entities';
+import { applyChargeSafety, chargeBlockReason } from './chargeSafety';
 import { monthKey, endOfMonth, firstOfNextMonth, israelDateStr } from './entities';
 import { chargeHypToken } from './hypClient';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
@@ -20,6 +21,17 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
 
   const memberRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${agreement.userId}`, SK: 'PROFILE' } }));
   const member = memberRes.Item as MemberProfileItem | undefined;
+  const blocked = chargeBlockReason([member], agreement.token);
+  if (blocked && applyChargeSafety('incore', agreement.agreementId, agreement.userId, blocked)) {
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: agreement.PK, SK: agreement.SK },
+      UpdateExpression: 'SET #status = :cancelled, updatedAt = :now REMOVE GSI3PK, GSI3SK',
+      ExpressionAttributeNames: { '#status': 'status' },
+      ExpressionAttributeValues: { ':cancelled': 'cancelled', ':now': new Date().toISOString() },
+    }));
+    return { success: false, ccode: -1 };
+  }
   const chargeUserId = (member && getMemberIdNumber(member)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = member ? getMemberFullName(member) : 'Member';
   const chargeEmail = member?.identity?.email || member?.email || '';
@@ -261,6 +273,7 @@ export async function runHypBillingCycle(): Promise<{ processed: number; succeed
   let succeeded = 0;
   let failed = 0;
   for (const agreement of due) {
+    if (agreement.status !== 'active' && applyChargeSafety('incore', agreement.agreementId, agreement.userId, 'not_active')) continue;
     // One bad agreement must never abort the rest of the cycle.
     try {
       const { success } = await chargeOneAgreement(agreement);

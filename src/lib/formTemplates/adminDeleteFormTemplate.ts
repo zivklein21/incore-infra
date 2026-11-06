@@ -5,7 +5,6 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { formTemplateKey, parseBrand } from './shared';
 import { listSubmissionsOfTemplate } from './submissions';
-import { writeAudit } from './audit';
 
 // POST /adminDeleteFormTemplate
 // Body: { id: string, brand?: 'incore' | 'forca' }
@@ -54,11 +53,9 @@ export async function handler(
       if ((err as { name?: string }).name === 'ConditionalCheckFailedException') return json(404, { error: 'not_found' });
       throw err;
     }
-    await writeAudit(brand, { action: 'archive', templateId: id, actorUid: uid, detail: { signedCount } });
     return json(200, { success: true, result: 'archived', signedCount });
   }
 
   await ddb.send(new DeleteCommand({ TableName: table, Key: formTemplateKey(id) }));
-  await writeAudit(brand, { action: 'delete', templateId: id, actorUid: uid });
   return json(200, { success: true, result: 'deleted', signedCount: 0 });
 }

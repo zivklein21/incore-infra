@@ -74,6 +74,7 @@ export async function handler(
     .filter((p) => {
       const role = p.identity?.role ?? p.role;
       if (role === 'admin' || role === 'coach') return false;
+      if (p.identity?.accountType === 'parent_only') return false;
       if (!groupInAccess(access, p.identity?.groupId)) return false;
       if (allAges) return true;
       const age = computeAge(p.identity?.birthday ?? p.birthday ?? undefined);

@@ -7,7 +7,6 @@ import { ddb } from '../dynamo';
 import { renderFormPdf } from './pdf/renderFormPdf';
 import { Brand, formsTable, FormSubmissionItem, getProfile, getTemplateVersion } from './submissions';
 import { deriveMemberName } from '../entities';
-import { writeAudit } from './audit';
 
 // Signed PDFs of completed forms. Each brand has its own bucket
 // (forca_signed_forms.tf: forca-/incore-production-signed-forms — private,
@@ -99,7 +98,6 @@ export async function ensureSignedPdf(brand: Brand, sub: FormSubmissionItem, act
   } catch (err) {
     if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') throw err;
   }
-  await writeAudit(brand, { action: 'pdf', templateId: sub.templateId, submissionId: sub.submissionId, childId: sub.childId, actorUid, detail: { key, sha256 } });
   return { key, sha256 };
 }
 
