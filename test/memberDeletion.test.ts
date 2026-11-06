@@ -1,31 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attendanceRecord, classCleanup } from '../src/lib/memberDeletion';
+import { attendanceRecord, incoreClassCleanup } from '../src/lib/memberDeletion';
 
 const ME = 'member-1';
 
-test('a class that never knew the member is left alone', () => {
-  assert.equal(classCleanup('incore', { allowedMemberIds: ['other'], waitlist: [] }, ME), null);
+test('INCORE: a class that never knew the member is left alone', () => {
+  assert.equal(incoreClassCleanup({ allowedMemberIds: ['other'], waitlist: [] }, ME), null);
 });
 
-test('a FORCA auto-registered member frees the attendee and the added seat', () => {
-  const change = classCleanup('forca', { allowedMemberIds: [ME, 'other'] }, ME, { status: 'REGISTERED', consumedFrom: 'FORCA_AUTO' });
-  assert.deepEqual(change, { allowedMemberIds: ['other'], attendees: -1, capacity: -1 });
+test('INCORE: a booking frees the attendee', () => {
+  assert.deepEqual(incoreClassCleanup({}, ME, { status: 'REGISTERED' }), { attendees: -1 });
 });
 
-test('an INCORE booking frees the attendee but not the class capacity', () => {
-  const change = classCleanup('incore', {}, ME, { status: 'REGISTERED', consumedFrom: 'MEMBERSHIP' });
-  assert.deepEqual(change, { attendees: -1, capacity: 0 });
+test('INCORE: a waitlisted member only leaves the waitlist', () => {
+  const change = incoreClassCleanup({ waitlist: [{ member: ME }, { member: 'other' }] as never }, ME);
+  assert.deepEqual(change, { waitlist: [{ member: 'other' }], attendees: 0 });
 });
 
-test('a waitlisted member only leaves the waitlist', () => {
-  const change = classCleanup('incore', { waitlist: [{ member: ME }, { member: 'other' }] as never }, ME);
-  assert.deepEqual(change, { waitlist: [{ member: 'other' }], attendees: 0, capacity: 0 });
-});
-
-test('a registration that is not active does not change the attendee count', () => {
-  const change = classCleanup('incore', { allowedMemberIds: [ME] }, ME, { status: 'CANCELLED', consumedFrom: 'MEMBERSHIP' });
-  assert.deepEqual(change, { allowedMemberIds: [], attendees: 0, capacity: 0 });
+test('INCORE: a private class forgets the member, and an inactive booking changes no count', () => {
+  const change = incoreClassCleanup({ allowedMemberIds: [ME] }, ME, { status: 'CANCELLED' });
+  assert.deepEqual(change, { allowedMemberIds: [], attendees: 0 });
 });
 
 test('past attendance keeps the session details and the result', () => {

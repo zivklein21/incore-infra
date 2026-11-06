@@ -6,6 +6,7 @@ import { removeFromClasses } from '../src/lib/memberDeletion';
 const ME = 'member-1';
 const FUTURE = '2099-01-10T17:00:00.000Z';
 const PAST = '2020-01-10T17:00:00.000Z';
+const PROFILE = { PK: `MEMBER#${ME}`, SK: 'PROFILE' };
 
 function run(brand: 'incore' | 'forca', classes: unknown[], regs: unknown[]) {
   const calls: { type: string; input: any }[] = [];
@@ -16,7 +17,8 @@ function run(brand: 'incore' | 'forca', classes: unknown[], regs: unknown[]) {
     calls.push({ type, input: cmd.input });
     return {};
   }) as never;
-  return removeFromClasses('table', { memberId: ME, brand, isTest: false, archivedAt: '2026-11-06T10:00:00.000Z', birthday: undefined }).then(() => calls);
+  const ctx = { memberId: ME, brand, isTest: false, archivedAt: '2026-11-06T10:00:00.000Z', birthday: undefined };
+  return removeFromClasses('table', ctx, PROFILE).then(() => calls);
 }
 
 const reg = (classId: string, classDate: string, consumedFrom: string) => ({
@@ -67,20 +69,50 @@ test('INCORE: a past class keeps its count and the attendance is archived', asyn
   assert.equal(archived.item.attendance, 'present');
 });
 
-test('FORCA: an auto-registered future session also gives back its added seat', async () => {
-  const calls = await run('forca', [
-    { PK: 'CLASS#session', SK: 'METADATA', date: FUTURE, capacity: 6, currentAttendeesCount: 6, allowedMemberIds: [ME, 'other'] },
-  ], [reg('session', FUTURE, 'FORCA_AUTO')]);
-
-  const update = calls.find((c) => c.type === 'UpdateCommand');
-  assert.equal(update?.input.ExpressionAttributeValues[':capacity'], -1);
-  assert.equal(update?.input.ExpressionAttributeValues[':attendees'], -1);
-  assert.deepEqual(update?.input.ExpressionAttributeValues[':ids'], ['other']);
+test('INCORE: capacity is never written', async () => {
+  const calls = await run('incore', [
+    { PK: 'CLASS#x', SK: 'METADATA', date: FUTURE, capacity: 12, currentAttendeesCount: 12, allowedMemberIds: [ME] },
+  ], [reg('x', FUTURE, 'MEMBERSHIP')]);
+  assert.ok(calls.every((c) => !String(c.input.UpdateExpression ?? '').includes('capacity')));
 });
 
-test('INCORE: capacity never changes, even if a booking were marked FORCA_AUTO', async () => {
-  const calls = await run('incore', [
-    { PK: 'CLASS#x', SK: 'METADATA', date: FUTURE, capacity: 12, currentAttendeesCount: 12 },
-  ], [reg('x', FUTURE, 'FORCA_AUTO')]);
-  assert.equal(calls.find((c) => c.type === 'UpdateCommand')?.input.ExpressionAttributeValues[':capacity'], undefined);
+test('FORCA: the trainee leaves her group, and the group change comes first', async () => {
+  const calls = await run('forca', [], []);
+  assert.equal(calls[0].type, 'UpdateCommand');
+  assert.deepEqual(calls[0].input.Key, PROFILE);
+  assert.equal(calls[0].input.UpdateExpression, 'REMOVE #identity.groupId');
+});
+
+test('FORCA: a future session loses her from the roster and nothing else', async () => {
+  const calls = await run('forca', [
+    { PK: 'CLASS#next', SK: 'METADATA', date: FUTURE, groupId: 'g1', capacity: 6, currentAttendeesCount: 6, waitlist: [], allowedMemberIds: [ME, 'other'] },
+  ], [reg('next', FUTURE, 'FORCA_AUTO')]);
+
+  const update = calls.find((c) => c.input.Key?.PK === 'CLASS#next' && c.type === 'UpdateCommand');
+  assert.equal(update?.input.UpdateExpression, 'SET allowedMemberIds = :ids');
+  assert.deepEqual(update?.input.ExpressionAttributeValues, { ':ids': ['other'] });
+  assert.deepEqual(calls.find((c) => c.type === 'DeleteCommand')?.input.Key, { PK: 'CLASS#next', SK: `REG#${ME}` });
+});
+
+test('FORCA: a past session is left as it was, and the attendance is archived', async () => {
+  const calls = await run('forca', [
+    { PK: 'CLASS#old', SK: 'METADATA', date: PAST, groupId: 'g1', capacity: 6, currentAttendeesCount: 6, allowedMemberIds: [ME], className: 'בסיס' },
+  ], [{ ...reg('old', PAST, 'FORCA_AUTO'), actualAttendance: 'absent' }]);
+
+  assert.equal(calls.filter((c) => c.input.Key?.PK === 'CLASS#old' && c.type === 'UpdateCommand').length, 0);
+  const archived = calls.find((c) => c.type === 'PutCommand')?.input.Item;
+  assert.equal(archived.kind, 'attendance');
+  assert.equal(archived.item.attendance, 'absent');
+});
+
+test('FORCA: a group with future and past sessions never writes capacity, counts or a waitlist', async () => {
+  const calls = await run('forca', [
+    { PK: 'CLASS#next', SK: 'METADATA', date: FUTURE, capacity: 6, currentAttendeesCount: 6, allowedMemberIds: [ME] },
+    { PK: 'CLASS#old', SK: 'METADATA', date: PAST, capacity: 6, currentAttendeesCount: 6, allowedMemberIds: [ME] },
+  ], [reg('next', FUTURE, 'FORCA_AUTO'), reg('old', PAST, 'FORCA_AUTO')]);
+
+  for (const c of calls) {
+    const expression = String(c.input.UpdateExpression ?? '');
+    assert.ok(!/capacity|currentAttendeesCount|waitlist/.test(expression), expression);
+  }
 });

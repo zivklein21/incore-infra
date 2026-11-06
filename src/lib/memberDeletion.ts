@@ -114,28 +114,6 @@ async function queryAllRegs(table: string, memberId: string): Promise<Registrati
 
 // ─── Classes ─────────────────────────────────────────────────────────────────
 
-/** What a class must change to forget this member; null when it never knew them. */
-export function classCleanup(
-  brand: Brand,
-  cls: Pick<ClassItem, 'waitlist' | 'allowedMemberIds'>,
-  memberId: string,
-  reg?: Pick<RegistrationItem, 'status' | 'consumedFrom'>,
-): { waitlist?: ClassItem['waitlist']; allowedMemberIds?: string[]; attendees: number; capacity: number } | null {
-  const inWaitlist = (cls.waitlist ?? []).some((e) => e.member === memberId);
-  const inAllowed = (cls.allowedMemberIds ?? []).includes(memberId);
-  const attendees = reg?.status === 'REGISTERED' ? -1 : 0;
-  // A FORCA session's capacity is its roster, so each auto-registered trainee
-  // added a seat (sessionInstance.ts). An INCORE class has a fixed capacity.
-  const capacity = brand === 'forca' && reg?.consumedFrom === 'FORCA_AUTO' ? -1 : 0;
-  if (!inWaitlist && !inAllowed && !attendees && !capacity) return null;
-  return {
-    ...(inWaitlist ? { waitlist: (cls.waitlist ?? []).filter((e) => e.member !== memberId) } : {}),
-    ...(inAllowed ? { allowedMemberIds: (cls.allowedMemberIds ?? []).filter((id) => id !== memberId) } : {}),
-    attendees,
-    capacity,
-  };
-}
-
 /** What's kept of one past class. */
 export function attendanceRecord(cls: Partial<ClassItem>, reg: Partial<RegistrationItem>) {
   return {
@@ -148,10 +126,18 @@ export function attendanceRecord(cls: Partial<ClassItem>, reg: Partial<Registrat
   };
 }
 
-// Future classes forget the member; past ones keep their counts, and the
-// attendance moves to the archive.
-export async function removeFromClasses(table: string, ctx: ArchiveContext): Promise<void> {
-  const { memberId } = ctx;
+async function archiveAttendance(ctx: ArchiveContext, cls: ClassItem, reg: RegistrationItem): Promise<void> {
+  if (ctx.isTest) return;
+  await ddb.send(new PutCommand({
+    TableName: ARCHIVE_TABLE,
+    Item: {
+      memberId: ctx.memberId, recordKey: `ROW#${reg.PK}#${reg.SK}`, brand: ctx.brand, kind: 'attendance',
+      item: attendanceRecord(cls, reg), archivedAt: ctx.archivedAt, deleteAfter: deleteAfterFor(ctx.archivedAt, ctx.birthday),
+    },
+  }));
+}
+
+async function loadClasses(table: string, memberId: string) {
   const [regs, classes] = await Promise.all([
     queryAllRegs(table, memberId),
     scanAll<ClassItem>({
@@ -160,52 +146,100 @@ export async function removeFromClasses(table: string, ctx: ArchiveContext): Pro
       ExpressionAttributeValues: { ':prefix': 'CLASS#', ':metadata': 'METADATA' },
     }),
   ]);
-  const regByClass = new Map(regs.map((r) => [`CLASS#${r.classId}`, r]));
-  const nowIso = new Date().toISOString();
+  return { classes, regByClass: new Map(regs.map((r) => [`CLASS#${r.classId}`, r])), nowIso: new Date().toISOString() };
+}
+
+const deleteReg = (table: string, reg: RegistrationItem) =>
+  ddb.send(new DeleteCommand({ TableName: table, Key: { PK: reg.PK, SK: reg.SK } }));
+
+/** INCORE: what a future class must change to forget this member; null when it never knew them. */
+export function incoreClassCleanup(
+  cls: Pick<ClassItem, 'waitlist' | 'allowedMemberIds'>,
+  memberId: string,
+  reg?: Pick<RegistrationItem, 'status'>,
+): { waitlist?: ClassItem['waitlist']; allowedMemberIds?: string[]; attendees: number } | null {
+  const inWaitlist = (cls.waitlist ?? []).some((e) => e.member === memberId);
+  const inAllowed = (cls.allowedMemberIds ?? []).includes(memberId);
+  const attendees = reg?.status === 'REGISTERED' ? -1 : 0;
+  if (!inWaitlist && !inAllowed && !attendees) return null;
+  return {
+    ...(inWaitlist ? { waitlist: (cls.waitlist ?? []).filter((e) => e.member !== memberId) } : {}),
+    ...(inAllowed ? { allowedMemberIds: (cls.allowedMemberIds ?? []).filter((id) => id !== memberId) } : {}),
+    attendees,
+  };
+}
+
+// INCORE: members book classes with limited seats. A future booking frees one
+// attendee, the waitlist spot goes, and capacity stays fixed.
+async function removeFromIncoreClasses(table: string, ctx: ArchiveContext): Promise<void> {
+  const { classes, regByClass, nowIso } = await loadClasses(table, ctx.memberId);
 
   await Promise.all(classes.map(async (cls) => {
     const reg = regByClass.get(cls.PK);
     if (cls.date < nowIso) {
       if (!reg) return;
-      if (!ctx.isTest) {
-        await ddb.send(new PutCommand({
-          TableName: ARCHIVE_TABLE,
-          Item: {
-            memberId, recordKey: `ROW#${reg.PK}#${reg.SK}`, brand: ctx.brand, kind: 'attendance',
-            item: attendanceRecord(cls, reg), archivedAt: ctx.archivedAt, deleteAfter: deleteAfterFor(ctx.archivedAt, ctx.birthday),
-          },
-        }));
-      }
-      await ddb.send(new DeleteCommand({ TableName: table, Key: { PK: reg.PK, SK: reg.SK } }));
+      await archiveAttendance(ctx, cls, reg);
+      await deleteReg(table, reg);
       return;
     }
 
-    const change = classCleanup(ctx.brand, cls, memberId, reg);
+    const change = incoreClassCleanup(cls, ctx.memberId, reg);
     if (change) {
       const sets: string[] = [];
-      const adds: string[] = [];
-      const names: Record<string, string> = {};
       const values: Record<string, unknown> = {};
       if (change.waitlist) { sets.push('waitlist = :waitlist'); values[':waitlist'] = change.waitlist; }
       if (change.allowedMemberIds) { sets.push('allowedMemberIds = :ids'); values[':ids'] = change.allowedMemberIds; }
-      if (change.attendees) { adds.push('currentAttendeesCount :attendees'); values[':attendees'] = change.attendees; }
-      if (change.capacity) {
-        // capacity is a DynamoDB reserved keyword.
-        adds.push('#capacity :capacity');
-        names['#capacity'] = 'capacity';
-        values[':capacity'] = change.capacity;
-      }
+      if (change.attendees) values[':attendees'] = change.attendees;
       await ddb.send(new UpdateCommand({
         TableName: table,
         Key: { PK: cls.PK, SK: cls.SK },
-        UpdateExpression: [sets.length ? `SET ${sets.join(', ')}` : '', adds.length ? `ADD ${adds.join(', ')}` : ''].filter(Boolean).join(' '),
-        ...(Object.keys(names).length ? { ExpressionAttributeNames: names } : {}),
+        UpdateExpression: [sets.length ? `SET ${sets.join(', ')}` : '', change.attendees ? 'ADD currentAttendeesCount :attendees' : ''].filter(Boolean).join(' '),
         ExpressionAttributeValues: values,
       }));
     }
     // Straight after the count changes, so a re-run can't subtract it twice.
-    if (reg) await ddb.send(new DeleteCommand({ TableName: table, Key: { PK: reg.PK, SK: reg.SK } }));
+    if (reg) await deleteReg(table, reg);
   }));
+}
+
+// FORCA: a trainee belongs to a group and is attached to its sessions
+// automatically, with no booking, seat limit, waitlist or credits. She leaves
+// the group first, so a new session can't pick her up while the delete runs,
+// then leaves future rosters. Nothing here touches capacity or counts.
+async function removeFromForcaSessions(table: string, ctx: ArchiveContext, profileKey: Key): Promise<void> {
+  await ddb.send(new UpdateCommand({
+    TableName: table,
+    Key: profileKey,
+    ConditionExpression: 'attribute_exists(#identity)',
+    UpdateExpression: 'REMOVE #identity.groupId',
+    ExpressionAttributeNames: { '#identity': 'identity' },
+  })).catch((err) => {
+    if (err?.name !== 'ConditionalCheckFailedException') throw err;
+  });
+
+  const { classes, regByClass, nowIso } = await loadClasses(table, ctx.memberId);
+  await Promise.all(classes.map(async (cls) => {
+    const reg = regByClass.get(cls.PK);
+    if (cls.date < nowIso) {
+      if (!reg) return;
+      await archiveAttendance(ctx, cls, reg);
+      await deleteReg(table, reg);
+      return;
+    }
+    if ((cls.allowedMemberIds ?? []).includes(ctx.memberId)) {
+      await ddb.send(new UpdateCommand({
+        TableName: table,
+        Key: { PK: cls.PK, SK: cls.SK },
+        UpdateExpression: 'SET allowedMemberIds = :ids',
+        ExpressionAttributeValues: { ':ids': (cls.allowedMemberIds ?? []).filter((id) => id !== ctx.memberId) },
+      }));
+    }
+    if (reg) await deleteReg(table, reg);
+  }));
+}
+
+export function removeFromClasses(table: string, ctx: ArchiveContext, profileKey: Key): Promise<void> {
+  return ctx.brand === 'forca' ? removeFromForcaSessions(table, ctx, profileKey) : removeFromIncoreClasses(table, ctx);
 }
 
 // ─── Files ───────────────────────────────────────────────────────────────────
@@ -362,7 +396,7 @@ export async function deleteMemberData(
   const stopped = await verifyNoCharging(brand, memberId);
   if (stopped.activeSubscriptions || stopped.cardTokens) throw new Error(`charging_not_stopped: ${JSON.stringify(stopped)}`);
 
-  await removeFromClasses(table, ctx);
+  await removeFromClasses(table, ctx, profileKey);
   await handleUploads(ctx);
   if (isTest) await purgeTestMember(ctx);
   else await archiveSignedFiles(ctx);
