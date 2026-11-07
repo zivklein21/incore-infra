@@ -30,6 +30,7 @@ import { handler as getFormWording } from '../lib/formWording/getFormWording';
 import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
 import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
 import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
+import { getSessionContacts, saveEmergencyContact } from '../lib/quickDial';
 import { handler as removeMySavedCard } from '../lib/removeMySavedCard';
 import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers } from '../lib/memberArchive';
 import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
@@ -71,6 +72,9 @@ const HANDLERS: Record<string, Handler> = {
   adminSaveFormWording,
   // FORCA: per-session trainee note + equipment list (coach/admin).
   saveSessionTraineeInfo,
+  // FORCA quick dial.
+  getSessionContacts,
+  saveEmergencyContact,
   // FORCA: a member removing their own saved card.
   removeMySavedCard,
   // Deleted members' retained records.

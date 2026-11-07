@@ -360,6 +360,9 @@ locals {
     adminSaveFormWording = "POST" # admin: save that wording (versioned)
     # FORCA per-session trainee info (same shared integration)
     saveSessionTraineeInfo = "POST" # admin / the session's coach: trainee note + equipment list; pushes trainees when the note changes
+    # FORCA quick dial (same shared integration)
+    getSessionContacts   = "GET"  # admin / the session's coach: phone numbers for that session's roster
+    saveEmergencyContact = "POST" # admin / the trainee's linked parent: set or clear the emergency contact
     # FORCA photo / publication consent (same shared integration)
     getPhotoConsent       = "GET"  # parent (childId) / trainee: where the consent stands + its signed history
     changePhotoConsent    = "POST" # parent (childId) / trainee: signed change; refusing withdraws at once

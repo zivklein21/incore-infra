@@ -1,5 +1,5 @@
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME, FORCA_TABLE_NAME } from './dynamo';
+import { ddb, tableForBrand, TABLE_NAME, FORCA_TABLE_NAME } from './dynamo';
 import type { MemberProfileItem } from './entities';
 
 export interface ResolvedMember {
@@ -25,4 +25,13 @@ export async function resolveMemberProfile(uid: string): Promise<ResolvedMember 
   if (incoreRes.Item) return { table: TABLE_NAME, profile: incoreRes.Item as MemberProfileItem };
   if (forcaRes.Item) return { table: FORCA_TABLE_NAME, profile: forcaRes.Item as MemberProfileItem };
   return null;
+}
+
+// For admin endpoints that act on one member. The Backoffice sends the brand
+// it's managing, which has to win: one login can have a profile in both tables,
+// and resolveMemberProfile() would pick INCORE's. An older app build sends no
+// brand, so that falls back to the lookup. Null means no such member.
+export async function memberTableFor(memberId: string, brand: unknown): Promise<string | null> {
+  if (brand === 'forca' || brand === 'incore') return tableForBrand(brand);
+  return (await resolveMemberProfile(memberId))?.table ?? null;
 }

@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { memberTableFor } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { deriveMemberName, type MemberProfileItem, type FamilyLinkItem } from '../lib/entities';
@@ -11,14 +12,14 @@ interface FamilyMemberSummary {
   phone: string;
 }
 
-async function resolveMember(uid: string): Promise<FamilyMemberSummary | null> {
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' } }));
+async function resolveMember(table: string, uid: string): Promise<FamilyMemberSummary | null> {
+  const res = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `MEMBER#${uid}`, SK: 'PROFILE' } }));
   const profile = res.Item as MemberProfileItem | undefined;
   if (!profile) return null;
   return { uid, name: deriveMemberName(profile), phone: profile.identity?.phone ?? profile.phone ?? '' };
 }
 
-// ANY /adminGetMemberFamilyInfo?memberId=<uid>
+// ANY /adminGetMemberFamilyInfo?memberId=<uid>&brand=incore|forca
 // Auth: Cognito JWT, caller must be admin
 //
 // Powers the "Family" card on MemberDetailsScreen — resolves BOTH
@@ -35,14 +36,17 @@ export async function handler(
   const memberId = event.queryStringParameters?.memberId;
   if (!memberId) return json(400, { error: 'missing_member_id' });
 
+  const table = await memberTableFor(memberId, event.queryStringParameters?.brand);
+  if (!table) return json(200, { parent: null, children: [] });
+
   const [childLinksRes, parentLinkRes] = await Promise.all([
     ddb.send(new QueryCommand({
-      TableName: TABLE_NAME,
+      TableName: table,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
       ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'FAMILY#' },
     })),
     ddb.send(new QueryCommand({
-      TableName: TABLE_NAME,
+      TableName: table,
       IndexName: 'GSI1',
       KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
       ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'FAMILYOF#' },
@@ -53,8 +57,8 @@ export async function handler(
   const parentLink = (parentLinkRes.Items ?? [])[0] as FamilyLinkItem | undefined;
 
   const [children, parent] = await Promise.all([
-    Promise.all(childLinks.map((l) => resolveMember(l.childUid))),
-    parentLink ? resolveMember(parentLink.parentUid) : Promise.resolve(null),
+    Promise.all(childLinks.map((l) => resolveMember(table, l.childUid))),
+    parentLink ? resolveMember(table, parentLink.parentUid) : Promise.resolve(null),
   ]);
 
   return json(200, {

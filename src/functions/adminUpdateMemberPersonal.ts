@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { memberTableFor } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MemberProfileItem } from '../lib/entities';
@@ -14,7 +15,7 @@ function computeAge(birthday: Date): number {
 }
 
 // POST /adminUpdateMemberPersonal
-// Body: { memberId, firstName, lastName, birthday?: string (ISO), phone, email, role }
+// Body: { memberId, firstName, lastName, birthday?: string (ISO), phone, email, role, brand?: 'incore' | 'forca' }
 // Auth: Cognito JWT, caller must be admin
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -24,7 +25,7 @@ export async function handler(
 
   let body: {
     memberId?: unknown; firstName?: unknown; lastName?: unknown; birthday?: unknown;
-    phone?: unknown; email?: unknown; role?: unknown;
+    phone?: unknown; email?: unknown; role?: unknown; brand?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -40,8 +41,11 @@ export async function handler(
   const role = typeof body.role === 'string' ? body.role.trim() : '';
   if (!memberId) return json(400, { error: 'missing_member_id' });
 
+  const table = await memberTableFor(memberId, body.brand);
+  if (!table) return json(404, { error: 'member_not_found' });
+
   const key = { PK: `MEMBER#${memberId}`, SK: 'PROFILE' };
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: key }));
+  const res = await ddb.send(new GetCommand({ TableName: table, Key: key }));
   const profile = res.Item as MemberProfileItem | undefined;
   if (!profile) return json(404, { error: 'member_not_found' });
 
@@ -64,7 +68,7 @@ export async function handler(
   }
 
   await ddb.send(new UpdateCommand({
-    TableName: TABLE_NAME,
+    TableName: table,
     Key: key,
     // identity is a DynamoDB reserved keyword — bare here it fails every call.
     UpdateExpression: 'SET #identity = :identity',

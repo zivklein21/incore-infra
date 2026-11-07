@@ -1,6 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { ddb } from '../lib/dynamo';
+import { memberTableFor } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MemberProfileItem } from '../lib/entities';
@@ -17,7 +18,7 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { memberId?: unknown; enabled?: unknown };
+  let body: { memberId?: unknown; enabled?: unknown; brand?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -27,8 +28,11 @@ export async function handler(
   const enabled = body.enabled === true;
   if (!memberId) return json(400, { error: 'missing_member_id' });
 
+  const table = await memberTableFor(memberId, body.brand);
+  if (!table) return json(404, { error: 'member_not_found' });
+
   const key = { PK: `MEMBER#${memberId}`, SK: 'PROFILE' };
-  const res = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: key, ConsistentRead: true }));
+  const res = await ddb.send(new GetCommand({ TableName: table, Key: key, ConsistentRead: true }));
   const profile = res.Item as MemberProfileItem | undefined;
   if (!profile) return json(404, { error: 'member_not_found' });
 
@@ -40,7 +44,7 @@ export async function handler(
   }
 
   await ddb.send(new UpdateCommand({
-    TableName: TABLE_NAME,
+    TableName: table,
     Key: key,
     UpdateExpression: 'SET admin = :admin',
     ExpressionAttributeValues: { ':admin': admin },

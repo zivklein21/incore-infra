@@ -166,6 +166,7 @@ export async function handler(
     age, birthday,
     photoUrl: await presign(p.photoKey),
     phone: p.identity?.phone ?? p.phone ?? '',
+    emergencyContact: p.emergencyContact ?? null,
     email: p.identity?.email ?? p.email ?? '',
     role: p.identity?.role ?? p.role ?? 'member',
     accountType: p.identity?.accountType ?? 'member',

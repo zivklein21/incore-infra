@@ -7,6 +7,7 @@ import { s3, BUCKET_NAME } from './s3';
 import { computeComplianceFlags, type ForcaBillingAgreementItem, type GroupItem, type MembershipItem } from './entities';
 import { applySignupFlow, loadSignupFlow } from './signupFlow/shared';
 import { signupGateFor } from './formTemplates/signupGate';
+import { parentContactOf } from './quickDial';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -83,7 +84,7 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   const brand = profile.identity?.brand ?? 'incore';
   const groupId = brand === 'forca' ? profile.identity?.groupId : undefined;
 
-  const [photoUrl, healthPdfUrl, doctorApprovalUrl, medicalClearanceUrl, groupRes, agreementRes] = await Promise.all([
+  const [photoUrl, healthPdfUrl, doctorApprovalUrl, medicalClearanceUrl, groupRes, agreementRes, parentContact] = await Promise.all([
     presign(profile.photoKey),
     presign(forms.health_declaration?.pdf_key),
     presign(forms.health_declaration?.doctor_approval_key),
@@ -102,6 +103,13 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
           KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
           ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'AGREEMENT#' },
         }))
+      : Promise.resolve(null),
+    // Quick dial. Best effort: a failed lookup only hides the call button.
+    brand === 'forca' && profile.identity?.accountType !== 'parent_only'
+      ? parentContactOf(memberId).catch((err) => {
+          console.error('[profileResponse] parent contact lookup failed', err);
+          return null;
+        })
       : Promise.resolve(null),
   ]);
   const group = groupRes?.Item as GroupItem | undefined;
@@ -153,6 +161,9 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     email: profile.identity?.email ?? profile.email ?? '',
     name,
     phone: profile.identity?.phone ?? profile.phone ?? '',
+    // FORCA quick dial (lib/quickDial.ts).
+    parentContact,
+    emergencyContact: profile.emergencyContact ?? null,
     birthday,
     age,
     photoUrl,

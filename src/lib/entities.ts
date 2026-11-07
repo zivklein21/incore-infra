@@ -1366,6 +1366,9 @@ export interface MemberProfileItem {
   // for any profile stored under an older shape). 'performance'/
   // 'healthDeclarations' stay read-only concepts (no performance-editing UI
   // exists; a coach never edits a trainee's health declaration).
+  // FORCA quick dial: set by the trainee's parent or an admin (lib/quickDial.ts).
+  // A third party's details, so scrubForArchive() drops it on member deletion.
+  emergencyContact?: { name: string; phone: string };
   identity?: {
     role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;
     email?: string; phone?: string; birthday?: string | number;
