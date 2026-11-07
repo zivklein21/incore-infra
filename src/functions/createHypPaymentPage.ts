@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { createHypSignedPaymentUrl, HypSignError, redactHypFields } from '../lib/hypClient';
+import { resolveReceiptEmail } from '../lib/receiptEmail';
 
 // POST /createHypPaymentPage
 // Auth: Cognito JWT
@@ -55,7 +56,7 @@ export async function handler(
       tashType: 1,
       clientName: build.clientFirstName,
       clientLName: build.clientLastName || undefined,
-      email: build.email || undefined,
+      email: await resolveReceiptEmail('incore', uid, build.email),
       cell: build.cell || undefined,
       userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       info: buildHypInfo(build.productName, build.description),

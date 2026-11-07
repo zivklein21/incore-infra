@@ -5,6 +5,7 @@ import type { ForcaBillingAgreementItem, ForcaSubscriptionOrderItem, MemberProfi
 import { endOfMonth, firstOfNextMonth } from './entities';
 import { applyChargeSafety, chargeBlockReason } from './chargeSafety';
 import { chargeHypToken } from './hypClient';
+import { resolveReceiptEmail } from './receiptEmail';
 import { registerPaidMemberOnFutureSessions } from './forcaSubscriptionPayments';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { getExpoPushToken, sendExpoPush } from './push';
@@ -38,7 +39,9 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
   }
   const chargeUserId = (payer && getMemberIdNumber(payer)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = payer ? getMemberFullName(payer) : agreement.payerName || 'Parent';
-  const chargeEmail = payer?.identity?.email || payer?.email || '';
+  // Older agreements can have the trainee as payer (see the
+  // order.payerUid fallback in forcaSubscriptionPayments.ts).
+  const chargeEmail = await resolveReceiptEmail('forca', agreement.payerUid, payer?.identity?.email || payer?.email);
 
   let result: { success: boolean; ccode: number; transactionId?: string; authCode?: string };
   if (!agreement.token) {
@@ -56,7 +59,7 @@ export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementIt
         userId: chargeUserId,
         clientName: chargeClientName,
         info: buildHypInfo(agreement.productName, `שם הילדה: ${agreement.groupName}`),
-        email: chargeEmail || undefined,
+        email: chargeEmail,
         sendReceipt: true,
       });
     } catch (err: any) {

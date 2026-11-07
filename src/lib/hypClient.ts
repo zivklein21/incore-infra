@@ -126,11 +126,19 @@ function ccodeOf(fields: Record<string, string>): number {
 // `sendReceipt` — real purchases/renewals want one, but the ₪1 card-update-
 // only token capture (createHypCardUpdatePage.ts) deliberately never opts
 // in, since there's no real transaction for the customer to be invoiced for.
+//
+// Callers pass the address from resolveReceiptEmail() (lib/receiptEmail.ts),
+// which sends a linked member's receipts to the parent. A new `sendReceipt`
+// caller has to do the same.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isValidReceiptEmail(email: string | undefined): email is string {
+  return !!email && EMAIL_RE.test(email);
+}
 
 function receiptParams(email: string | undefined, sendReceipt: boolean | undefined): { SendHesh: 'True' } | Record<string, never> {
   if (!sendReceipt) return {};
-  if (!email || !EMAIL_RE.test(email)) {
+  if (!isValidReceiptEmail(email)) {
     console.warn('[hypClient] sendReceipt requested but no valid email on file — skipping SendHesh, checkout continues');
     return {};
   }

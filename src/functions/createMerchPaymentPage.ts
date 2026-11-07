@@ -5,6 +5,7 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getMemberFirstLastName, getMemberFullName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { createHypSignedPaymentUrl, HypSignError, redactHypFields } from '../lib/hypClient';
+import { resolveReceiptEmail } from '../lib/receiptEmail';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProductItem } from '../lib/entities';
 
@@ -121,7 +122,8 @@ export async function handler(
   // the checking-out member herself, unchanged from before.
   const billedMember = payer ?? member;
   const { firstName: clientFirstName, lastName: clientLastName } = getMemberFirstLastName(billedMember);
-  const email = billedMember.identity?.email || billedMember.email || '';
+  // callerUid is whoever is billed: the parent when childUid is set, else the member.
+  const email = await resolveReceiptEmail('forca', callerUid, billedMember.identity?.email || billedMember.email);
   const cell = billedMember.identity?.phone || billedMember.phone || '';
   const childName = childUid ? getMemberFullName(member) : undefined;
 
@@ -159,7 +161,7 @@ export async function handler(
       tash: 1,
       clientName: clientFirstName,
       clientLName: clientLastName || undefined,
-      email: email || undefined,
+      email,
       cell: cell || undefined,
       userId: getMemberIdNumber(billedMember) || HYP_NO_ID_PLACEHOLDER,
       info: childName ? buildHypInfo(infoLine, `שם הילדה: ${childName}`) : buildHypInfo(infoLine),

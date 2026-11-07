@@ -8,6 +8,7 @@ import { firstOfNextMonth, monthKey } from '../lib/entities';
 import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, getPolicySettings, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { chargeHypToken } from '../lib/hypClient';
+import { resolveReceiptEmail } from '../lib/receiptEmail';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
 
 // POST /createHypTokenPurchase
@@ -65,7 +66,7 @@ export async function handler(
       userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       clientName: [build.clientFirstName, build.clientLastName].filter(Boolean).join(' '),
       info: buildHypInfo(build.productName, build.description),
-      email: build.email || undefined,
+      email: await resolveReceiptEmail('incore', uid, build.email),
       sendReceipt: true,
       ...(isInstallmentSale ? { tash: build.totalPayments, tashType: 1 } : {}),
     });

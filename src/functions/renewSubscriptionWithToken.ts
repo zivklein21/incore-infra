@@ -7,6 +7,7 @@ import type { MemberProfileItem, ProductItem } from '../lib/entities';
 import { monthKey, endOfMonth, israelDayStart } from '../lib/entities';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
+import { resolveReceiptEmail } from '../lib/receiptEmail';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from '../lib/paymentGrants';
 
 // POST /renewSubscriptionWithToken
@@ -68,7 +69,7 @@ export async function handler(
       userId: getMemberIdNumber(member) || HYP_NO_ID_PLACEHOLDER,
       clientName,
       info: buildHypInfo(product.name ?? productId, product.description),
-      email: member.identity?.email || member.email || undefined,
+      email: await resolveReceiptEmail('incore', userId, member.identity?.email || member.email),
       sendReceipt: true,
     });
   } catch (err: any) {

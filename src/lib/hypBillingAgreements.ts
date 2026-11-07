@@ -5,6 +5,7 @@ import type { HypBillingAgreementItem, MemberProfileItem, ProductItem, Membershi
 import { applyChargeSafety, chargeBlockReason } from './chargeSafety';
 import { monthKey, endOfMonth, firstOfNextMonth, israelDateStr } from './entities';
 import { chargeHypToken } from './hypClient';
+import { resolveReceiptEmail } from './receiptEmail';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from './paymentGrants';
@@ -34,7 +35,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
   }
   const chargeUserId = (member && getMemberIdNumber(member)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = member ? getMemberFullName(member) : 'Member';
-  const chargeEmail = member?.identity?.email || member?.email || '';
+  const chargeEmail = await resolveReceiptEmail('incore', agreement.userId, member?.identity?.email || member?.email);
 
   let result: { success: boolean; ccode: number; transactionId?: string; authCode?: string };
   if (!agreement.token) {
@@ -52,7 +53,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         userId: chargeUserId,
         clientName: chargeClientName,
         info: buildHypInfo(agreement.productName, agreement.description),
-        email: chargeEmail || undefined,
+        email: chargeEmail,
         sendReceipt: true,
       });
     } catch (err: any) {
