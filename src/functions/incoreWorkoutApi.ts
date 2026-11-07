@@ -31,6 +31,7 @@ import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFor
 import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
 import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
 import { getSessionContacts, saveEmergencyContact } from '../lib/quickDial';
+import { adminSetMedicalAlert } from '../lib/medicalAlert';
 import { handler as removeMySavedCard } from '../lib/removeMySavedCard';
 import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers } from '../lib/memberArchive';
 import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
@@ -75,6 +76,8 @@ const HANDLERS: Record<string, Handler> = {
   // FORCA quick dial.
   getSessionContacts,
   saveEmergencyContact,
+  // FORCA: the short medical alert coaches see.
+  adminSetMedicalAlert,
   // FORCA: a member removing their own saved card.
   removeMySavedCard,
   // Deleted members' retained records.

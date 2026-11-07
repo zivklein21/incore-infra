@@ -6,6 +6,7 @@
 import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { CoachAccess } from './coachAccess';
+import { activeMedicalAlert } from './medicalAlert';
 import { resolveWorkoutPlanEquipmentQuantitiesBatch } from './workoutPlanEquipment';
 import { getAllMemberProfiles } from './memberScan';
 import {
@@ -106,7 +107,10 @@ export interface RosterEntryDetail {
   actualAttendance: 'present' | 'absent' | null;
   /** Who last recorded/corrected actualAttendance — see RegistrationItem.actualAttendanceBy. Null on any entry predating this field, or with no actualAttendance recorded yet. */
   actualAttendanceBy: { uid: string; name: string; role: 'admin' | 'coach' } | null;
+  /** Derived from health declaration answers, so admin-only: always false for a coach. */
   medicalFlag: boolean;
+  /** The admin-written alert text while it's on — the only medical data a coach gets (lib/medicalAlert.ts). */
+  medicalAlert: string | null;
 }
 
 export interface SessionDetail {
@@ -171,9 +175,8 @@ export async function resolveSessionDetail(
       declineReason: r.declineReason || null,
       actualAttendance: r.actualAttendance ?? null,
       actualAttendanceBy: r.actualAttendanceBy ?? null,
-      medicalFlag: access.permissions.healthDeclarations === 'none'
-        ? false
-        : Object.values(healthAnswers).some((v) => v === 'yes'),
+      medicalFlag: access.isAdmin && Object.values(healthAnswers).some((v) => v === 'yes'),
+      medicalAlert: activeMedicalAlert(profile),
     };
   });
   roster.sort((a, b) => a.name.localeCompare(b.name));
@@ -262,9 +265,8 @@ export async function resolveSessionDetail(
     equipmentTaken: (session.equipmentTaken ?? []).map((t) => t.equipmentId),
     equipmentReturnedAt: session.equipmentReturnedAt ?? null,
     closedAt: session.closedAt ?? null,
-    // Stripped for a coach with no workoutPlans access at all, same
-    // "hide rather than 403 the whole session" convention medicalFlag above
-    // uses for healthDeclarations:'none'.
+    // Stripped for a coach with no workoutPlans access at all — hidden
+    // rather than a 403 on the whole session.
     workoutPlanId: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanId ?? null),
     workoutPlanName: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanName ?? null),
     // Stripped the same way for a coach with no testsGrading access at all —

@@ -240,7 +240,7 @@ locals {
     getSessionWorkoutPlan                   = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                      = { method = "ANY" }
     getTermsOfServiceContent                = { method = "ANY" }
-    getTraineeOrthopedicForm                = { method = "ANY" } # FORCA: coach/admin review of a trainee's Orthopedic Medical Form
+    getTraineeOrthopedicForm                = { method = "ANY" } # FORCA: admin review of a trainee's Orthopedic Medical Form
     getTrainingHistory                      = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                        = { method = "GET" } # FORCA Coach feature
     getUploadUrl                            = { method = "POST" }
@@ -363,6 +363,8 @@ locals {
     # FORCA quick dial (same shared integration)
     getSessionContacts   = "GET"  # admin / the session's coach: phone numbers for that session's roster
     saveEmergencyContact = "POST" # admin / the trainee's linked parent: set or clear the emergency contact
+    # FORCA medical alert (same shared integration)
+    adminSetMedicalAlert = "POST" # admin: the short alert coaches see, with a log of who changed it and when
     # FORCA photo / publication consent (same shared integration)
     getPhotoConsent       = "GET"  # parent (childId) / trainee: where the consent stands + its signed history
     changePhotoConsent    = "POST" # parent (childId) / trainee: signed change; refusing withdraws at once

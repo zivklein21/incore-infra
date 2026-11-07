@@ -1335,6 +1335,15 @@ export interface CancellationItem {
 // GSI1PK="ROLE#admin" GSI1SK=MEMBER#<uid> — set only when role/identity.role is 'admin'.
 // GSI3PK=EMAIL#<email> GSI3SK=MEMBER#<uid> — set whenever email is known, for
 // pre-login lookups (e.g. the forgot-password OTP flow in otp.ts).
+export interface MedicalAlertLogEntry {
+  at: string;
+  by: { uid: string; name: string; role: 'admin' | 'coach' };
+  action: 'created' | 'changed' | 'turned_on' | 'turned_off';
+  /** The alert as it stood after this change. */
+  enabled: boolean;
+  text: string;
+}
+
 export interface MemberProfileItem {
   PK: string; SK: string;
   name?: string;
@@ -1363,12 +1372,16 @@ export interface MemberProfileItem {
   // shape/comments (testsGrading/equipment/workoutPlans/notifications were
   // added after this field first shipped — getCoachAccess()/
   // parseCoachPermissions() backfill those from DEFAULT_COACH_PERMISSIONS
-  // for any profile stored under an older shape). 'performance'/
-  // 'healthDeclarations' stay read-only concepts (no performance-editing UI
-  // exists; a coach never edits a trainee's health declaration).
+  // for any profile stored under an older shape). 'performance' stays a
+  // read-only concept (no performance-editing UI exists).
   // FORCA quick dial: set by the trainee's parent or an admin (lib/quickDial.ts).
   // A third party's details, so scrubForArchive() drops it on member deletion.
   emergencyContact?: { name: string; phone: string };
+  // FORCA medical alert (lib/medicalAlert.ts): the only medical information
+  // coaches may see, and only through activeMedicalAlert(). The log stays
+  // admin-only, and both are kept on member deletion like the medical forms.
+  medicalAlert?: { enabled: boolean; text: string; updatedAt: string; updatedBy: { uid: string; name: string; role: 'admin' | 'coach' } };
+  medicalAlertLog?: MedicalAlertLogEntry[];
   identity?: {
     role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;
     email?: string; phone?: string; birthday?: string | number;
@@ -1378,7 +1391,6 @@ export interface MemberProfileItem {
     coachPermissions?: {
       attendance: 'none' | 'read' | 'write';
       performance: 'none' | 'read';
-      healthDeclarations: 'none' | 'read';
       testsGrading?: 'none' | 'read' | 'write';
       equipment?: 'none' | 'write';
       workoutPlans?: 'none' | 'read' | 'write';

@@ -5,27 +5,19 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
-import { getCoachAccess, groupInAccess } from '../lib/coachAccess';
+import { isAdmin } from '../lib/auth';
 import type { MemberProfileItem } from '../lib/entities';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
 // GET or POST /getTraineeOrthopedicForm?memberId=...
-// Auth: Cognito JWT, admin or a coach assigned to this trainee's CURRENT
-// group (groupInAccess) — same "she can already see this group's roster-
-// adjacent info unconditionally" visibility model as
-// ForcaSessionDetailPanel.tsx's attendance/equipment sections and
-// getGroupWeeklyTaskStatus.ts, no separate CoachAccess permission axis for
-// this. Lets a coach review a trainee's injury/limitations answers +
-// signed declaration before running her session — see
-// CoachTraineesScreen.tsx's TraineeDetail, which is this endpoint's only
-// caller.
+// Auth: Cognito JWT, admin only. A coach gets the trainee's medical alert
+// instead, never these answers or the signed form (lib/medicalAlert.ts).
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
-  const access = await getCoachAccess(callerUid);
-  if (!access) return json(403, { error: 'forbidden' });
+  if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
   const memberId = event.queryStringParameters?.memberId
     ?? (event.body ? (JSON.parse(event.body) as { memberId?: unknown }).memberId : undefined);
@@ -34,7 +26,6 @@ export async function handler(
   const res = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${memberId}`, SK: 'PROFILE' } }));
   const profile = res.Item as MemberProfileItem | undefined;
   if (!profile) return json(404, { error: 'member_not_found' });
-  if (!groupInAccess(access, profile.identity?.groupId)) return json(403, { error: 'forbidden' });
 
   const forms = profile.forms ?? {};
   const signatureKey = forms.orthopedic_signature_key;
