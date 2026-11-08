@@ -5,6 +5,7 @@ process.env.TABLE_NAME ??= 't';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ddb } from '../src/lib/dynamo';
+import { pageInquiries } from '../src/lib/inquiryPaging';
 import { decodeIsoCursor, decodeRowCursor, decodeWindowCursor, encodeIsoCursor, monthsBefore, queryDateWindow, windowRows } from '../src/lib/datePaging';
 
 type Item = { pk: string; sk: string; n: number };
@@ -140,4 +141,23 @@ test('windowRows: empty history', () => {
 test('iso cursor round-trips and rejects junk', () => {
   assert.equal(decodeIsoCursor(encodeIsoCursor(NOW)), NOW);
   assert.equal(decodeIsoCursor(encodeIsoCursor('2026-13-45')), null);
+});
+
+test('inquiries: an old open one stays on page 1, closed ones page back by last activity', () => {
+  const inq = (id: string, status: string, last: string) => ({ id, status, createdAt: last, lastMessageAt: last });
+  const rows = [
+    inq('openOld', 'OPEN', '2025-02-01T00:00:00.000Z'),
+    inq('closedNew', 'CLOSED', '2026-11-01T00:00:00.000Z'),
+    inq('closedOld', 'CLOSED', '2026-01-01T00:00:00.000Z'),
+  ];
+  const p1 = pageInquiries(rows, undefined, NOW);
+  assert.ok(p1.ok);
+  if (!p1.ok) return;
+  assert.deepEqual(p1.inquiries.map((i) => i.id), ['closedNew', 'openOld']);
+  const p2 = pageInquiries(rows, p1.nextCursor!, NOW);
+  assert.ok(p2.ok);
+  if (!p2.ok) return;
+  assert.deepEqual(p2.inquiries.map((i) => i.id), ['closedOld']);
+  assert.equal(p2.nextCursor, null);
+  assert.equal(pageInquiries(rows, 'junk', NOW).ok, false);
 });
