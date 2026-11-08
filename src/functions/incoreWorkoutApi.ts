@@ -36,6 +36,8 @@ import { adminSetMedicalAlert } from '../lib/medicalAlert';
 import { handler as removeMySavedCard } from '../lib/removeMySavedCard';
 import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers } from '../lib/memberArchive';
 import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
+import { getMemberBookings } from '../lib/memberBookings';
+import { adminCancelMemberSubscription, adminListMemberSubscriptions, adminSaveMemberSubscription } from '../lib/memberSubscriptions';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -94,6 +96,12 @@ const HANDLERS: Record<string, Handler> = {
   getPhotoConsent,
   changePhotoConsent,
   getPhotoConsentPdfUrl,
+  // INCORE: profile Bookings tab, newest first, paged.
+  getMemberBookings,
+  // INCORE: admin subscription management.
+  adminListMemberSubscriptions,
+  adminSaveMemberSubscription,
+  adminCancelMemberSubscription,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

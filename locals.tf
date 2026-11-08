@@ -373,6 +373,12 @@ locals {
     getPhotoConsent       = "GET"  # parent (childId) / trainee: where the consent stands + its signed history
     changePhotoConsent    = "POST" # parent (childId) / trainee: signed change; refusing withdraws at once
     getPhotoConsentPdfUrl = "GET"  # parent (childId) / trainee: one change's signed PDF
+    # INCORE profile Bookings tab (same shared integration)
+    getMemberBookings = "GET" # member (own) / admin (memberId): bookings newest first, paged by cursor
+    # INCORE admin subscription management (same shared integration)
+    adminListMemberSubscriptions  = "GET"  # admin: a member's subscriptions + payments and which subscription each is linked to
+    adminSaveMemberSubscription   = "POST" # admin: create / duplicate / edit a subscription (warns on overlap or a payment already linked)
+    adminCancelMemberSubscription = "POST" # admin: cancel a subscription (logged)
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
