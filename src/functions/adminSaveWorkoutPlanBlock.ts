@@ -4,7 +4,7 @@ import { GetCommand, PutCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess } from '../lib/coachAccess';
-import type { ExerciseDefinitionItem, WorkoutPlanBlockItem, WorkoutPlanSectionMode, WorkoutPlanStation } from '../lib/entities';
+import type { ExerciseDefinitionItem, WorkoutPlanBlockItem, WorkoutPlanItem, WorkoutPlanSectionMode, WorkoutPlanStation } from '../lib/entities';
 
 interface StationInput { id?: unknown; name?: unknown; exerciseIds?: unknown; notes?: unknown; measurable?: unknown; freeTextExercise?: unknown }
 
@@ -141,6 +141,9 @@ export async function handler(
 
   const planRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${planId}`, SK: 'METADATA' } }));
   if (!planRes.Item) return json(404, { error: 'workout_plan_not_found' });
+  // A session's private copy keeps the plan's structure: its sections are only
+  // ever edited in place, through saveSessionOverride.
+  if ((planRes.Item as WorkoutPlanItem).sessionCopyOf) return json(403, { error: 'session_copy_locked' });
 
   const existingId = typeof body.id === 'string' && body.id ? body.id : null;
   const id = existingId ?? randomUUID();

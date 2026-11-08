@@ -1,9 +1,9 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { randomUUID } from 'crypto';
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
+import { deletePlanCopy } from '../lib/sessionInstance';
 import type { ClassItem, TrainingTypeItem, WorkoutPlanItem } from '../lib/entities';
 
 // POST /assignSessionWorkoutPlan
@@ -25,7 +25,7 @@ export async function handler(
   const access = await getCoachAccess(callerUid);
   if (!access || access.permissions.workoutPlans !== 'write') return json(403, { error: 'forbidden' });
 
-  let body: { classId?: unknown; workoutPlanId?: unknown; customizeForSession?: unknown };
+  let body: { classId?: unknown; workoutPlanId?: unknown };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -33,11 +33,6 @@ export async function handler(
   }
   const classId = typeof body.classId === 'string' ? body.classId.trim() : '';
   if (!classId) return json(400, { error: 'missing_class_id' });
-  if (body.customizeForSession === true) {
-    // Admin-only, like the builder it opens (coaches view plans read-only).
-    if (!access.isAdmin) return json(403, { error: 'forbidden' });
-    return customizeForSession(classId, callerUid);
-  }
   if (body.workoutPlanId !== null && typeof body.workoutPlanId !== 'string') return json(400, { error: 'invalid_workout_plan_id' });
   const workoutPlanId = body.workoutPlanId === null ? null : body.workoutPlanId.trim() || null;
 
@@ -75,7 +70,8 @@ export async function handler(
   // a plan here clears any Test Session already on it, mirroring
   // assignSessionTestGroup.ts's own clear-the-other-side behavior.
   const setClauses = workoutPlanId ? ['workoutPlanId = :id', 'workoutPlanName = :name'] : [];
-  const removeClauses = workoutPlanId ? ['isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds'] : ['workoutPlanId', 'workoutPlanName'];
+  // Choosing a plan replaces whatever this session had, its own edits included.
+  const removeClauses = workoutPlanId ? ['isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds', 'planOverride'] : ['workoutPlanId', 'workoutPlanName', 'planOverride'];
   const values: Record<string, unknown> = workoutPlanId ? { ':id': workoutPlanId, ':name': workoutPlanName } : {};
   if (isRunningSession) { setClauses.push('isRunningSession = :isRunning'); values[':isRunning'] = true; }
   else { removeClauses.push('isRunningSession'); }
@@ -87,53 +83,7 @@ export async function handler(
     ...(Object.keys(values).length ? { ExpressionAttributeValues: values } : {}),
   }));
 
+  if (session.planOverride && session.workoutPlanId) await deletePlanCopy(session.workoutPlanId);
+
   return json(200, { success: true, workoutPlanId, workoutPlanName });
-}
-
-// Body: { classId, customizeForSession: true } — shares this route (API
-// Gateway is at its integration cap). Gives this one session a private copy
-// of its assigned plan (METADATA + every section, see entities.ts's
-// WorkoutPlanItem.sessionCopyOf) and points the session at it, so the admin
-// can edit the copy in the normal builder without touching the original.
-// Idempotent: a session already on its own copy just gets that copy's id
-// back. isRunningSession needs no recompute — the copy keeps the category.
-async function customizeForSession(classId: string, callerUid: string): Promise<APIGatewayProxyStructuredResultV2> {
-  const classKey = { PK: `CLASS#${classId}`, SK: 'METADATA' };
-  const session = (await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: classKey }))).Item as ClassItem | undefined;
-  if (!session) return json(404, { error: 'session_not_found' });
-  if (!session.workoutPlanId) return json(400, { error: 'no_workout_plan_assigned' });
-
-  const planItems = (await ddb.send(new QueryCommand({
-    TableName: FORCA_TABLE_NAME,
-    KeyConditionExpression: 'PK = :pk',
-    ExpressionAttributeValues: { ':pk': `WORKOUTPLAN#${session.workoutPlanId}` },
-  }))).Items ?? [];
-  const plan = planItems.find((i) => i.SK === 'METADATA') as WorkoutPlanItem | undefined;
-  if (!plan) return json(404, { error: 'workout_plan_not_found' });
-  if (plan.sessionClassId === classId) {
-    return json(200, { success: true, workoutPlanId: session.workoutPlanId, workoutPlanName: plan.name });
-  }
-
-  const copyId = randomUUID();
-  const nowIso = new Date().toISOString();
-  const copyPk = `WORKOUTPLAN#${copyId}`;
-  const copies: Record<string, unknown>[] = planItems.map((item) => item.SK === 'METADATA'
-    ? {
-      ...item, PK: copyPk, active: true,
-      // A copy of a copy (session moved onto another session's copy) still
-      // points back at the real library plan.
-      sessionCopyOf: plan.sessionCopyOf ?? session.workoutPlanId, sessionClassId: classId,
-      createdAt: nowIso, createdBy: callerUid,
-    }
-    : { ...item, PK: copyPk, SK: `BLOCK#${randomUUID()}`, planId: copyId, createdAt: nowIso });
-
-  await Promise.all(copies.map((Item) => ddb.send(new PutCommand({ TableName: FORCA_TABLE_NAME, Item }))));
-  await ddb.send(new UpdateCommand({
-    TableName: FORCA_TABLE_NAME,
-    Key: classKey,
-    UpdateExpression: 'SET workoutPlanId = :id',
-    ExpressionAttributeValues: { ':id': copyId },
-  }));
-
-  return json(200, { success: true, workoutPlanId: copyId, workoutPlanName: plan.name });
 }

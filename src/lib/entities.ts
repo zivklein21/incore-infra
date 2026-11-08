@@ -64,6 +64,25 @@ export interface ClassItem {
   traineeNoteUpdatedAt?: string;
   traineeNoteUpdatedBy?: string;
   traineeEquipment?: string[];
+  // Set once a push about this exact session has gone out to its trainees
+  // (see lib/sessionInfo/notifySession.ts) — one of the two things that make
+  // a later plan/equipment edit push an update (shouldNotifySessionUpdate()).
+  traineesNotifiedAt?: string;
+  // Per-session overrides, made from the coach/admin "edit this session"
+  // screen (lib/sessionEdit/). Both survive any change to the recurring
+  // template or to the library plan — see adminSaveRecurringSession.ts.
+  //
+  // planOverride: workoutPlanId points at this session's private plan copy
+  // (WorkoutPlanItem.sessionCopyOf), so logging/reports/equipment all follow
+  // it unchanged. basePlanId is where "Reset to original" returns to.
+  planOverride?: { basePlanId: string; basePlanName: string; editedAt: string; editedBy: SessionEditor };
+  // equipmentOverride: the session's complete, ordered pack list. Replaces
+  // the computed one (Training Type + plan + manualEquipment) outright, so an
+  // empty `items` is a real "nothing needed", distinct from no override.
+  equipmentOverride?: { items: { equipmentId: string; quantity: number }[]; editedAt: string; editedBy: SessionEditor };
+  // Who edited or reset this session's overrides and when, oldest first,
+  // capped at SESSION_EDIT_LOG_MAX entries.
+  sessionEditLog?: SessionEditLogEntry[];
   location?: string;
   // Denormalized at creation time (see createTrainingSession.ts /
   // getCoachOptions.ts) rather than resolved by id on read — a coach lives
@@ -116,6 +135,15 @@ export interface ClassItem {
   closedBy?: string;
   /** ISO 8601 — the session's scheduled end instant, denormalized from its RecurringSessionItem template's own endTime (see adminSaveRecurringSession.ts/lib/sessionInstance.ts) at the moment this instance was materialized. Purely informational (display/calendar-export), same as RecurringSessionItem.endTime — closeSession.ts's closedAt is still what actually marks a session done, regardless of whether the clock has passed this. */
   endDate?: string;
+}
+
+export interface SessionEditor { uid: string; name: string; role: 'admin' | 'coach' }
+
+export interface SessionEditLogEntry {
+  at: string;
+  by: SessionEditor;
+  action: 'edit' | 'reset';
+  parts: ('plan' | 'equipment')[];
 }
 
 // PK=RECURRINGSESSION#<id>  SK=METADATA
@@ -1002,12 +1030,12 @@ export interface WorkoutPlanItem {
   /** Superseded by the 6 fields above — kept only so any plan saved before this redesign still round-trips its old text instead of silently losing it. Not written or shown by the current builder UI. */
   description?: string;
   /**
-   * Set only on a private per-session copy (see assignSessionWorkoutPlan.ts's
-   * customizeForSession) — the plan it was copied from, and the one ClassItem
-   * it belongs to. Edited in the normal builder like any plan, so logging/
-   * equipment/reports work unchanged, but hidden from every plan list/picker
-   * (library, recurring-template picker, search) — the original plan is
-   * never touched by edits to its copy.
+   * Set only on a private per-session copy (see lib/sessionEdit/) — the plan
+   * it was copied from, and the one ClassItem it belongs to. A normal plan
+   * to every reader, so logging/equipment/reports work unchanged, but hidden
+   * from every plan list/picker (library, recurring-template picker, search)
+   * and closed to the plan builder: its sections can only be changed in
+   * place, through saveSessionOverride — the original is never touched.
    */
   sessionCopyOf?: string;
   sessionClassId?: string;

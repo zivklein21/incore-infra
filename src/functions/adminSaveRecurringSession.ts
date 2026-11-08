@@ -4,9 +4,9 @@ import { GetCommand, PutCommand, ScanCommand, UpdateCommand } from '@aws-sdk/lib
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { GroupItem, RecurringSessionItem, TestGroupItem, TrainingTypeItem, WorkoutPlanItem } from '../lib/entities';
+import type { ClassItem, GroupItem, RecurringSessionItem, TestGroupItem, TrainingTypeItem, WorkoutPlanItem } from '../lib/entities';
 import { israelDateStr, israelWallTimeToDate } from '../lib/entities';
-import { createSessionInstance, deleteFutureInstances, normalizeDaysOfWeek, upcomingOccurrences } from '../lib/sessionInstance';
+import { carrySessionOverrides, createSessionInstance, deleteFutureInstances, futureOverriddenInstances, normalizeDaysOfWeek, rebasePlanOverride, upcomingOccurrences } from '../lib/sessionInstance';
 
 const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
@@ -48,6 +48,13 @@ const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 // individually assigned via assignSessionWorkoutPlan.ts/
 // assignSessionTestGroup.ts, same as it already does for coach/location.
 // Past instances are never touched either way.
+//
+// A session edited on its own (ClassItem.planOverride/equipmentOverride, see
+// lib/sessionEdit/) keeps its edited version through both: the in-place patch
+// leaves its plan alone and only repoints where "Reset to original" returns
+// to, and a regenerate carries the override onto the session replacing it
+// (carrySessionOverrides()). overridesLost counts the ones a regenerate left
+// with no session in that week to move to.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -149,6 +156,7 @@ export async function handler(
 
   let instancesCreated = 0;
   let registeredCount = 0;
+  let overridesLost = 0;
 
   if (!existing) {
     for (const date of upcomingOccurrences(startDate, dayOfWeek, time)) {
@@ -182,7 +190,9 @@ export async function handler(
     const shouldRegenerate = patternChanged || startDateProvided;
 
     if (shouldRegenerate) {
-      await deleteFutureInstances(id);
+      const overridden = await futureOverriddenInstances(id);
+      await deleteFutureInstances(id, { keepPlanCopies: true });
+      const created: { classId: string; date: string }[] = [];
       for (const date of upcomingOccurrences(startDate, dayOfWeek, time)) {
         const result = await createSessionInstance({
           groupId, trainingTypeId, date, endTime, createdBy: callerUid, location, coachId, coachName, recurringSessionId: id,
@@ -196,7 +206,9 @@ export async function handler(
         }
         instancesCreated += 1;
         registeredCount += result.registeredCount;
+        created.push({ classId: result.classId, date: date.toISOString() });
       }
+      overridesLost = await carrySessionOverrides(overridden, created, { workoutPlanId, workoutPlanName });
     } else {
       // Pattern unchanged — patch trainingType/coach/location/workout-plan/
       // test-group in place on every not-yet-occurred instance, same idea as
@@ -208,36 +220,50 @@ export async function handler(
         ExpressionAttributeNames: { '#dt': 'date' },
         ExpressionAttributeValues: { ':rsid': id, ':now': nowIso },
       }));
-      const futureItems = (futureRes.Items ?? []) as { PK: string; date: string }[];
+      const futureItems = (futureRes.Items ?? []) as Pick<ClassItem, 'PK' | 'date' | 'planOverride'>[];
       const setClauses = ['className = :className', 'trainingTypeId = :ttid'];
       const removeClauses: string[] = [];
       const values: Record<string, unknown> = { ':className': trainingType.name, ':ttid': trainingTypeId };
       if (endTime) { setClauses.push('endDate = :endDate'); } else { removeClauses.push('endDate'); }
-      if (isRunningSession) { setClauses.push('isRunningSession = :isRunning'); values[':isRunning'] = true; }
-      else { removeClauses.push('isRunningSession'); }
       if (location) { setClauses.push('#loc = :loc'); values[':loc'] = location; } else { removeClauses.push('#loc'); }
       if (coachId) { setClauses.push('coachId = :coachId', 'coachName = :coachName'); values[':coachId'] = coachId; values[':coachName'] = coachName; }
       else { removeClauses.push('coachId', 'coachName'); }
+
+      // Which plan/test a session runs — everything an edited plan keeps.
+      const planSetClauses: string[] = [];
+      const planRemoveClauses: string[] = [];
+      const planValues: Record<string, unknown> = {};
+      if (isRunningSession) { planSetClauses.push('isRunningSession = :isRunning'); planValues[':isRunning'] = true; }
+      else { planRemoveClauses.push('isRunningSession'); }
       if (workoutPlanId) {
-        setClauses.push('workoutPlanId = :wpid', 'workoutPlanName = :wpname');
-        values[':wpid'] = workoutPlanId; values[':wpname'] = workoutPlanName;
-        removeClauses.push('isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds');
+        planSetClauses.push('workoutPlanId = :wpid', 'workoutPlanName = :wpname');
+        planValues[':wpid'] = workoutPlanId; planValues[':wpname'] = workoutPlanName;
+        planRemoveClauses.push('isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds');
       } else if (testGroupId) {
-        setClauses.push('isTestSession = :isTestSession', 'testGroupId = :tgid', 'testGroupName = :tgname');
-        values[':isTestSession'] = true; values[':tgid'] = testGroupId; values[':tgname'] = testGroupName;
-        removeClauses.push('workoutPlanId', 'workoutPlanName');
-        if (testComponentIds && testComponentIds.length > 0) { setClauses.push('testComponentIds = :tcids'); values[':tcids'] = testComponentIds; }
-        else { removeClauses.push('testComponentIds'); }
+        planSetClauses.push('isTestSession = :isTestSession', 'testGroupId = :tgid', 'testGroupName = :tgname');
+        planValues[':isTestSession'] = true; planValues[':tgid'] = testGroupId; planValues[':tgname'] = testGroupName;
+        planRemoveClauses.push('workoutPlanId', 'workoutPlanName');
+        if (testComponentIds && testComponentIds.length > 0) { planSetClauses.push('testComponentIds = :tcids'); planValues[':tcids'] = testComponentIds; }
+        else { planRemoveClauses.push('testComponentIds'); }
       } else {
-        removeClauses.push('workoutPlanId', 'workoutPlanName', 'isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds');
+        planRemoveClauses.push('workoutPlanId', 'workoutPlanName', 'isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds');
       }
-      const updateExpression = `SET ${setClauses.join(', ')}` + (removeClauses.length ? ` REMOVE ${removeClauses.join(', ')}` : '');
 
       await Promise.all(futureItems.map((f) => {
+        const itemSets = [...setClauses];
+        const itemRemoves = [...removeClauses];
+        const itemValues = { ...values };
+        if (f.planOverride) {
+          itemSets.push('planOverride = :planOverride');
+          itemValues[':planOverride'] = rebasePlanOverride(f.planOverride, { workoutPlanId, workoutPlanName });
+        } else {
+          itemSets.push(...planSetClauses);
+          itemRemoves.push(...planRemoveClauses);
+          Object.assign(itemValues, planValues);
+        }
         // endDate is computed per item — same calendar day as that item's
         // own `date`, just at endTime's wall-clock hour/minute (mirrors
         // lib/sessionInstance.ts's createSessionInstance() construction).
-        const itemValues = { ...values };
         if (endTime) {
           const [ey, em, ed] = israelDateStr(new Date(f.date)).split('-').map(Number);
           const [ehh, emm] = endTime.split(':').map(Number);
@@ -246,7 +272,7 @@ export async function handler(
         return ddb.send(new UpdateCommand({
           TableName: FORCA_TABLE_NAME,
           Key: { PK: f.PK, SK: 'METADATA' },
-          UpdateExpression: updateExpression,
+          UpdateExpression: `SET ${itemSets.join(', ')}` + (itemRemoves.length ? ` REMOVE ${itemRemoves.join(', ')}` : ''),
           ExpressionAttributeNames: { '#loc': 'location' },
           ExpressionAttributeValues: itemValues,
         }));
@@ -255,5 +281,5 @@ export async function handler(
     }
   }
 
-  return json(200, { success: true, id, instancesCreated, registeredCount });
+  return json(200, { success: true, id, instancesCreated, registeredCount, overridesLost });
 }

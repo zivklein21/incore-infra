@@ -29,6 +29,7 @@ import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSav
 import { handler as getFormWording } from '../lib/formWording/getFormWording';
 import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
 import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
+import { getSessionPlan, resetSessionOverride, saveSessionOverride } from '../lib/sessionEdit/handlers';
 import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
 import { getSessionContacts, saveEmergencyContact } from '../lib/quickDial';
 import { adminSetMedicalAlert } from '../lib/medicalAlert';
@@ -73,6 +74,10 @@ const HANDLERS: Record<string, Handler> = {
   adminSaveFormWording,
   // FORCA: per-session trainee note + equipment list (coach/admin).
   saveSessionTraineeInfo,
+  // FORCA: one session's effective plan + equipment, and its overrides.
+  getSessionPlan,
+  saveSessionOverride,
+  resetSessionOverride,
   // FORCA quick dial.
   getSessionContacts,
   saveEmergencyContact,

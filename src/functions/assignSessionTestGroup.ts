@@ -3,6 +3,7 @@ import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
+import { deletePlanCopy } from '../lib/sessionInstance';
 import type { ClassItem, TestGroupItem } from '../lib/entities';
 
 // POST /assignSessionTestGroup
@@ -68,7 +69,7 @@ export async function handler(
     // A session can be a Test Session OR a Workout Plan, never both —
     // assigning a test here clears any Workout Plan already on it, mirroring
     // assignSessionWorkoutPlan.ts's own clear-the-other-side behavior.
-    const removes: string[] = ['workoutPlanId', 'workoutPlanName'];
+    const removes: string[] = ['workoutPlanId', 'workoutPlanName', 'planOverride'];
     if (testComponentIds && testComponentIds.length > 0) {
       sets.push('testComponentIds = :testComponentIds');
       values[':testComponentIds'] = testComponentIds;
@@ -81,6 +82,7 @@ export async function handler(
       UpdateExpression: `SET ${sets.join(', ')}${removes.length > 0 ? ` REMOVE ${removes.join(', ')}` : ''}`,
       ExpressionAttributeValues: values,
     }));
+    if (session.planOverride && session.workoutPlanId) await deletePlanCopy(session.workoutPlanId);
   } else {
     await ddb.send(new UpdateCommand({
       TableName: FORCA_TABLE_NAME,

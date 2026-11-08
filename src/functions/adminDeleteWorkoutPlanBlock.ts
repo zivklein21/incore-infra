@@ -3,7 +3,7 @@ import { DeleteCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess } from '../lib/coachAccess';
-import type { WorkoutPlanBlockItem } from '../lib/entities';
+import type { WorkoutPlanBlockItem, WorkoutPlanItem } from '../lib/entities';
 
 // POST /adminDeleteWorkoutPlanBlock
 // Body: { id: string, planId: string } — planId is required because
@@ -30,6 +30,9 @@ export async function handler(
   if (!id) return json(400, { error: 'missing_id' });
   const planId = typeof body.planId === 'string' ? body.planId.trim() : '';
   if (!planId) return json(400, { error: 'missing_plan_id' });
+
+  const planRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `WORKOUTPLAN#${planId}`, SK: 'METADATA' } }));
+  if ((planRes.Item as WorkoutPlanItem | undefined)?.sessionCopyOf) return json(403, { error: 'session_copy_locked' });
 
   const key = { PK: `WORKOUTPLAN#${planId}`, SK: `BLOCK#${id}` };
   const existingRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: key }));

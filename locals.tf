@@ -360,6 +360,10 @@ locals {
     adminSaveFormWording = "POST" # admin: save that wording (versioned)
     # FORCA per-session trainee info (same shared integration)
     saveSessionTraineeInfo = "POST" # admin / the session's coach: trainee note + equipment list; pushes trainees when the note changes
+    # FORCA per-session plan/equipment overrides (same shared integration)
+    getSessionPlan       = "GET"  # admin / the session's coach / its trainee / that trainee's parent: effective plan + equipment
+    saveSessionOverride  = "POST" # admin / the session's coach: edit one session's plan and equipment
+    resetSessionOverride = "POST" # admin / the session's coach: back to the template
     # FORCA quick dial (same shared integration)
     getSessionContacts   = "GET"  # admin / the session's coach: phone numbers for that session's roster
     saveEmergencyContact = "POST" # admin / the trainee's linked parent: set or clear the emergency contact
