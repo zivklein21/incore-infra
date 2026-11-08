@@ -108,6 +108,7 @@ export async function handler(
       measurable: !!t.measurable,
       exercises,
       running: !!t.running,
+      runType: t.running ? t.runType ?? null : null,
       perceivedExertion: completion?.perceivedExertion ?? null,
       averagePace: completion?.averagePace ?? null,
     };

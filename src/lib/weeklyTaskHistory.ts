@@ -1,6 +1,6 @@
 import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from './dynamo';
-import type { ExerciseDefinitionItem, MemberProfileItem, WeeklyTaskCompletionItem, WeeklyTaskItem } from './entities';
+import type { ExerciseDefinitionItem, MemberProfileItem, WeeklyTaskCompletionItem, WeeklyTaskItem, WeeklyTaskRunType } from './entities';
 
 export interface WeeklyTaskHistoryEntry {
   id: string;
@@ -16,6 +16,7 @@ export interface WeeklyTaskHistoryEntry {
   measurable: boolean;
   exerciseNames: string[] | null;
   running: boolean;
+  runType: WeeklyTaskRunType | null;
   perceivedExertion: number | null;
   averagePace: string | null;
 }
@@ -83,6 +84,7 @@ export async function resolveMemberWeeklyTaskHistory(
       measurable: !!t.measurable,
       exerciseNames: t.measurable && t.exerciseIds ? t.exerciseIds.map((exId) => exerciseNameById.get(exId) ?? exId) : null,
       running: !!t.running,
+      runType: t.running ? t.runType ?? null : null,
       perceivedExertion: completion?.perceivedExertion ?? null,
       averagePace: completion?.averagePace ?? null,
     };

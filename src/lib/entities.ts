@@ -1281,9 +1281,14 @@ export interface WeeklyTaskItem {
   exerciseIds?: string[];
   /** Running task — instead of a plain "done" toggle, the trainee fills in a perceived-exertion + average-pace report to complete it, same shape as a running session's own post-workout report (see RunningSessionReportScreen.tsx / saveRunningReport.ts). Mutually exclusive with `measurable` above — a task is one type or the other, same one-type-per-task shape as a training session's own isRunningSession vs assigned Workout Plan. */
   running: boolean;
+  /** Set only when running === true — what kind of run this is; drives the badge on the trainee's task card and which row the pace calculator highlights (see runPace.ts in incore-app). Required on save for a running task; absent on running tasks saved before it existed. */
+  runType?: WeeklyTaskRunType;
   createdAt: string;
   createdBy: string;
 }
+
+export const WEEKLY_TASK_RUN_TYPES = ['volume', 'intervals', 'hills', 'fartlek'] as const;
+export type WeeklyTaskRunType = typeof WEEKLY_TASK_RUN_TYPES[number];
 
 // PK=WEEKLYTASK#<taskId>  SK=COMPLETION#<uid>
 // GSI1PK=MEMBER#<uid> GSI1SK=WEEKLYTASKCOMPLETION#<taskId> — a trainee's own

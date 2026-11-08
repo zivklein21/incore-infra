@@ -4,12 +4,13 @@ import { GetCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { GroupItem, WeeklyTaskItem } from '../lib/entities';
+import { WEEKLY_TASK_RUN_TYPES, type GroupItem, type WeeklyTaskItem, type WeeklyTaskRunType } from '../lib/entities';
 
 // POST /adminSaveWeeklyTask
 // Body: { id?: string, title: string, description?: string, deadline: string (ISO),
 //         targetType: 'group' | 'trainees', groupId?: string, traineeIds?: string[], active?: boolean,
-//         measurable?: boolean, exerciseIds?: string[], running?: boolean }
+//         measurable?: boolean, exerciseIds?: string[], running?: boolean,
+//         runType?: 'volume' | 'intervals' | 'hills' | 'fartlek' (running only; omitted → kept on edit) }
 // — omit id to create. targetType 'group' requires groupId (every CURRENT
 // member of that group is in scope, resolved live — see
 // getMyWeeklyTasks.ts/getGroupWeeklyTaskStatus.ts, never a frozen roster
@@ -29,7 +30,7 @@ export async function handler(
   let body: {
     id?: unknown; title?: unknown; description?: unknown; deadline?: unknown;
     targetType?: unknown; groupId?: unknown; traineeIds?: unknown; active?: unknown;
-    measurable?: unknown; exerciseIds?: unknown; running?: unknown;
+    measurable?: unknown; exerciseIds?: unknown; running?: unknown; runType?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -68,6 +69,14 @@ export async function handler(
   const measurable = body.measurable === true;
   const running = body.running === true;
   if (measurable && running) return json(400, { error: 'measurable_and_running_are_exclusive' });
+  // runType: the admin form requires it, but the server only rejects an
+  // INVALID value — an app build from before run types existed sends none,
+  // and must still be able to save (an edit then keeps the stored type).
+  let runType: WeeklyTaskRunType | undefined;
+  if (running && body.runType !== undefined && body.runType !== null) {
+    if (!WEEKLY_TASK_RUN_TYPES.includes(body.runType as WeeklyTaskRunType)) return json(400, { error: 'invalid_run_type' });
+    runType = body.runType as WeeklyTaskRunType;
+  }
   let exerciseIds: string[] | undefined;
   if (measurable) {
     exerciseIds = Array.isArray(body.exerciseIds)
@@ -88,6 +97,7 @@ export async function handler(
     if (existing) {
       createdAt = existing.createdAt;
       createdBy = existing.createdBy;
+      if (running && !runType && existing.running) runType = existing.runType;
     }
   }
 
@@ -106,6 +116,7 @@ export async function handler(
     measurable,
     ...(exerciseIds ? { exerciseIds } : {}),
     running,
+    ...(runType ? { runType } : {}),
     createdAt,
     createdBy,
   };
