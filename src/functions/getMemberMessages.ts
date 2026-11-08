@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../lib/dynamo';
 import { resolveMemberProfile } from '../lib/memberLookup';
+import { decodeRowCursor, windowRows } from '../lib/datePaging';
 import { getUid, json } from '../lib/http';
 
 // GET or POST /getMemberMessages
@@ -23,14 +24,26 @@ export async function handler(
   const resolved = await resolveMemberProfile(uid);
   if (!resolved) return json(200, { messages: [] });
 
-  const res = await ddb.send(new QueryCommand({
-    TableName: resolved.table,
-    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'MESSAGE#' },
-  }));
+  const qs = event.queryStringParameters ?? {};
+  const paged = qs.paged === '1' || qs.paged === 'true';
+  const cursor = paged && qs.cursor ? decodeRowCursor(qs.cursor) : null;
+  if (paged && qs.cursor && !cursor) return json(400, { error: 'invalid_cursor' });
+
+  const items: Record<string, unknown>[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(new QueryCommand({
+      TableName: resolved.table,
+      KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
+      ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'MESSAGE#' },
+      ExclusiveStartKey: lastKey,
+    }));
+    items.push(...(res.Items ?? []));
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
 
   const now = new Date();
-  const messages = ((res.Items ?? []) as Record<string, unknown>[])
+  const messages = items
     .filter((m) => !m.expiresAt || new Date(m.expiresAt as string) > now)
     .map((m) => ({
       id: (m.SK as string).replace('MESSAGE#', ''),
@@ -50,5 +63,18 @@ export async function handler(
     }))
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 
-  return json(200, { messages });
+  if (!paged) return json(200, { messages });
+
+  // ?paged=1 (app 1.5.2+): every unread message is on page 1 (the badge and
+  // any pending action stay complete), plus read ones from the last 2
+  // months; Load more pages back through older read ones. Most messages
+  // expire within days, but membership reminders and billing-failure notes
+  // don't, so the list can grow. SK is MESSAGE#<id> (not date-sorted), so
+  // this windows in memory.
+  const unread = cursor ? [] : messages.filter((m) => !m.read);
+  const read = messages.filter((m) => m.read).map((m) => ({ m, date: String(m.createdAt ?? '1970-01-01T00:00:00.000Z'), id: m.id }));
+  const page = windowRows(read, cursor);
+  const out = [...unread, ...page.items.map((x) => x.m)]
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  return json(200, { messages: out, nextCursor: page.nextCursor, coveredFrom: page.coveredFrom });
 }
