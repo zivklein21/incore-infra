@@ -34,3 +34,15 @@ exports/
 .DS_Store
 * 2.*
 tfplan*
+
+# Safety (2026-11-09): iCloud duplicates, retired local Terraform state,
+# deploy snapshots (releaseSnapshot.sh output) and env files never belong in git.
+* 2.*
+* 3.*
+* 2/
+* 3/
+*.MIGRATED-DO-NOT-USE
+/rollback*/
+.env
+.env.*
+!.env.example
