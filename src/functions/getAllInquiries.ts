@@ -17,6 +17,32 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
+  // ?openCount=1 — the admin tab bar's support badge (app 1.5.2+): just the
+  // number of open inquiries waiting on an admin reply, instead of every
+  // inquiry. Still a Scan (INCORE inquiries have no index yet; DynamoDB
+  // bills a Scan by data read even with Select COUNT), but it returns one
+  // number and follows every page, so the badge no longer misses inquiries
+  // past the first 1 MB. The index-based fix is phase 2 of the history-
+  // paging work.
+  const openCountParam = event.queryStringParameters?.openCount;
+  if (openCountParam === '1' || openCountParam === 'true') {
+    let openCount = 0;
+    let lastKey: Record<string, unknown> | undefined;
+    do {
+      const page = await ddb.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        Select: 'COUNT',
+        FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata AND #status = :open AND (attribute_not_exists(lastSender) OR lastSender = :member)',
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':prefix': 'INQUIRY#', ':metadata': 'METADATA', ':open': 'OPEN', ':member': 'member' },
+        ExclusiveStartKey: lastKey,
+      }));
+      openCount += page.Count ?? 0;
+      lastKey = page.LastEvaluatedKey;
+    } while (lastKey);
+    return json(200, { openCount });
+  }
+
   const res = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
     FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
