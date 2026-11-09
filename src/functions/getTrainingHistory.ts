@@ -1,10 +1,12 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getCoachAccess, sessionInAccess } from '../lib/coachAccess';
 import { fetchSessionLookups, resolveSessionDetail, type RosterEntryDetail } from '../lib/sessionDetail';
 import type { ClassItem } from '../lib/entities';
+import { israelDateStrRange } from '../lib/sessionInstance';
+import { decodeIsoCursor, encodeIsoCursor, HISTORY_WINDOW_MONTHS, monthsBefore } from '../lib/datePaging';
 
 // GET or POST /getTrainingHistory
 // Auth: Cognito JWT, admin or a coach with attendance !== 'none' (Coach
@@ -31,16 +33,27 @@ export async function handler(
   const access = await getCoachAccess(callerUid);
   if (!access || access.permissions.attendance === 'none') return json(403, { error: 'forbidden' });
 
-  // Table documented for <=50 users per brand (dynamodb.tf) — same accepted
-  // Scan tradeoff as getCoachSessions.ts.
+  const qs = event.queryStringParameters ?? {};
   const nowIso = new Date().toISOString();
-  const sessionsRes = await ddb.send(new ScanCommand({
-    TableName: FORCA_TABLE_NAME,
-    FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata AND attribute_exists(groupId) AND #dt < :now',
-    ExpressionAttributeNames: { '#dt': 'date' },
-    ExpressionAttributeValues: { ':prefix': 'CLASS#', ':metadata': 'METADATA', ':now': nowIso },
-  }));
-  const allSessionItems = (sessionsRes.Items ?? []) as (ClassItem & { PK: string })[];
+  let allSessionItems: (ClassItem & { PK: string })[];
+  let paging: { nextCursor: string | null; coveredFrom: string } | null = null;
+
+  if (qs.paged === '1' || qs.paged === 'true') {
+    // App 1.5.2+: the last 2 months, then 2 months per Load more, read
+    // day by day off GSI2 CLASSDATE#<date> instead of scanning the table.
+    let upperIso = nowIso;
+    if (qs.cursor) {
+      const decoded = decodeIsoCursor(qs.cursor);
+      if (!decoded) return json(400, { error: 'invalid_cursor' });
+      upperIso = decoded;
+    }
+    const page = await pastSessionsWindow(upperIso);
+    allSessionItems = page.items;
+    paging = { nextCursor: page.nextFrom ? encodeIsoCursor(page.nextFrom) : null, coveredFrom: page.coveredFrom };
+  } else {
+    // Builds already in the stores: every past session, as before.
+    allSessionItems = await scanPastSessions(nowIso);
+  }
   const sessionItems = allSessionItems.filter((item) => sessionInAccess(access, item, callerUid));
 
   const lookups = await fetchSessionLookups(sessionItems);
@@ -53,7 +66,56 @@ export async function handler(
 
   sessions.sort((a, b) => b.date.localeCompare(a.date));
 
-  return json(200, { sessions });
+  return json(200, paging ? { sessions, ...paging } : { sessions });
+}
+
+// Sessions recur weekly, so this many empty windows in a row (6 months with
+// no session at all) means the start of the history has been reached.
+const MAX_EMPTY_WINDOWS = 3;
+
+/** Past group sessions in [upper - 2 months, upper), stepping further back over empty windows. */
+async function pastSessionsWindow(upperIso: string): Promise<{
+  items: (ClassItem & { PK: string })[]; nextFrom: string | null; coveredFrom: string;
+}> {
+  let upper = upperIso;
+  for (let w = 0; w < MAX_EMPTY_WINDOWS; w++) {
+    const lower = monthsBefore(upper, HISTORY_WINDOW_MONTHS);
+    // israelDateStrRange excludes its end day, so run one day past `upper`
+    // and trim by the real start instant below.
+    const dayAfter = new Date(new Date(upper).getTime() + 86400000).toISOString();
+    const dayResults = await Promise.all(israelDateStrRange(lower, dayAfter).map((dateStr) => ddb.send(new QueryCommand({
+      TableName: FORCA_TABLE_NAME,
+      IndexName: 'GSI2',
+      KeyConditionExpression: 'GSI2PK = :pk',
+      FilterExpression: 'attribute_exists(groupId) AND #dt >= :lower AND #dt < :upper',
+      ExpressionAttributeNames: { '#dt': 'date' },
+      ExpressionAttributeValues: { ':pk': `CLASSDATE#${dateStr}`, ':lower': lower, ':upper': upper },
+    }))));
+    const items = dayResults.flatMap((r) => (r.Items ?? []) as (ClassItem & { PK: string })[]);
+    if (items.length > 0) return { items, nextFrom: lower, coveredFrom: lower };
+    upper = lower;
+  }
+  return { items: [], nextFrom: null, coveredFrom: upper };
+}
+
+async function scanPastSessions(nowIso: string): Promise<(ClassItem & { PK: string })[]> {
+  // Table documented for <=50 users per brand (dynamodb.tf) — same accepted
+  // Scan tradeoff as getCoachSessions.ts. Follows every page (a single Scan
+  // call stops at 1 MB).
+  const out: (ClassItem & { PK: string })[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(new ScanCommand({
+      TableName: FORCA_TABLE_NAME,
+      FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata AND attribute_exists(groupId) AND #dt < :now',
+      ExpressionAttributeNames: { '#dt': 'date' },
+      ExpressionAttributeValues: { ':prefix': 'CLASS#', ':metadata': 'METADATA', ':now': nowIso },
+      ExclusiveStartKey: lastKey,
+    }));
+    out.push(...((res.Items ?? []) as (ClassItem & { PK: string })[]));
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
+  return out;
 }
 
 function computeAttendanceMatch(entry: RosterEntryDetail): boolean | null {
