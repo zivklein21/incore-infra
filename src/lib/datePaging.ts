@@ -230,3 +230,54 @@ export async function queryDateWindow<Raw extends Record<string, unknown>, Row>(
   return { items: out, nextCursor: encodeWindowCursor(upper), coveredFrom };
 }
 
+// ── Count pages ──────────────────────────────────────────────────────────
+// For lists paged by COUNT (All Transactions: 20 per page) on an index
+// whose sort key is date-ordered. Filters run in `process` on the server, so
+// they cover the full history. The cursor is the sort key of the last row
+// returned (exclusive), and one extra match is looked for so nextCursor is
+// only set when another matching row really exists.
+
+export interface CountPageQuery<Raw, Row> {
+  table: string;
+  indexName?: string;
+  pkName: string;
+  pkValue: string;
+  skName: string;
+  /** Exclusive upper bound sort key from decodeWindowCursor, or null for the newest. */
+  cursor?: string | null;
+  limit: number;
+  /** Map each raw item to a row, or null to filter it out. Same order and length as `items`. */
+  process: (items: Raw[]) => Promise<(Row | null)[]>;
+  /** Raw items read per Query call. */
+  batchSize?: number;
+}
+
+export async function queryCountPage<Raw extends Record<string, unknown>, Row>(
+  q: CountPageQuery<Raw, Row>,
+): Promise<{ items: Row[]; nextCursor: string | null }> {
+  const out: { row: Row; sk: string }[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(new QueryCommand({
+      TableName: q.table,
+      IndexName: q.indexName,
+      KeyConditionExpression: q.cursor ? '#pk = :pk AND #sk < :upper' : '#pk = :pk',
+      ExpressionAttributeNames: { '#pk': q.pkName, ...(q.cursor ? { '#sk': q.skName } : {}) },
+      ExpressionAttributeValues: { ':pk': q.pkValue, ...(q.cursor ? { ':upper': q.cursor } : {}) },
+      ScanIndexForward: false,
+      Limit: q.batchSize ?? 100,
+      ExclusiveStartKey: lastKey,
+    }));
+    const raw = (res.Items ?? []) as Raw[];
+    const rows = await q.process(raw);
+    for (let i = 0; i < raw.length && out.length <= q.limit; i++) {
+      const row = rows[i];
+      if (row !== null && row !== undefined) out.push({ row, sk: String(raw[i][q.skName]) });
+    }
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey && out.length <= q.limit);
+
+  const page = out.slice(0, q.limit);
+  const more = out.length > q.limit;
+  return { items: page.map((x) => x.row), nextCursor: more ? encodeWindowCursor(page[page.length - 1].sk) : null };
+}

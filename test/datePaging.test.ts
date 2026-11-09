@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ddb } from '../src/lib/dynamo';
 import { pageInquiries } from '../src/lib/inquiryPaging';
-import { decodeIsoCursor, decodeRowCursor, decodeWindowCursor, encodeIsoCursor, monthsBefore, queryDateWindow, windowRows } from '../src/lib/datePaging';
+import { decodeIsoCursor, decodeRowCursor, decodeWindowCursor, encodeIsoCursor, monthsBefore, queryCountPage, queryDateWindow, windowRows } from '../src/lib/datePaging';
 
 type Item = { pk: string; sk: string; n: number };
 
@@ -17,9 +17,17 @@ function fakeIndex(items: Item[]) {
   (ddb as unknown as { send: (c: { input: Record<string, any> }) => Promise<unknown> }).send = async (cmd) => {
     queries++;
     const v = cmd.input.ExpressionAttributeValues;
-    const lo = v[':lower'] && v[':upper'] ? v[':lower'] : v[':prefix'];
-    const hi = v[':lower'] && v[':upper'] ? v[':upper'] : v[':lower'];
-    let rows = sorted.filter((i) => i.pk === v[':pk'] && i.sk >= lo && i.sk <= hi);
+    const cond = String(cmd.input.KeyConditionExpression);
+    let rows: Item[];
+    if (cond.includes('BETWEEN')) {
+      const lo = v[':lower'] && v[':upper'] ? v[':lower'] : v[':prefix'];
+      const hi = v[':lower'] && v[':upper'] ? v[':upper'] : v[':lower'];
+      rows = sorted.filter((i) => i.pk === v[':pk'] && i.sk >= lo && i.sk <= hi);
+    } else if (cond.includes('<')) {
+      rows = sorted.filter((i) => i.pk === v[':pk'] && i.sk < v[':upper']);
+    } else {
+      rows = sorted.filter((i) => i.pk === v[':pk']);
+    }
     const start = cmd.input.ExclusiveStartKey;
     if (start) rows = rows.filter((i) => i.sk < (start as Item).sk);
     const limit = cmd.input.Limit ?? Infinity;
@@ -160,4 +168,45 @@ test('inquiries: an old open one stays on page 1, closed ones page back by last 
   assert.deepEqual(p2.inquiries.map((i) => i.id), ['closedOld']);
   assert.equal(p2.nextCursor, null);
   assert.equal(pageInquiries(rows, 'junk', NOW).ok, false);
+});
+
+// ── Count pages (queryCountPage) ─────────────────────────────────────────
+
+const countBase = { table: 't', pkName: 'pk', pkValue: 'ORDER', skName: 'sk' };
+const many = (n: number) => Array.from({ length: n }, (_, i) =>
+  at(new Date(Date.UTC(2026, 10, 1) - i * 86400000).toISOString(), `o${String(i).padStart(3, '0')}`));
+
+test('count pages: 20 newest first, then the next 20, across Query batches', async () => {
+  fakeIndex(many(45));
+  const seen: string[] = [];
+  let cursor: string | null = null;
+  const sizes: number[] = [];
+  for (let guard = 0; guard < 10; guard++) {
+    const page = await queryCountPage({ ...countBase, limit: 20, batchSize: 7, cursor, process: async (r: Item[]) => r });
+    sizes.push(page.items.length);
+    seen.push(...ids(page.items));
+    if (!page.nextCursor) break;
+    cursor = decodeWindowCursor(page.nextCursor, '');
+  }
+  assert.deepEqual(sizes, [20, 20, 5]);
+  assert.deepEqual(seen, ids(many(45)));
+});
+
+test('count pages: filters reach the full history, and Load more only when another match exists', async () => {
+  // Only every 10th order matches: 3 matches across 30 orders.
+  fakeIndex(many(30));
+  const onlyTens = async (r: Item[]) => r.map((i) => (Number(i.sk.slice(-3)) % 10 === 0 ? i : null));
+  const p1 = await queryCountPage({ ...countBase, limit: 2, batchSize: 4, process: onlyTens });
+  assert.deepEqual(ids(p1.items), ['o000', 'o010']);
+  assert.ok(p1.nextCursor);
+  const p2 = await queryCountPage({ ...countBase, limit: 2, batchSize: 4, process: onlyTens, cursor: decodeWindowCursor(p1.nextCursor!, '') });
+  assert.deepEqual(ids(p2.items), ['o020']);
+  assert.equal(p2.nextCursor, null);
+});
+
+test('count pages: exactly a page left means no Load more', async () => {
+  fakeIndex(many(20));
+  const p = await queryCountPage({ ...countBase, limit: 20, process: async (r: Item[]) => r });
+  assert.equal(p.items.length, 20);
+  assert.equal(p.nextCursor, null);
 });

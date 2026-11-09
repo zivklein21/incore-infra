@@ -3,7 +3,7 @@ import { BatchGetCommand, GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { decodeWindowCursor, queryDateWindow } from '../lib/datePaging';
+import { decodeWindowCursor, queryCountPage } from '../lib/datePaging';
 import type { HypOrderItem, MemberProfileItem } from '../lib/entities';
 
 // GET/POST /adminListHypOrders
@@ -11,10 +11,11 @@ import type { HypOrderItem, MemberProfileItem } from '../lib/entities';
 //
 // Two modes:
 // - Paged (body.paged = true, the All Transactions screen from 1.5.2 on):
-//   2-month windows off GSI2 ORDER (GSI2SK=<createdAtIso>#<orderId>), newest
-//   first, with brand / category / search applied here so they cover the
-//   full history, not just what's loaded. Body: { paged, cursor?, brand?,
-//   category?: 'all'|'shop'|'membership', search? } → { orders, nextCursor, coveredFrom }.
+//   20 orders per page off GSI2 ORDER (GSI2SK=<createdAtIso>#<orderId>),
+//   newest first, with brand / category / search applied here so they cover
+//   the full history, not just what's loaded. nextCursor is set only when
+//   another matching order exists. Body: { paged, cursor?, brand?,
+//   category?: 'all'|'shop'|'membership', search? } → { orders, nextCursor }.
 // - Legacy (no `paged`, shipped builds and the dashboard counts): the newest
 //   100 orders, unchanged.
 
@@ -22,6 +23,7 @@ type OrderRow = ReturnType<typeof toRow>;
 type Category = 'all' | 'shop' | 'membership';
 
 const isShopPurchase = (t: string) => t === 'punch_card' || t === 'single_ticket';
+const PAGE_SIZE = 20;
 
 function toRow(o: HypOrderItem, member: MemberProfileItem | undefined) {
   return {
@@ -111,32 +113,27 @@ export async function handler(
   if (cursorRaw && !cursor) return json(400, { error: 'invalid_cursor' });
 
   const members = new Map<string, MemberProfileItem | undefined>();
-  const result = await queryDateWindow<HypOrderItem & Record<string, unknown>, OrderRow>({
+  const result = await queryCountPage<HypOrderItem & Record<string, unknown>, OrderRow>({
     table: TABLE_NAME,
     indexName: 'GSI2',
     pkName: 'GSI2PK',
     pkValue: 'ORDER',
     skName: 'GSI2SK',
-    skPrefix: '',
     cursor,
-    // A search walks the whole history in bigger steps until it has a
-    // screenful of matches (or runs out).
-    months: search ? 12 : undefined,
-    minResults: search ? 30 : 1,
+    limit: PAGE_SIZE,
     process: async (items) => {
       await loadMembers(items.map((o) => o.userId), members);
-      return items
-        .map((o) => toRow(o, members.get(o.userId)))
-        .filter((r) => {
-          if (r.status === 'pending') return false;
-          if (brand && r.brand !== brand) return false;
-          if (category === 'shop' && !isShopPurchase(r.productType)) return false;
-          if (category === 'membership' && isShopPurchase(r.productType)) return false;
-          if (search && !r.memberName.toLowerCase().includes(search) && !String(r.productName ?? '').toLowerCase().includes(search)) return false;
-          return true;
-        });
+      return items.map((o) => {
+        const r = toRow(o, members.get(o.userId));
+        if (r.status === 'pending') return null;
+        if (brand && r.brand !== brand) return null;
+        if (category === 'shop' && !isShopPurchase(r.productType)) return null;
+        if (category === 'membership' && isShopPurchase(r.productType)) return null;
+        if (search && !r.memberName.toLowerCase().includes(search) && !String(r.productName ?? '').toLowerCase().includes(search)) return null;
+        return r;
+      });
     },
   });
 
-  return json(200, { orders: result.items, nextCursor: result.nextCursor, coveredFrom: result.coveredFrom });
+  return json(200, { orders: result.items, nextCursor: result.nextCursor });
 }
