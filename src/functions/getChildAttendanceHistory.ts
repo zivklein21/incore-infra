@@ -1,16 +1,15 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { verifyFamilyLink } from '../lib/familyLinks';
-import type { ClassItem, RegistrationItem } from '../lib/entities';
+import { batchGetClasses, isPagedRequest, queryMemberRegistrations } from '../lib/memberRegistrations';
+import { decodeRowCursor, windowRows } from '../lib/datePaging';
 
 // GET or POST /getChildAttendanceHistory?childUid=xxx
 // Auth: Cognito JWT, caller must be childUid's linked parent (verifyFamilyLink)
 //
 // Parent-session (no identity switch) counterpart of getMyAttendanceHistory.ts
-// — see the FORCA Child Switcher plan. Same direct-Scan-for-her-REG#<uid>-
-// sort-keys approach, just authorized via the family link instead of "this
+// — see the FORCA Child Switcher plan. Same GSI1 registration read
+// (lib/memberRegistrations.ts), just authorized via the family link instead of "this
 // is my own uid".
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -22,22 +21,20 @@ export async function handler(
   const link = await verifyFamilyLink(callerUid, childUid);
   if (!link.ok) return json(403, { error: 'forbidden' });
 
-  const regsRes = await ddb.send(new ScanCommand({
-    TableName: link.table,
-    FilterExpression: 'SK = :sk',
-    ExpressionAttributeValues: { ':sk': `REG#${childUid}` },
-  }));
-  const registrations = (regsRes.Items ?? []) as RegistrationItem[];
-  if (registrations.length === 0) return json(200, { sessions: [] });
+  const qs = event.queryStringParameters ?? {};
+  const paged = isPagedRequest(qs);
+  const cursor = paged && qs.cursor ? decodeRowCursor(qs.cursor) : null;
+  if (paged && qs.cursor && !cursor) return json(400, { error: 'invalid_cursor' });
 
-  const sessionResults = await Promise.all(registrations.map((r) =>
-    ddb.send(new GetCommand({ TableName: link.table, Key: { PK: `CLASS#${r.classId}`, SK: 'METADATA' } })),
-  ));
+  const registrations = await queryMemberRegistrations(link.table, childUid);
+  if (registrations.length === 0) return json(200, paged ? { sessions: [], nextCursor: null } : { sessions: [] });
+
+  const sessionResults = await batchGetClasses(link.table, registrations.map((r) => r.classId));
 
   const nowIso = new Date().toISOString();
   const sessions = registrations
-    .map((r, i) => {
-      const session = sessionResults[i].Item as ClassItem | undefined;
+    .map((r) => {
+      const session = sessionResults.get(r.classId);
       if (!session || session.date >= nowIso) return null;
       return {
         classId: r.classId,
@@ -52,5 +49,11 @@ export async function handler(
 
   sessions.sort((a, b) => b.date.localeCompare(a.date));
 
-  return json(200, { sessions });
+  if (!paged) return json(200, { sessions });
+  const page = windowRows(sessions.map((x) => ({ ...x, id: x.classId })), cursor);
+  return json(200, {
+    sessions: page.items.map(({ id: _id, ...x }) => x),
+    nextCursor: page.nextCursor,
+    coveredFrom: page.coveredFrom,
+  });
 }
