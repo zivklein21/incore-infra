@@ -1,7 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
+import { FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
+import { FORCA_INQUIRY_GSI2PK, pageInquiries, queryInquiryPartition, scanInquiries } from '../lib/inquiryFeed';
 import { getCoachAccess, groupInAccess } from '../lib/coachAccess';
 import type { ForcaSupportInquiryItem } from '../lib/entities';
 
@@ -20,13 +20,15 @@ export async function handler(
   const access = await getCoachAccess(callerUid);
   if (!access) return json(403, { error: 'forbidden' });
 
-  const res = await ddb.send(new ScanCommand({
-    TableName: FORCA_TABLE_NAME,
-    FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata AND recipientRole = :coach',
-    ExpressionAttributeValues: { ':prefix': 'FORCAINQUIRY#', ':metadata': 'METADATA', ':coach': 'coach' },
-  }));
+  const qs = event.queryStringParameters ?? {};
+  const paged = qs.paged === '1' || qs.paged === 'true';
+  // Paged (app 1.5.2+): one GSI2 partition instead of a whole-table Scan.
+  const items = paged
+    ? await queryInquiryPartition<ForcaSupportInquiryItem>(FORCA_TABLE_NAME, FORCA_INQUIRY_GSI2PK)
+    : await scanInquiries<ForcaSupportInquiryItem>(FORCA_TABLE_NAME, 'FORCAINQUIRY#');
 
-  const inquiries = ((res.Items ?? []) as ForcaSupportInquiryItem[])
+  const inquiries = items
+    .filter((i) => i.recipientRole === 'coach')
     .filter((i) => groupInAccess(access, i.groupId))
     .map((i) => ({
       id: i.PK.replace('FORCAINQUIRY#', ''),
@@ -42,5 +44,8 @@ export async function handler(
     }))
     .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? '').localeCompare(a.lastMessageAt ?? a.createdAt ?? ''));
 
-  return json(200, { inquiries });
+  if (!paged) return json(200, { inquiries });
+  const page = pageInquiries(inquiries, qs.cursor);
+  if (!page.ok) return json(400, { error: 'invalid_cursor' });
+  return json(200, { inquiries: page.inquiries, nextCursor: page.nextCursor, coveredFrom: page.coveredFrom });
 }

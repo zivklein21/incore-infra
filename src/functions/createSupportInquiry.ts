@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { randomUUID } from 'crypto';
 import { TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
+import { INCORE_INQUIRY_GSI2PK } from '../lib/inquiryFeed';
 import { getUid, json } from '../lib/http';
 
 // POST /createSupportInquiry
@@ -46,6 +47,9 @@ export async function handler(
             ...inquiryKey,
             GSI1PK: `MEMBER#${uid}`,
             GSI1SK: `INQUIRY#${nowIso}#${inquiryId}`,
+            // Admin inbox partition (lib/inquiryFeed.ts) — replaces a table Scan.
+            GSI2PK: INCORE_INQUIRY_GSI2PK,
+            GSI2SK: `${nowIso}#${inquiryId}`,
             userId: uid,
             userDisplayName,
             userEmail,
