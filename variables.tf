@@ -74,3 +74,9 @@ variable "admin_portal_allowed_origins" {
   type        = list(string)
   default     = ["http://localhost:3000"]
 }
+
+variable "cognito_email_via_ses" {
+  description = "Send Cognito's reset and verification codes through SES on our domain. Needs SES production access first."
+  type        = bool
+  default     = false
+}

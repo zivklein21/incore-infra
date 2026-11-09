@@ -171,6 +171,28 @@ resource "aws_route53_record" "dmarc" {
   records = ["v=DMARC1; p=none; adkim=s; aspf=r"]
 }
 
+# Lets Cognito send as our domain — see email_configuration in cognito.tf.
+resource "aws_sesv2_email_identity_policy" "cognito_send" {
+  count          = var.cognito_email_via_ses ? 1 : 0
+  email_identity = aws_sesv2_email_identity.incoretraining.email_identity
+  policy_name    = "cognito-send"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "AllowCognitoSend"
+      Effect    = "Allow"
+      Principal = { Service = "email.cognito-idp.amazonaws.com" }
+      Action    = ["ses:SendEmail", "ses:SendRawEmail"]
+      Resource  = aws_sesv2_email_identity.incoretraining.arn
+      Condition = {
+        StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+        ArnLike      = { "aws:SourceArn" = aws_cognito_user_pool.incore_user_pool.arn }
+      }
+    }]
+  })
+}
+
 # ── Lambda permission to send ────────────────────────────────────────────────
 
 # Only as no-reply@incoretraining.com and only through our configuration set —

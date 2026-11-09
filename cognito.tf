@@ -27,6 +27,21 @@ resource "aws_cognito_user_pool" "incore_user_pool" {
     mutable                  = true # Allows users to update their name in their profile later
   }
 
+  # Password-reset and verification codes. Off = Cognito's own sender. Leave it
+  # off until SES has production access: in the sandbox SES rejects every
+  # unverified recipient and Cognito has no fallback, so members would stop
+  # getting reset codes. One pool has one From name, so FORCA members see
+  # "INCORE" on these codes.
+  dynamic "email_configuration" {
+    for_each = var.cognito_email_via_ses ? [1] : []
+    content {
+      email_sending_account = "DEVELOPER"
+      source_arn            = aws_sesv2_email_identity.incoretraining.arn
+      from_email_address    = "INCORE <${local.ses_from_address}>"
+      configuration_set     = aws_sesv2_configuration_set.transactional.configuration_set_name
+    }
+  }
+
   # 4. Family Accounts: a custom, passwordless CUSTOM_AUTH challenge flow lets
   # switchProfile.ts issue a linked child's own real tokens to their parent
   # without ever knowing the child's password (see switchProfile.ts's own
