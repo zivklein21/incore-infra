@@ -4,26 +4,28 @@ import { ddb, TABLE_NAME } from './dynamo';
 import { getUid, json } from './http';
 import { isAdmin } from './auth';
 import type { ClassItem, RegistrationItem } from './entities';
+import { decodeRowCursor, windowRows } from './datePaging';
 
-// GET /getMemberBookings?memberId=xxx&limit=20&cursor=<opaque>
+// GET /getMemberBookings?memberId=xxx&cursor=<opaque>
 // Auth: Cognito JWT. Defaults to the caller's own bookings; another memberId
 // requires admin (same rule as getClasses.ts / getActivityHistory.ts).
 // Rides incoreWorkoutApi.ts's shared integration (300-integration cap).
 //
 // INCORE profile "Bookings" tab, newest first (latest class date at the top),
-// one page at a time. The order is decided here, not on the client, so page 2
-// always continues where page 1 stopped.
+// paged by TIME: the first page is every upcoming booking plus the last 2
+// months; each Load more is the next 2 months back. A window with no
+// bookings is skipped automatically, so a page is only empty when the member
+// has no bookings at all, and nextCursor is null only when nothing older
+// exists (lib/datePaging.ts windowRows).
 //
 // GSI1SK is REG#<month>#<classId>, so the index only orders by month, not by
 // day or time. A member holds a few hundred registrations at most, so this
 // reads all of them, takes each class's real date from the class item (the
 // registration's classDate is a copy taken at booking time and goes stale if
-// the class is moved), sorts, and returns the page after the cursor. The
+// the class is moved), sorts, and returns the window after the cursor. The
 // cursor is "<dateIso>|<classId>" of the last row returned, so a booking made
-// between page loads can't shift or repeat rows.
-
-const DEFAULT_LIMIT = 20;
-const MAX_LIMIT = 100;
+// between page loads can't shift or repeat rows. `limit` is accepted and
+// ignored (it was the page size before paging moved to time windows).
 
 export interface MemberBookingRow {
   id: string;
@@ -33,42 +35,6 @@ export interface MemberBookingRow {
   capacity: number;
   consumedFrom: string | null;
   isPrivate: boolean;
-}
-
-/** Newest first; ties (same start time) broken by classId so the order is total. */
-export function compareBookingsDesc(a: { date: string; id: string }, b: { date: string; id: string }): number {
-  if (a.date !== b.date) return a.date < b.date ? 1 : -1;
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-}
-
-export function encodeBookingCursor(row: { date: string; id: string }): string {
-  return Buffer.from(`${row.date}|${row.id}`, 'utf8').toString('base64url');
-}
-
-export function decodeBookingCursor(cursor: string): { date: string; id: string } | null {
-  try {
-    const raw = Buffer.from(cursor, 'base64url').toString('utf8');
-    // The ISO date never contains '|'; the class id might.
-    const sep = raw.indexOf('|');
-    if (sep <= 0) return null;
-    const date = raw.slice(0, sep);
-    const id = raw.slice(sep + 1);
-    if (!id || isNaN(new Date(date).getTime())) return null;
-    return { date, id };
-  } catch {
-    return null;
-  }
-}
-
-/** One page of `rows` (already sorted newest first) after `cursor`. */
-export function pageBookings<T extends { date: string; id: string }>(
-  rows: T[], limit: number, cursor: { date: string; id: string } | null,
-): { items: T[]; nextCursor: string | null } {
-  const start = cursor ? rows.findIndex((r) => compareBookingsDesc(cursor, r) < 0) : 0;
-  if (start < 0) return { items: [], nextCursor: null };
-  const items = rows.slice(start, start + limit);
-  const hasMore = start + limit < rows.length;
-  return { items, nextCursor: hasMore && items.length > 0 ? encodeBookingCursor(items[items.length - 1]) : null };
 }
 
 async function queryAllRegistrations(memberId: string): Promise<RegistrationItem[]> {
@@ -115,9 +81,7 @@ export async function getMemberBookings(
   const memberId = qs.memberId || callerUid;
   if (memberId !== callerUid && !(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  const parsedLimit = parseInt(qs.limit ?? '', 10);
-  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, MAX_LIMIT) : DEFAULT_LIMIT;
-  const cursor = qs.cursor ? decodeBookingCursor(qs.cursor) : null;
+  const cursor = qs.cursor ? decodeRowCursor(qs.cursor) : null;
   if (qs.cursor && !cursor) return json(400, { error: 'invalid_cursor' });
 
   const registrations = await queryAllRegistrations(memberId);
@@ -142,8 +106,6 @@ export async function getMemberBookings(
       isPrivate: cls?.isPrivate === true,
     });
   }
-  rows.sort(compareBookingsDesc);
-
-  const page = pageBookings(rows, limit, cursor);
-  return json(200, { items: page.items, nextCursor: page.nextCursor, total: rows.length });
+  const page = windowRows(rows, cursor);
+  return json(200, { items: page.items, nextCursor: page.nextCursor, coveredFrom: page.coveredFrom, total: rows.length });
 }

@@ -1,47 +1,61 @@
 // Run: npm test
-// INCORE profile bookings order/paging (lib/memberBookings.ts) and the admin
+// INCORE profile bookings order/time paging (lib/memberBookings.ts via
+// lib/datePaging.ts windowRows) and the admin
 // subscription rules (lib/memberSubscriptions.ts). Pure functions only, no
 // DynamoDB.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { compareBookingsDesc, decodeBookingCursor, encodeBookingCursor, pageBookings } from '../src/lib/memberBookings';
+import { decodeRowCursor, encodeRowCursor, windowRows } from '../src/lib/datePaging';
 import { overlaps, resolvePaymentLinks, samePlan, statusForWindow, windowOf } from '../src/lib/memberSubscriptions';
 import type { MembershipItem } from '../src/lib/entities';
 
 const row = (id: string, date: string) => ({ id, date: new Date(date).toISOString() });
+const NOW = '2026-11-09T12:00:00.000Z';
+
+// Bookings page by time (getMemberBookings uses windowRows): upcoming + the
+// last 2 months first, then 2 months per Load more.
 
 test('bookings: newest first, ties broken by classId', () => {
   const rows = [row('a', '2026-10-01T08:00Z'), row('c', '2026-11-05T08:00Z'), row('b', '2026-11-05T08:00Z'), row('d', '2026-12-01T08:00Z')];
-  rows.sort(compareBookingsDesc);
-  assert.deepEqual(rows.map((r) => r.id), ['d', 'c', 'b', 'a']);
+  assert.deepEqual(windowRows(rows, null, { nowIso: NOW }).items.map((r) => r.id), ['d', 'c', 'b', 'a']);
 });
 
-test('bookings: pages join up with no gaps or repeats', () => {
-  const rows = Array.from({ length: 7 }, (_, i) => row(`c${i}`, `2026-11-0${i + 1}T08:00Z`)).sort(compareBookingsDesc);
-  const seen: string[] = [];
-  let cursor: { date: string; id: string } | null = null;
-  for (let guard = 0; guard < 10; guard++) {
-    const page = pageBookings(rows, 3, cursor);
-    seen.push(...page.items.map((r) => r.id));
-    if (!page.nextCursor) break;
-    cursor = decodeBookingCursor(page.nextCursor);
-  }
-  assert.deepEqual(seen, rows.map((r) => r.id));
+test('bookings: first page is upcoming + last 2 months, Load more goes 2 months back', () => {
+  const rows = [
+    row('upcoming', '2026-11-20T08:00Z'), row('recent', '2026-10-15T08:00Z'),
+    row('aug', '2026-08-20T08:00Z'), row('jul', '2026-07-10T08:00Z'),
+  ];
+  const p1 = windowRows(rows, null, { nowIso: NOW });
+  assert.deepEqual(p1.items.map((r) => r.id), ['upcoming', 'recent']);
+  assert.ok(p1.nextCursor, 'older bookings exist, so Load more must show');
+  const p2 = windowRows(rows, decodeRowCursor(p1.nextCursor!), { nowIso: NOW });
+  assert.deepEqual(p2.items.map((r) => r.id), ['aug', 'jul']);
+  assert.equal(p2.nextCursor, null, 'nothing older: hide Load more');
+});
+
+test('bookings: an empty 2-month window skips back to the next older booking', () => {
+  const rows = [row('old', '2025-03-01T08:00Z'), row('older', '2025-02-01T08:00Z'), row('oldest', '2024-01-01T08:00Z')];
+  const p1 = windowRows(rows, null, { nowIso: NOW });
+  assert.deepEqual(p1.items.map((r) => r.id), ['old', 'older']);
+  assert.ok(p1.nextCursor);
+  const p2 = windowRows(rows, decodeRowCursor(p1.nextCursor!), { nowIso: NOW });
+  assert.deepEqual(p2.items.map((r) => r.id), ['oldest']);
+  assert.equal(p2.nextCursor, null);
 });
 
 test('bookings: a booking added between pages does not shift page 2', () => {
-  const rows = [row('x', '2026-11-03T08:00Z'), row('y', '2026-11-02T08:00Z'), row('z', '2026-11-01T08:00Z')];
-  const first = pageBookings(rows, 2, null);
+  const rows = [row('x', '2026-11-03T08:00Z'), row('z', '2026-06-01T08:00Z')];
+  const first = windowRows(rows, null, { nowIso: NOW });
   const withNew = [row('new', '2026-12-01T08:00Z'), ...rows];
-  const second = pageBookings(withNew, 2, decodeBookingCursor(first.nextCursor!));
+  const second = windowRows(withNew, decodeRowCursor(first.nextCursor!), { nowIso: NOW });
   assert.deepEqual(second.items.map((r) => r.id), ['z']);
   assert.equal(second.nextCursor, null);
 });
 
 test('bookings: cursor round-trips and rejects junk', () => {
-  const c = encodeBookingCursor(row('cls|1', '2026-11-01T08:00Z'));
-  assert.deepEqual(decodeBookingCursor(c), { date: '2026-11-01T08:00:00.000Z', id: 'cls|1' });
-  assert.equal(decodeBookingCursor('not-a-cursor'), null);
+  const c = encodeRowCursor(row('cls|1', '2026-11-01T08:00Z'));
+  assert.deepEqual(decodeRowCursor(c), { date: '2026-11-01T08:00:00.000Z', id: 'cls|1' });
+  assert.equal(decodeRowCursor('not-a-cursor'), null);
 });
 
 test('subscriptions: overlap and status from dates', () => {

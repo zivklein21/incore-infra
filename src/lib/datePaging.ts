@@ -66,7 +66,8 @@ export function decodeIsoCursor(cursor: string): string | null {
 // rows) but whose stored keys don't sort by the date the list shows (e.g.
 // CANCEL#<classId>, or a session date that moves when a session is edited).
 // Same contract as queryDateWindow: 2 months per page, empty stretches are
-// skipped, and the cursor is "<date>|<id>" of the last row returned.
+// skipped, and the cursor is the window's lower edge ("<date>|" — a row
+// cursor "<date>|<id>" is also accepted), so windows tile with no gaps.
 
 export interface DatedRow { date: string; id: string }
 
@@ -86,8 +87,9 @@ export function decodeRowCursor(cursor: string): DatedRow | null {
     const sep = raw.indexOf('|');
     if (sep <= 0) return null;
     const date = raw.slice(0, sep);
+    // An empty id is a window boundary: "everything strictly older than date".
     const id = raw.slice(sep + 1);
-    if (!id || isNaN(new Date(date).getTime())) return null;
+    if (isNaN(new Date(date).getTime())) return null;
     return { date, id };
   } catch {
     return null;
@@ -117,7 +119,10 @@ export function windowRows<T extends DatedRow>(
   if (end < 0) end = rest.length;
   const items = rest.slice(0, end);
   const more = end < rest.length;
-  return { items, nextCursor: more ? encodeRowCursor(items[items.length - 1]) : null, coveredFrom: from };
+  // The cursor is the window's lower edge, not the last row, so the next
+  // page is exactly the 2 months before this one (an empty id sorts below
+  // every real id, so rows on the edge itself stay on this page).
+  return { items, nextCursor: more ? encodeRowCursor({ date: from, id: '' }) : null, coveredFrom: from };
 }
 
 export interface DateWindowQuery<Raw, Row> {
@@ -224,3 +229,4 @@ export async function queryDateWindow<Raw extends Record<string, unknown>, Row>(
 
   return { items: out, nextCursor: encodeWindowCursor(upper), coveredFrom };
 }
+
