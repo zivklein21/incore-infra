@@ -86,7 +86,9 @@ export async function handler(): Promise<void> {
       } else if (isCustomMigration) {
         // Condition A — past its own endDate (or missing one): close it out.
         memUpdateExpr = 'SET monthEndProcessed = :mep, #status = :expired, updatedAt = :now';
-        memValues[':expired'] = 'expired';
+        // Uppercase like every other writer (it was 'expired', which status
+        // readers such as getMemberMembership's priority list didn't match).
+        memValues[':expired'] = 'EXPIRED';
         locked++;
       } else {
         // Regular subscription — closed by billing (renewal replaces it, a

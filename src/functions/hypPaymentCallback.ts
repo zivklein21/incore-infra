@@ -3,11 +3,12 @@ import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2 } from '
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { HypOrderItem, MemberProfileItem, ProductItem } from '../lib/entities';
-import { monthKey, firstOfNextMonth } from '../lib/entities';
+import { monthKey } from '../lib/entities';
 import { verifyHypTransaction, getHypToken, inquireCardBrand, refundHypTransaction, redactHypFields } from '../lib/hypClient';
 import { getPolicySettings, getMemberFullName } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
+import { firstRecurringChargeDate } from '../lib/membershipExpiry';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from '../lib/adminNotify';
 import { handleMerchOrderCallback } from '../lib/merchPayments';
 import { handleForcaSubscriptionOrderCallback } from '../lib/forcaSubscriptionPayments';
@@ -250,7 +251,7 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
         } else {
           // Every recurring charge lands on the 1st of the month, regardless
           // of which day the first payment happened on.
-          const nextChargeDate = firstOfNextMonth(new Date());
+          const nextChargeDate = firstRecurringChargeDate(new Date(), order.startDate); // after the period bought (next month when bought early)
           const assignedPlanTotalPayments = assignedPlan ? (await getPolicySettings()).standingOrderMonths : undefined;
 
           await ddb.send(new PutCommand({

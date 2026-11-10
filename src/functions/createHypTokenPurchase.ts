@@ -4,12 +4,13 @@ import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import type { MemberProfileItem, ProductItem } from '../lib/entities';
-import { firstOfNextMonth, monthKey } from '../lib/entities';
+import { monthKey } from '../lib/entities';
 import { buildOrderFromProduct, orderBuildErrorStatus, orderFromBuild, newOrderKey, getMemberIdNumber, getPolicySettings, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
 import { chargeHypToken } from '../lib/hypClient';
 import { resolveReceiptEmail } from '../lib/receiptEmail';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
+import { firstRecurringChargeDate } from '../lib/membershipExpiry';
 
 // POST /createHypTokenPurchase
 // Auth: Cognito JWT
@@ -201,7 +202,7 @@ export async function handler(
         },
       }));
     } else {
-      const nextChargeDate = firstOfNextMonth(new Date());
+      const nextChargeDate = firstRecurringChargeDate(new Date(), build.startDate); // after the period bought (next month when bought early)
       const assignedPlanTotalPayments = assignedPlan ? (await getPolicySettings()).standingOrderMonths : undefined;
       await ddb.send(new PutCommand({
         TableName: TABLE_NAME,

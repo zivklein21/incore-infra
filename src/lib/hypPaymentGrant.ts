@@ -2,11 +2,12 @@ import { randomUUID } from 'crypto';
 import { GetCommand, PutCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { HypOrderItem, MemberProfileItem, ProductItem } from './entities';
-import { monthKey, firstOfNextMonth } from './entities';
+import { monthKey } from './entities';
 import { getHypToken, inquireCardBrand, refundHypTransaction } from './hypClient';
 import { getPolicySettings, getMemberFullName } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { grantPunchCardSessions, handlePaymentSuccess, type PaymentSuccessPayload } from './paymentGrants';
+import { firstRecurringChargeDate } from './membershipExpiry';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
 
 type OrderKey = { PK: string; SK: string };
@@ -163,7 +164,7 @@ export async function applyHypPaymentSuccess(
       } else {
         // Every recurring charge lands on the 1st of the month, regardless
         // of which day the first payment happened on.
-        const nextChargeDate = firstOfNextMonth(new Date());
+        const nextChargeDate = firstRecurringChargeDate(new Date(), order.startDate); // after the period bought (next month when bought early)
         const assignedPlanTotalPayments = assignedPlan ? (await getPolicySettings()).standingOrderMonths : undefined;
 
         await ddb.send(new PutCommand({

@@ -5,6 +5,7 @@ import { ddb, TABLE_NAME } from './dynamo';
 import type { MembershipItem, ProductItem, RegistrationItem } from './entities';
 import { putPunchCardItem } from './punchCards';
 import { queryFutureSubscriptionRegistrations, queryAllActiveMemberships, queryMembershipForMonth, queryMembershipsForMonth } from './membershipQueries';
+import { initialStatus, shouldSupersede } from './membershipExpiry';
 
 // Shared payment-success/payment-failure business logic, called by the
 // HYP-driven flow (hypPayments.ts) and adminEvictFutureRegistrations.ts.
@@ -93,14 +94,21 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
   // exactly the case this guards against), so only an existing non-bridge
   // ACTIVE item means this purchase was already granted.
   const existingForMonth = await queryMembershipsForMonth(userId, targetMonth);
-  const existingReal = existingForMonth.find((m) => m.status === 'ACTIVE' && m.type !== 'CUSTOM_MIGRATION');
+  // PENDING too: a purchase for next month is PENDING until it starts.
+  const existingReal = existingForMonth.find((m) => (m.status === 'ACTIVE' || m.status === 'PENDING') && m.type !== 'CUSTOM_MIGRATION');
   if (existingReal) {
     console.log(`[paymentGrants] Membership for ${userId} in ${targetMonth} already active — skipping create.`);
     return;
   }
 
-  // ── Supersede any other ACTIVE membership before creating the new one ─────
-  const priorActive = await queryAllActiveMemberships(userId);
+  // ── Supersede the ACTIVE memberships this one replaces ────────────────────
+  // Ones that overlap it or have already ended. A membership still running
+  // that ends before this one starts (next month bought early) runs to its
+  // own end; expireMemberships closes it then. Before, it was expired on the
+  // spot and the member lost the rest of the month they'd paid for.
+  const grantNow = new Date();
+  const priorActive = (await queryAllActiveMemberships(userId))
+    .filter((old) => shouldSupersede(old, new Date(startDate).toISOString(), grantNow));
 
   // ── Collect all FUTURE_SUBSCRIPTION registrations for this month ──────────
   const futureRegs = await queryFutureSubscriptionRegistrations(userId, targetMonth);
@@ -124,7 +132,8 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
       membershipId,
       productId,
       productName,
-      status: 'ACTIVE',
+      // PENDING when bought for next month (expireMemberships activates it on its start date).
+      status: initialStatus(new Date(startDate).toISOString(), grantNow),
       targetMonth,
       startDate: new Date(startDate).toISOString(),
       endDate: new Date(endDate).toISOString(),

@@ -399,6 +399,7 @@ locals {
     expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
     expireWalletCredits            = "cron(20 0 1 * ? *)"      # 00:20 on the 1st — credit lapses a month after the month it was earned
     activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
+    expireMemberships              = "cron(5 * * * ? *)"       # hourly at :05 — INCORE membership status follows its dates (expire at the end of the last day, Israel time; activate PENDING)
     clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
     weekendSessionsRoutine         = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend

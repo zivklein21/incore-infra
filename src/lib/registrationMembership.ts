@@ -1,6 +1,7 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import { isMembershipUsableForClass, type MembershipItem, type RegistrationItem } from './entities';
+import { coversClassDate } from './membershipExpiry';
 
 // Finds the membership record a registration's usage was actually counted
 // against, for cancellation refunds. The registration only stores
@@ -51,7 +52,12 @@ export function membershipForClass(
   month: string,
   allowEarlier: boolean,
 ): MembershipItem | null {
-  return all.filter((m) => m.targetMonth === month).find((m) => isMembershipUsableForClass(m, classDate))
+  // A booking for this month (allowEarlier) also needs the class to fall
+  // before the membership's end — status alone stayed ACTIVE after it ended.
+  // A future booking (allowEarlier false) checks the current month's
+  // membership, which by design ends before the class.
+  return all.filter((m) => m.targetMonth === month)
+    .find((m) => isMembershipUsableForClass(m, classDate) && (!allowEarlier || coversClassDate(m, classDate)))
     ?? (allowEarlier ? all
       .filter((m) => m.status === 'ACTIVE' && m.targetMonth < month
         && !!m.endDate && classDate <= new Date(m.endDate)
