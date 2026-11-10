@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { SupportInquiryItem } from '../lib/entities';
+import { INCORE_ADMIN_UNREAD_FILTER, isIncoreUnreadFor } from '../lib/incoreChatRead';
 
 // GET or POST /getAllInquiries
 // Auth: Cognito JWT, caller must be admin
@@ -32,7 +33,8 @@ export async function handler(
       const page = await ddb.send(new ScanCommand({
         TableName: TABLE_NAME,
         Select: 'COUNT',
-        FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata AND #status = :open AND (attribute_not_exists(lastSender) OR lastSender = :member)',
+        // Unread for the admin: open, the member wrote last, after the admin's read marker.
+        FilterExpression: INCORE_ADMIN_UNREAD_FILTER,
         ExpressionAttributeNames: { '#status': 'status' },
         ExpressionAttributeValues: { ':prefix': 'INQUIRY#', ':metadata': 'METADATA', ':open': 'OPEN', ':member': 'member' },
         ExclusiveStartKey: lastKey,
@@ -61,6 +63,7 @@ export async function handler(
       lastSender: i.lastSender ?? 'member',
       createdAt: i.createdAt ?? null,
       lastMessageAt: i.lastMessageAt ?? null,
+      unread: isIncoreUnreadFor(i, 'admin'),
     }))
     .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? '').localeCompare(a.lastMessageAt ?? a.createdAt ?? ''));
 

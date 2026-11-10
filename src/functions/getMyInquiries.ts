@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { pageInquiries } from '../lib/inquiryPaging';
 import type { SupportInquiryItem } from '../lib/entities';
+import { isIncoreUnreadFor } from '../lib/incoreChatRead';
 
 // GET or POST /getMyInquiries
 // Auth: Cognito JWT (own inquiries only)
@@ -37,6 +38,7 @@ export async function handler(
       lastSender: i.lastSender ?? 'member',
       createdAt: i.createdAt ?? null,
       lastMessageAt: i.lastMessageAt ?? null,
+      unread: isIncoreUnreadFor(i, 'member'),
     }))
     .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? '').localeCompare(a.lastMessageAt ?? a.createdAt ?? ''));
 

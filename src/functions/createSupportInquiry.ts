@@ -54,6 +54,8 @@ export async function handler(
             lastMessage: autoReply || message,
             lastMessageAt: autoReply ? replyIso : nowIso,
             lastSender: 'member',
+            // Her own opening message (and the auto-reply under it) start read for her.
+            memberReadAt: autoReply ? replyIso : nowIso,
             createdAt: nowIso,
           },
         },

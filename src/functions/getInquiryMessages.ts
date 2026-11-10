@@ -1,9 +1,10 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { SupportInquiryItem, SupportInquiryMessageItem } from '../lib/entities';
+import { incoreReadField } from '../lib/incoreChatRead';
 
 // GET or POST /getInquiryMessages?inquiryId=xxx
 // Auth: Cognito JWT. Caller must own the inquiry or be admin.
@@ -19,7 +20,20 @@ export async function handler(
   const inquiryRes = await ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `INQUIRY#${inquiryId}`, SK: 'METADATA' } }));
   const inquiry = inquiryRes.Item as SupportInquiryItem | undefined;
   if (!inquiry) return json(404, { error: 'inquiry_not_found' });
-  if (inquiry.userId !== callerUid && !(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+  const isOwner = inquiry.userId === callerUid;
+  if (!isOwner && !(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+
+  // ?markRead=1 (app 1.5.2+): opening the thread marks it read for the caller's side.
+  const markRead = event.queryStringParameters?.markRead;
+  if (markRead === '1' || markRead === 'true') {
+    await ddb.send(new UpdateCommand({
+      TableName: TABLE_NAME,
+      Key: { PK: `INQUIRY#${inquiryId}`, SK: 'METADATA' },
+      UpdateExpression: 'SET #f = :now',
+      ExpressionAttributeNames: { '#f': incoreReadField(isOwner ? 'member' : 'admin') },
+      ExpressionAttributeValues: { ':now': new Date().toISOString() },
+    }));
+  }
 
   const res = await ddb.send(new QueryCommand({
     TableName: TABLE_NAME,

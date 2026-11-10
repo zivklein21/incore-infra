@@ -5,6 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { SupportInquiryItem } from '../lib/entities';
+import { incoreReadField } from '../lib/incoreChatRead';
 
 // POST /sendSupportMessage
 // Body: { inquiryId, text }
@@ -43,7 +44,8 @@ export async function handler(
     ddb.send(new UpdateCommand({
       TableName: TABLE_NAME,
       Key: inquiryKey,
-      UpdateExpression: 'SET lastMessage = :text, lastMessageAt = :now, lastSender = :sender',
+      // Answering also marks the thread read for the side that wrote.
+      UpdateExpression: `SET lastMessage = :text, lastMessageAt = :now, lastSender = :sender, ${incoreReadField(sender)} = :now`,
       ExpressionAttributeValues: { ':text': text, ':now': nowIso, ':sender': sender },
     })),
   ]);

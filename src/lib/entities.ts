@@ -1178,6 +1178,9 @@ export interface SupportInquiryItem {
   lastMessageAt?: string;
   lastSender?: 'member' | 'admin';
   createdAt?: string;
+  // Read markers (app 1.5.2+, see lib/incoreChatRead.ts).
+  memberReadAt?: string;
+  adminReadAt?: string;
 }
 
 // PK=INQUIRY#<id>  SK=MESSAGE#<messageId>
