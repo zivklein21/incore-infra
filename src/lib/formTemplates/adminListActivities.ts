@@ -10,7 +10,8 @@ import { formsTable } from './submissions';
 // GET /adminListActivities?brand=incore|forca&days=60
 // Auth: Cognito JWT, admin only. Upcoming activities from the calendar
 // (sessions / classes, today onward) for the "Assign → An activity" picker:
-// { activities: [{ classId, className, date, registered, special, location, description, groupName }] },
+// { activities: [{ classId, className, date, registered, special, location, description, groupName,
+//                 endDate, transport, safetyNotes, traineeEquipment }] },
 // soonest first (special = created in Manage → Activities).
 // One query per day on GSI2 (CLASSDATE#<date> — see sessionInstance.ts),
 // the same per-day index bookings use; at most 90 days.
@@ -43,6 +44,11 @@ export async function handler(
       location: typeof c.location === 'string' ? c.location : '',
       description: typeof c.description === 'string' ? c.description : '',
       groupName: typeof c.notes === 'string' ? c.notes : '',
+      // Special activities' editable details (Manage → Activities → Edit) — additive.
+      endDate: typeof c.endDate === 'string' ? c.endDate : null,
+      transport: typeof c.transport === 'string' ? c.transport : '',
+      safetyNotes: typeof c.safetyNotes === 'string' ? c.safetyNotes : '',
+      traineeEquipment: Array.isArray(c.traineeEquipment) ? c.traineeEquipment.filter((x: unknown) => typeof x === 'string') : [],
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
