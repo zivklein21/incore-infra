@@ -87,7 +87,10 @@ export async function handler(
     rows.sort((x, y) => (x.status === y.status ? x.childName.localeCompare(y.childName, 'he') : x.status === 'completed' ? 1 : y.status === 'completed' ? -1 : 0));
     out.push({
       assignmentId: a.assignmentId,
-      target: a.target,
+      // An activity's CURRENT name and date — it may have been renamed or moved since the form was attached.
+      target: a.target.kind === 'activity' && cls
+        ? { ...a.target, className: typeof cls.className === 'string' ? cls.className : a.target.className, date: typeof cls.date === 'string' ? cls.date : a.target.date }
+        : a.target,
       adminAnswers: a.adminAnswers,
       currentAdminAnswers: cls && assignedVersion ? liveAdminAnswers(assignedVersion.sections, a.adminAnswers, cls) : a.adminAnswers,
       signedOnOlderDetails: rows.filter(r => r.activityChanged.length > 0).length,

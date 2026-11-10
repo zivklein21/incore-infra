@@ -6,6 +6,7 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { israelDateStr, validatePrivateFields } from '../lib/entities';
 import type { ClassItem, RegistrationItem } from '../lib/entities';
+import { syncRegistrationsAfterMove } from '../lib/sessionMove';
 
 // POST /updateClass
 // Auth: Cognito JWT, caller must be admin
@@ -166,6 +167,8 @@ export async function handler(
   }
 
   const dateChanged = newDate !== null && newDate.getTime() !== new Date(current.date).getTime();
+  // Registrations follow the class to its new date (lib/sessionMove.ts).
+  if (dateChanged && newDate) await syncRegistrationsAfterMove(TABLE_NAME, classId, new Date(current.date), newDate);
   if (dateChanged && newDate) {
     const regsRes = await ddb.send(new QueryCommand({
       TableName: TABLE_NAME,

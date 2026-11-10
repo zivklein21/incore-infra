@@ -3,7 +3,8 @@ import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import { israelDateStr, type ClassItem } from '../lib/entities';
+import type { ClassItem } from '../lib/entities';
+import { dayIndexKeys, syncRegistrationsAfterMove } from '../lib/sessionMove';
 import { ACTIVITY_TEXT_FIELDS, cleanActivityText, cleanEquipmentList } from '../lib/activityDetails';
 import { formsSignedOnOlderDetails } from '../lib/formTemplates/activityForms';
 
@@ -13,8 +14,8 @@ import { formsSignedOnOlderDetails } from '../lib/formTemplates/activityForms';
 // Returns { success, signedOnOlderDetails: [...] } — for an activity with forms
 // attached, the families who already signed details this edit changed (their
 // signed copies and PDFs keep what they signed; see formTemplates/activityFields.ts).
-// A date on another day also moves the session's day index (GSI2PK), so the
-// calendar / reminders / activity picker find it on its new day.
+// A new date moves the session's day index (GSI2PK/SK) and every
+// registration's classDate with it — see lib/sessionMove.ts.
 // Auth: Cognito JWT, admin-only — same gating as adminSaveRecurringSession.ts.
 // Rescheduling touches who's assigned/when, a scheduling-management action,
 // not a coach's own session-running action (compare sessionInAccess()'s
@@ -57,6 +58,7 @@ export async function handler(
   const session = classRes.Item as ClassItem | undefined;
   if (!session) return json(404, { error: 'session_not_found' });
 
+  let movedTo: Date | null = null;
   const sets: string[] = [];
   const removes: string[] = [];
   const names: Record<string, string> = {};
@@ -65,12 +67,13 @@ export async function handler(
   if (typeof body.date === 'string' && body.date) {
     const next = new Date(body.date);
     if (Number.isNaN(next.getTime())) return json(400, { error: 'invalid_date' });
-    sets.push('#date = :date');
+    sets.push('#date = :date', 'GSI2PK = :gsi2pk', 'GSI2SK = :gsi2sk');
     names['#date'] = 'date';
-    values[':date'] = body.date;
-    const day = `CLASSDATE#${israelDateStr(next)}`;
-    const currentDay = (session as { GSI2PK?: string }).GSI2PK;
-    if (currentDay !== undefined && currentDay !== day) { sets.push('GSI2PK = :day'); values[':day'] = day; }
+    values[':date'] = next.toISOString();
+    const keys = dayIndexKeys(classId, next);
+    values[':gsi2pk'] = keys.GSI2PK;
+    values[':gsi2sk'] = keys.GSI2SK;
+    movedTo = next;
   }
   if (body.endDate === null) {
     removes.push('endDate');
@@ -147,6 +150,9 @@ export async function handler(
     ...(Object.keys(names).length > 0 ? { ExpressionAttributeNames: names } : {}),
     ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
   }));
+
+  // Registrations follow the session to its new date (sessionMove.ts).
+  if (movedTo) await syncRegistrationsAfterMove(FORCA_TABLE_NAME, classId, new Date(session.date), movedTo);
 
   // Forms attached to this session (activities) whose signed details just went out of date.
   let signedOnOlderDetails: Awaited<ReturnType<typeof formsSignedOnOlderDetails>> = [];
