@@ -1203,7 +1203,8 @@ export interface SupportInquiryMessageItem {
 // "order stays keyed to the child" convention as MerchOrderItem/
 // ForcaSubscriptionOrderItem — a parent sending on a linked daughter's
 // behalf still shows up in the daughter's own inbox.
-// GSI2PK='FORCAINQUIRY' GSI2SK=<createdAtIso>#<id> — global chronological
+// GSI2PK='FORCAINQUIRY' GSI2SK=<lastMessageAt>#<id> (was <createdAtIso>#<id>
+// before the chat rebuild; the migration re-keys it) — global chronological
 // listing for the admin inbox (getAllForcaInquiries.ts), which — unlike a
 // coach — sees every inquiry regardless of recipientRole.
 //
@@ -1240,15 +1241,43 @@ export interface ForcaSupportInquiryItem {
   childName?: string;
   payerUid?: string;
   payerName?: string;
+
+  // ── Chat rebuild (app 1.5.2+, see lib/forcaChat/access.ts) ──
+  // Each thread belongs to the account that started it: a parent's thread is
+  // hers, never her daughter's, and vice versa. Unset on threads from before
+  // the rebuild: ownerOf() falls back to payerUid, then userId.
+  // GSI1PK is MEMBER#<ownerUid> (the owner's inbox).
+  ownerUid?: string;
+  ownerRole?: 'trainee' | 'parent';
+  ownerName?: string;
+  // Parent threads: the child the thread is about (also in userId/childUid).
+  aboutChildUid?: string;
+  aboutChildName?: string;
+  // One recipient: the admin inbox, or one coach (recipientUid). A coach
+  // thread without recipientUid is a pre-rebuild group thread, visible to
+  // every coach currently assigned to groupId.
+  recipientUid?: string;
+  recipientName?: string;
+  // Read markers: the owner's side, and the recipient's side.
+  memberReadAt?: string;
+  recipientReadAt?: string;
+  // True when every message key is MESSAGE#<iso>#<uuid>, so messages can be
+  // paged by key. Older threads have MESSAGE#<uuid> keys and page in memory.
+  sortableMessages?: boolean;
+  // GSI2SK / GSI3SK = <lastMessageAt>#<id> (newest activity first).
+  // GSI3PK = FORCACHAT#admin | FORCACHAT#coach#<uid> | FORCACHAT#group#<groupId>.
+  GSI3PK?: string; GSI3SK?: string;
 }
 
-// PK=FORCAINQUIRY#<id>  SK=MESSAGE#<messageId>
+// PK=FORCAINQUIRY#<id>  SK=MESSAGE#<iso>#<uuid> (MESSAGE#<uuid> before the rebuild)
 export interface ForcaSupportInquiryMessageItem {
   PK: string; SK: string;
   sender: 'member' | 'admin' | 'coach' | 'system';
   text: string;
   messageKey?: string;
   createdAt: string;
+  senderUid?: string;
+  senderName?: string;
 }
 
 // ─── FORCA Weekly Tasks (Homework) ──────────────────────────────────────────
