@@ -1,3 +1,4 @@
+import { fillTextVariables, underlineVariable } from './activityFields';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
@@ -37,7 +38,8 @@ export async function handler(
     code: settings.code,
     numberQuestions: settings.numberQuestions === true,
     version: typeof body.version === 'number' && body.version > 0 ? body.version : 1,
-    sections,
+    // No activity in a preview: variables print as their names, underlined.
+    sections: fillTextVariables(sections, null, underlineVariable),
     answers: {},
     signatures: [],
     submissionId: 'SAMPLE',

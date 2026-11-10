@@ -13,7 +13,7 @@ import {
   assignmentKey, latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign, isCoachProfile,
   loadActivityItems, activityItemOf,
 } from './submissions';
-import { activityDetailsHash, formAnswersFor, isFrozen } from './activityFields';
+import { activityDetailsHash, formAnswersFor, formTextVariablesFor, isFrozen } from './activityFields';
 import type { SignatureRecord } from './pdf/renderFormPdf';
 import { runInBackground } from '../backgroundJobs';
 import { rememberPrefill } from './prefill';
@@ -118,13 +118,15 @@ export async function handler(
     // Admin-filled answers are the assignment's (activity details: the
     // activity's current ones), always — nobody else writes them. Once a part
     // is signed they stay what was signed (formAnswersFor).
-    const answers: Answers = formAnswersFor({
-      sections: t.sections, assignmentAdminAnswers: assignment.adminAnswers, cls: activityItemOf(activityItems, assignment.target), sub,
-    });
+    const cls = activityItemOf(activityItems, assignment.target);
+    const answers: Answers = formAnswersFor({ sections: t.sections, assignmentAdminAnswers: assignment.adminAnswers, cls, sub });
+    // Variables in the form's text: frozen with the first part, like the linked fields.
+    const vars = formTextVariablesFor({ sections: t.sections, cls, sub });
     if (typeof body.activityDetailsHash === 'string' && !isFrozen(sub)
-      && activityDetailsHash(t.sections, answers) !== body.activityDetailsHash) {
+      && activityDetailsHash(t.sections, answers, vars) !== body.activityDetailsHash) {
       return json(409, { error: 'activity_details_changed' });
     }
+    if (!isFrozen(sub) && vars) sub.activityVars = vars;
     const answeredBy = { ...sub.answeredBy };
     const incoming = (body.answers && typeof body.answers === 'object' ? body.answers : {}) as Record<string, FieldAnswer>;
     const fields = t.sections.flatMap(s => s.fields);

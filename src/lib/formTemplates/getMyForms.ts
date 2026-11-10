@@ -9,7 +9,7 @@ import {
   listTemplateHeads, loadRosters, parentOf, SIGNUP_ASSIGNMENT_ID, targetIncludes, versionToSign,
   isCoachProfile, loadActivityItems, activityItemOf,
 } from './submissions';
-import { activityDetailsHash, formAnswersFor, isFrozen } from './activityFields';
+import { activityDetailsHash, fillTextVariables, formAnswersFor, formTextVariablesFor, isFrozen } from './activityFields';
 import { isCoachForm } from './schema';
 import { prefillValues } from './prefill';
 import { evaluateOutcome } from './logic';
@@ -129,6 +129,7 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
     // Activity-linked details are the activity's CURRENT ones until someone signs (activityFields.ts).
     const cls = activityItemOf(activityItems, a.target);
     const answers = formAnswersFor({ sections: t.sections, assignmentAdminAnswers: a.adminAnswers, cls, sub });
+    const activityVars = formTextVariablesFor({ sections: t.sections, cls, sub });
 
     forms.push({
       templateId: a.templateId,
@@ -146,12 +147,15 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
         ? { name: (typeof cls?.className === 'string' ? cls.className : '') || (a.target.className ?? ''), date: (typeof cls?.date === 'string' ? cls.date : '') || a.target.date }
         : null,
       // Sent back with submitFormPart, so nobody signs activity details that changed while the form was open.
-      activityDetailsHash: cls && !isFrozen(sub) ? activityDetailsHash(t.sections, answers) : null,
+      activityDetailsHash: cls && !isFrozen(sub) ? activityDetailsHash(t.sections, answers, activityVars) : null,
+      // {activity.*} variables in the text → values (null: none, or not attached to an activity — shown as the variable).
+      activityVars,
       version,
       signers: t.signers,
       acknowledgers: t.acknowledgers,
       traineeDevice: t.traineeDevice,
-      sections: t.sections,
+      // Text with its {activity.*} variables filled in (the app in the stores shows values too); unknown ones stay, highlighted by the app.
+      sections: fillTextVariables(t.sections, activityVars),
       status,
       deviceRoles,
       myRoles,
@@ -197,7 +201,7 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       signers: t.signers,
       acknowledgers: t.acknowledgers,
       traineeDevice: t.traineeDevice,
-      sections: t.sections,
+      sections: fillTextVariables(t.sections, sub.activityVars ?? null),
       status: 'completed',
       deviceRoles: [],
       myRoles: [],
@@ -205,6 +209,7 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       signedRoles: sub.signedRoles,
       ackRoles: sub.ackRoles,
       answers: sub.answers,
+      activityVars: sub.activityVars ?? null,
       answeredBy: sub.answeredBy,
       signatures: sub.signatures.map(s => ({ fieldId: s.fieldId, role: s.role, name: s.name, paths: s.paths, signedAt: s.signedAt })),
       prefill,

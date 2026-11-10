@@ -23,6 +23,7 @@ require.cache['@aws-sdk/client-lambda'] = {
 const { ddb } = require('../src/lib/dynamo');
 const {
   activityFieldMap, activityValues, defaultActivityKey, formAnswersFor, liveAdminAnswers, signedOnOlderDetails,
+  fillTextVariables, textVariablesUsed, underlineVariable,
 } = require('../src/lib/formTemplates/activityFields');
 const { normalizeSections } = require('../src/lib/formTemplates/schema');
 const { assignForm } = require('../src/lib/formTemplates/adminAssignFormTemplate');
@@ -320,4 +321,93 @@ test('training sessions: activity-only details are refused; other forms are unto
   const ok = await updateSession(post('admin', { classId: 't1', location: 'Gym' }));
   assert.equal(ok.statusCode, 200);
   assert.deepEqual(body(ok).signedOnOlderDetails, []);
+});
+
+// ─── Variables inside text ──────────────────────────────────────────────────
+
+const TEXT_SECTIONS = [
+  {
+    id: 'intro', title: 'אישור השתתפות ב{activity.name}',
+    description: 'הפעילות תתקיים ב-{activity.date} בין {activity.startTime} ל-{activity.endTime} ב**{activity.location}**.\nהגעה: {activity.transport}',
+    items: [{ id: 'i1', text: 'יש להביא: {activity.equipment}' }, { id: 'i2', text: 'סיכונים: {activity.safety}' }],
+    fields: [
+      { id: 'decl', type: 'signoff_list', label: 'אני מאשר/ת:', required: true, filledBy: 'parent',
+        items: [{ id: 'd1', text: 'בתי תשתתף ב{activity.name} ({activity.description})', required: true }, { id: 'd2', text: 'unknown {activity.nope}', required: true }] },
+      { id: 'sig_parent', type: 'signature', label: 'חתימת ההורה', required: true, filledBy: 'parent' },
+      { id: 'sig_child', type: 'signature', label: 'חתימת המתאמנת', required: true, filledBy: 'trainee' },
+    ],
+  },
+];
+const textOf = (f: any) => JSON.stringify(f.sections);
+
+test('text variables: every place text can hold one; values filled; unknown and unattached variables stay', () => {
+  const sections = normalizeSections(TEXT_SECTIONS, 'parent');
+  assert.deepEqual(textVariablesUsed(sections), [
+    'activity.name', 'activity.date', 'activity.startTime', 'activity.endTime', 'activity.location',
+    'activity.transport', 'activity.equipment', 'activity.safety', 'activity.description',
+  ]);
+  const preview = fillTextVariables(sections, null, underlineVariable);
+  assert.equal(preview[0].title, 'אישור השתתפות ב__{activity.name}__', 'preview: the variable name, highlighted');
+  assert.equal(preview[0].fields[0].items[0].text, 'בתי תשתתף ב{activity.name} ({activity.description})', 'declarations are plain text — no markup');
+});
+
+test('text variables: live before the first signature, frozen after it (screen + PDF), stale signers reported', async () => {
+  const { w, templateId } = world(TEXT_SECTIONS);
+  const assignmentId = await assign(templateId);
+
+  let f = await myForm();
+  assert.equal(f.sections[0].title, 'אישור השתתפות בטיול שנתי');
+  assert.match(f.sections[0].description, /ב-10\/03\/2027 בין 08:30 ל-16:00 ב\*\*עין גדי\*\*/);
+  assert.match(f.sections[0].description, /הגעה: אוטובוס מהמגרש/);
+  assert.equal(f.sections[0].items[0].text, 'יש להביא: מים, כובע');
+  assert.equal(f.sections[0].items[1].text, 'סיכונים: חום — לשתות הרבה');
+  assert.equal(f.sections[0].fields[0].items[0].text, 'בתי תשתתף בטיול שנתי (טיול לנחל דוד)');
+  assert.equal(f.sections[0].fields[0].items[1].text, 'unknown {activity.nope}', 'not a variable — left alone');
+  assert.equal(f.activityVars['activity.location'], 'עין גדי');
+
+  // Edit before signing: the text follows; signing the old text is refused.
+  const before = f.activityDetailsHash;
+  await updateSession(post('admin', { classId: 'act1', location: 'מצדה' }));
+  f = await myForm();
+  assert.match(textOf(f), /מצדה/);
+  assert.notEqual(f.activityDetailsHash, before);
+  const stale = await submitFormPart(post('mom', {
+    templateId, assignmentId, childId: 'kid', role: 'parent', answers: { decl: ['d1', 'd2'] }, signatures: { sig_parent: SIG('Dana Levi') }, activityDetailsHash: before,
+  }));
+  assert.equal(body(stale).error, 'activity_details_changed');
+  const ok = await submitFormPart(post('mom', {
+    templateId, assignmentId, childId: 'kid', role: 'parent', answers: { decl: ['d1', 'd2'] }, signatures: { sig_parent: SIG('Dana Levi') }, activityDetailsHash: f.activityDetailsHash,
+  }));
+  assert.equal(ok.statusCode, 200, ok.body);
+  const sub = w.inTable('forca').find(i => i.PK === `FORMSUB#${templateId}`);
+  assert.equal(sub.activityVars['activity.location'], 'מצדה', 'frozen with the first signature');
+
+  // Edit after signing: both devices keep the signed text; the PDF prints it; the admin is told.
+  const edit = await updateSession(post('admin', { classId: 'act1', location: 'ים המלח', className: 'טיול אחר' }));
+  const report = body(edit).signedOnOlderDetails;
+  assert.deepEqual(report[0].changed.map((c: any) => [c.fieldId, c.signed, c.current]), [
+    ['{activity.name}', 'טיול שנתי', 'טיול אחר'], ['{activity.location}', 'מצדה', 'ים המלח'],
+  ]);
+  for (const caller of [parentPhone, traineePhone]) {
+    const g = await myForm(caller as any);
+    assert.match(textOf(g), /מצדה/);
+    assert.doesNotMatch(textOf(g), /ים המלח|טיול אחר/);
+  }
+  const child = await submitFormPart(post('kid', { templateId, assignmentId, role: 'trainee', signatures: { sig_child: SIG('Noa Levi') } }));
+  assert.equal(child.statusCode, 200, child.body);
+  const done = w.inTable('forca').find(i => i.PK === `FORMSUB#${templateId}`);
+  assert.equal(done.status, 'completed');
+  assert.equal(done.activityVars['activity.location'], 'מצדה', 'the second signer never re-freezes');
+  const pdfSections = fillTextVariables(normalizeSections(TEXT_SECTIONS, 'parent'), done.activityVars, underlineVariable);
+  assert.match(JSON.stringify(pdfSections), /מצדה/);
+  assert.doesNotMatch(JSON.stringify(pdfSections), /\{activity\.(?!nope)/, 'the PDF has no real variable left');
+});
+
+test('text variables: a form not attached to an activity shows the variable names', async () => {
+  const { templateId } = world(TEXT_SECTIONS);
+  const res = await assignForm({ brand: 'forca', templateId, target: { kind: 'group', groupId: 'g1' }, notify: false, uid: 'admin' });
+  assert.equal(res.ok, true, JSON.stringify(res));
+  const f = (await formsForCaller(parentPhone))!.find((x: any) => x.assignmentId === res.assignmentId);
+  assert.equal(f.sections[0].title, 'אישור השתתפות ב{activity.name}');
+  assert.equal(f.activityVars, null);
 });

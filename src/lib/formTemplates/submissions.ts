@@ -9,6 +9,7 @@ import {
 } from './shared';
 import type { SignerRole } from './schema';
 import type { Answers } from './logic';
+import type { TextVariableValues } from './activityFields';
 import type { AcknowledgmentRecord, SignatureRecord } from './pdf/renderFormPdf';
 
 // Forms (FORCA and INCORE): who a published form is assigned to, and each
@@ -119,6 +120,8 @@ export interface FormSubmissionItem {
   pdfS3Key?: string;
   pdfSha256?: string;
   pdfGeneratedAt?: string;
+  /** Values of the {activity.*} variables in the form's text, frozen at the first signature (activityFields.ts). */
+  activityVars?: TextVariableValues;
 }
 
 export function computeSubmissionStatus(input: {

@@ -1,3 +1,4 @@
+import { fillTextVariables, underlineVariable } from './activityFields';
 import { createHash } from 'crypto';
 import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -62,7 +63,8 @@ export async function ensureSignedPdf(brand: Brand, sub: FormSubmissionItem, act
     code: version.settings.code,
     numberQuestions: version.settings.numberQuestions === true,
     version: sub.version,
-    sections: version.sections,
+    // {activity.*} variables print the values frozen at the first signature.
+    sections: fillTextVariables(version.sections, sub.activityVars ?? null, underlineVariable),
     answers: sub.answers,
     signatures: sub.signatures,
     acknowledgments: sub.acknowledgments,

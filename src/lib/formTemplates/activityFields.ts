@@ -149,11 +149,13 @@ export function formAnswersFor(input: {
 }
 
 /** Fingerprint of the activity details a family is looking at — sent back on signing so they can't sign details that changed under them. */
-export function activityDetailsHash(sections: TemplateSection[], answers: Answers): string | null {
+export function activityDetailsHash(sections: TemplateSection[], answers: Answers, vars: TextVariableValues | null = null): string | null {
   const map = activityFieldMap(sections);
-  if (!map.size) return null;
+  const hasVars = !!vars && Object.keys(vars).length > 0;
+  if (!map.size && !hasVars) return null;
   const linked = Object.fromEntries([...map.keys()].sort().map(id => [id, answers[id] ?? null]));
-  return createHash('sha256').update(stableStringify(linked)).digest('hex').slice(0, 16);
+  // Only forms whose text uses variables hash them — so every other form's hash is unchanged.
+  return createHash('sha256').update(stableStringify(hasVars ? { linked, vars } : linked)).digest('hex').slice(0, 16);
 }
 
 export interface ChangedDetail { fieldId: string; label: string; key: ActivityKey; signed: string; current: string }
@@ -169,7 +171,7 @@ export function signedOnOlderDetails(input: {
   sections: TemplateSection[];
   assignmentAdminAnswers: Answers;
   cls: Record<string, unknown> | null | undefined;
-  sub: { answers: Answers; signedRoles?: unknown[]; ackRoles?: unknown[] } | null | undefined;
+  sub: { answers: Answers; signedRoles?: unknown[]; ackRoles?: unknown[]; activityVars?: TextVariableValues } | null | undefined;
 }): ChangedDetail[] {
   if (!input.cls || !isFrozen(input.sub)) return [];
   const signed = { ...input.assignmentAdminAnswers, ...input.sub!.answers };
@@ -183,5 +185,110 @@ export function signedOnOlderDetails(input: {
     const now = asText(live[fieldId]);
     if (before !== now) out.push({ fieldId, label: fields.get(fieldId)?.label ?? '', key, signed: before, current: now });
   }
+  // Variables in the text: what the copy was signed with vs. the activity now.
+  const signedVars = input.sub!.activityVars;
+  if (signedVars) {
+    const used = textVariablesUsed(input.sections);
+    const liveVars = textVariableValues(input.cls, used);
+    for (const v of used) {
+      const before = signedVars[v] ?? '';
+      const now = liveVars[v] ?? '';
+      if (before !== now) out.push({ fieldId: `{${v}}`, label: `{${v}}`, key: TEXT_VARIABLES[v], signed: before, current: now });
+    }
+  }
   return out;
 }
+
+// ─── Variables inside text ──────────────────────────────────────────────────
+// Section titles/text/lettered items, field labels and help, and declaration
+// items may contain {activity.name}-style variables. Same rules as linked
+// fields: the activity's CURRENT values until the first signature, then
+// frozen on the submission (FormSubmissionItem.activityVars) — the family's
+// screen and the PDF both read the frozen copy. With no activity (preview, or
+// a form assigned to a group), the variable is left in, highlighted.
+
+export const TEXT_VARIABLES = {
+  'activity.name': 'activity.name',
+  'activity.date': 'activity.date',
+  'activity.startTime': 'activity.time',
+  'activity.endTime': 'activity.endTime',
+  'activity.location': 'activity.location',
+  'activity.transport': 'activity.transport',
+  'activity.equipment': 'activity.equipment',
+  'activity.safety': 'activity.safetyNotes',
+  'activity.description': 'activity.description',
+} as const satisfies Record<string, ActivityKey>;
+export type TextVariable = keyof typeof TEXT_VARIABLES;
+export type TextVariableValues = Partial<Record<TextVariable, string>>;
+
+const isTextVariable = (v: string): v is TextVariable => Object.prototype.hasOwnProperty.call(TEXT_VARIABLES, v);
+const VARIABLE_RE = /\{(activity\.[A-Za-z]+)\}/g;
+
+/** Every piece of template text a variable may appear in. */
+function forEachText(sections: TemplateSection[], fn: (text: string) => void) {
+  for (const s of sections) {
+    fn(s.title); if (s.description) fn(s.description);
+    for (const i of s.items ?? []) fn(i.text);
+    for (const f of s.fields) {
+      fn(f.label); if (f.helpText) fn(f.helpText);
+      for (const i of f.items ?? []) fn(i.text);
+    }
+  }
+}
+
+/** The variables a template's text uses, in a stable order. */
+export function textVariablesUsed(sections: TemplateSection[]): TextVariable[] {
+  const used = new Set<TextVariable>();
+  forEachText(sections, text => { for (const m of text.matchAll(VARIABLE_RE)) if (isTextVariable(m[1])) used.add(m[1]); });
+  return (Object.keys(TEXT_VARIABLES) as TextVariable[]).filter(v => used.has(v));
+}
+
+const ddmmyyyy = (ymd: string) => (/^\d{4}-\d{2}-\d{2}$/.test(ymd) ? ymd.split('-').reverse().join('/') : ymd);
+
+/** The activity's values for the variables `used` (date as DD/MM/YYYY; a detail the activity lacks → "—"). */
+export function textVariableValues(cls: Record<string, unknown>, used: TextVariable[]): TextVariableValues {
+  const values = activityValues(cls);
+  return Object.fromEntries(used.map(v => {
+    const raw = values[TEXT_VARIABLES[v]] ?? '';
+    return [v, (v === 'activity.date' ? ddmmyyyy(raw) : raw) || '—'];
+  })) as TextVariableValues;
+}
+
+/** The variable values a family sees: frozen once anyone signed; live from the activity before; null without an activity. */
+export function formTextVariablesFor(input: {
+  sections: TemplateSection[];
+  cls: Record<string, unknown> | null | undefined;
+  sub: { activityVars?: TextVariableValues; signedRoles?: unknown[]; ackRoles?: unknown[] } | null | undefined;
+}): TextVariableValues | null {
+  const used = textVariablesUsed(input.sections);
+  if (!used.length) return null;
+  if (isFrozen(input.sub)) return input.sub!.activityVars ?? null;
+  return input.cls ? textVariableValues(input.cls, used) : null;
+}
+
+/**
+ * The text with each known variable replaced. Variables without a value
+ * stay in; `mark` dresses them (the PDF underlines them) where the text is
+ * read as markup — declaration items are plain text, so they stay as is.
+ */
+export function fillTextVariables(sections: TemplateSection[], vars: TextVariableValues | null, mark: (token: string) => string = t => t): TemplateSection[] {
+  const fill = (text: string, marked = true) => text.replace(VARIABLE_RE, (token, name: string) => {
+    const value = isTextVariable(name) ? vars?.[name] : undefined;
+    return value !== undefined ? value : marked ? mark(token) : token;
+  });
+  return sections.map(s => ({
+    ...s,
+    title: fill(s.title),
+    ...(s.description ? { description: fill(s.description) } : {}),
+    ...(s.items ? { items: s.items.map(i => ({ ...i, text: fill(i.text) })) } : {}),
+    fields: s.fields.map(f => ({
+      ...f,
+      label: fill(f.label),
+      ...(f.helpText ? { helpText: fill(f.helpText) } : {}),
+      ...(f.items ? { items: f.items.map(i => ({ ...i, text: fill(i.text, false) })) } : {}),
+    })),
+  }));
+}
+
+/** PDF: an unresolved variable stands out, underlined. */
+export const underlineVariable = (token: string) => `__${token}__`;
