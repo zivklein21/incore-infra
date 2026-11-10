@@ -379,6 +379,8 @@ locals {
     adminListMemberSubscriptions  = "GET"  # admin: a member's subscriptions + payments and which subscription each is linked to
     adminSaveMemberSubscription   = "POST" # admin: create / duplicate / edit a subscription (warns on overlap or a payment already linked)
     adminCancelMemberSubscription = "POST" # admin: cancel a subscription (logged)
+    # FORCA chat (same shared integration)
+    getForcaChatContacts = "GET" # trainee / parent: who they can write to (admin, their group's coaches); admin: every coach
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

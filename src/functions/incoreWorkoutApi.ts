@@ -38,6 +38,7 @@ import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers
 import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
 import { getMemberBookings } from '../lib/memberBookings';
 import { adminCancelMemberSubscription, adminListMemberSubscriptions, adminSaveMemberSubscription } from '../lib/memberSubscriptions';
+import { getForcaChatContacts } from '../lib/forcaChat/contacts';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -102,6 +103,8 @@ const HANDLERS: Record<string, Handler> = {
   adminListMemberSubscriptions,
   adminSaveMemberSubscription,
   adminCancelMemberSubscription,
+  // FORCA chat: who a trainee / parent can write to.
+  getForcaChatContacts,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

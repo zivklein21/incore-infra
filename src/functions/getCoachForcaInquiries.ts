@@ -1,46 +1,45 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import { getCoachAccess, groupInAccess } from '../lib/coachAccess';
-import type { ForcaSupportInquiryItem } from '../lib/entities';
+import { forcaChatAccess, RECIPIENT_UNREAD_FILTER, toThreadRow } from '../lib/forcaChat/access';
+import { coachPartitions, countInbox, decodeInboxCursor, pageInbox, resolveChatCaller, type InboxPartition } from '../lib/forcaChat/store';
+
+const PAGE_SIZE = 30;
+const ALL = 5000;
 
 // GET or POST /getCoachForcaInquiries
-// Auth: Cognito JWT, caller must be an admin or a coach (getCoachAccess()).
-// Unlike getAllForcaInquiries.ts (admin-only, sees everything), this scopes
-// to recipientRole === 'coach' inquiries whose pinned groupId is one the
-// caller is currently assigned to — deny-by-default for a coach with no
-// groups, same as every other coach-gated endpoint. An admin calling this
-// (e.g. previewing the coach inbox) sees every coach-addressed inquiry,
-// same "isAdmin -> groupIds: 'all'" shape getCoachAccess() already gives.
+// Auth: Cognito JWT, a coach (or an admin, who gets every coach thread).
+// A coach sees ONLY threads addressed to her, plus pre-rebuild group threads
+// of the groups she's in now. Never the admin's threads or another coach's.
+// Reads her own inbox partitions on GSI3; no table scan.
+//   ?unreadCount=1        just { unreadCount } for the tab badge
+//   ?paged=1&cursor=<c>   newest activity first, 30 a page, { nextCursor }
+//   (no params)           the whole list, for builds in the stores
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
-  const callerUid = getUid(event);
-  const access = await getCoachAccess(callerUid);
-  if (!access) return json(403, { error: 'forbidden' });
+  const caller = await resolveChatCaller(getUid(event));
+  if (!caller.isAdmin && !caller.coachGroupIds) return json(403, { error: 'forbidden' });
+  const q = event.queryStringParameters ?? {};
+  const flag = (v: string | undefined) => v === '1' || v === 'true';
 
-  const res = await ddb.send(new ScanCommand({
-    TableName: FORCA_TABLE_NAME,
-    FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata AND recipientRole = :coach',
-    ExpressionAttributeValues: { ':prefix': 'FORCAINQUIRY#', ':metadata': 'METADATA', ':coach': 'coach' },
-  }));
+  const partitions: InboxPartition[] = caller.isAdmin
+    ? [{ index: 'GSI2', pk: 'FORCAINQUIRY', filter: { expr: 'recipientRole = :coach', values: { ':coach': 'coach' } } }]
+    : coachPartitions(caller.uid, caller.coachGroupIds ?? []).map((pk) => ({ index: 'GSI3', pk }));
 
-  const inquiries = ((res.Items ?? []) as ForcaSupportInquiryItem[])
-    .filter((i) => groupInAccess(access, i.groupId))
-    .map((i) => ({
-      id: i.PK.replace('FORCAINQUIRY#', ''),
-      userId: i.userId ?? '',
-      userDisplayName: i.userDisplayName ?? '',
-      groupName: i.groupName ?? null,
-      subject: i.subject ?? '',
-      status: i.status,
-      lastMessage: i.lastMessage ?? '',
-      lastSender: i.lastSender ?? 'member',
-      createdAt: i.createdAt ?? null,
-      lastMessageAt: i.lastMessageAt ?? null,
-    }))
-    .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? '').localeCompare(a.lastMessageAt ?? a.createdAt ?? ''));
+  if (flag(q.unreadCount)) {
+    if (caller.isAdmin) return json(200, { unreadCount: 0 });
+    const unreadCount = await countInbox(partitions.map((p) => ({ index: 'GSI3' as const, pk: p.pk, filter: RECIPIENT_UNREAD_FILTER })));
+    return json(200, { unreadCount });
+  }
 
-  return json(200, { inquiries });
+  const paged = flag(q.paged);
+  const before = paged && q.cursor ? decodeInboxCursor(q.cursor) : null;
+  if (paged && q.cursor && !before) return json(400, { error: 'invalid_cursor' });
+
+  const page = await pageInbox(partitions, before, paged ? PAGE_SIZE : ALL);
+  const inquiries = page.items.flatMap((t) => {
+    const access = forcaChatAccess(t, caller);
+    return access ? [toThreadRow(t, access)] : [];
+  });
+  return json(200, paged ? { inquiries, nextCursor: page.nextCursor } : { inquiries });
 }
