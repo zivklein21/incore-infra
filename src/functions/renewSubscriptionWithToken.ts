@@ -8,7 +8,18 @@ import { monthKey, endOfMonth, israelDayStart } from '../lib/entities';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
 import { resolveReceiptEmail } from '../lib/receiptEmail';
-import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from '../lib/paymentGrants';
+import { handlePaymentSuccess, type PaymentSuccessPayload } from '../lib/paymentGrants';
+
+/** The 402 body for a declined renewal: what the app shows, and that another card can be tried. */
+export function declinedRenewalResponse(ccode: number) {
+  return {
+    success: false,
+    error: 'charge_failed',
+    ccode,
+    message: 'החיוב בכרטיס השמור נדחה. המנוי וההרשמות שלך לא השתנו. אפשר לנסות שוב עם כרטיס אחר.',
+    canRetryWithNewCard: true,
+  };
+}
 
 // POST /renewSubscriptionWithToken
 // Auth: Cognito JWT
@@ -78,8 +89,13 @@ export async function handler(
   }
 
   if (!result.success) {
-    await handlePaymentFailure(userId, targetMonth);
-    return json(402, { success: false, error: 'charge_failed', ccode: result.ccode });
+    // A declined renewal she started herself changes nothing: her current
+    // membership and bookings stay as they are (no expiry, no eviction —
+    // that was handlePaymentFailure, the billing-cycle path). She's told it
+    // was declined and can pay with another card (createHypPaymentPage).
+    // Same 402/charge_failed as before; message + canRetryWithNewCard added.
+    console.log(`[renewSubscriptionWithToken] user=${userId} product=${productId} month=${targetMonth} declined ccode=${result.ccode} — nothing changed`);
+    return json(402, declinedRenewalResponse(result.ccode));
   }
 
   const currentPaymentCount = payment?.payment_count ?? 0;
