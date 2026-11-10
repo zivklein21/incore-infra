@@ -64,6 +64,11 @@ export interface ClassItem {
   traineeNoteUpdatedAt?: string;
   traineeNoteUpdatedBy?: string;
   traineeEquipment?: string[];
+  /** Special activities only (Manage → Activities): how families get there / back, and special risks or safety notes. Shown on attached forms (formTemplates/activityFields.ts). */
+  transport?: string;
+  safetyNotes?: string;
+  isSpecialActivity?: boolean;
+  description?: string;
   // Set once a push about this exact session has gone out to its trainees
   // (see lib/sessionInfo/notifySession.ts) — one of the two things that make
   // a later plan/equipment edit push an update (shouldNotifySessionUpdate()).

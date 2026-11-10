@@ -73,8 +73,9 @@ export type FillerRole = typeof FILLER_ROLES[number];
 export const PREFILL_KEYS = [
   'child.fullName', 'child.idNumber', 'child.birthDate', 'child.grade',
   'parent.fullName', 'parent.idNumber', 'parent.phone', 'parent.email',
-  // Admin-filled event details, taken from the activity a form is attached to (adminAssignFormTemplate / adminCreateActivity).
+  // Admin-filled event details, taken LIVE from the activity a form is attached to (activityFields.ts).
   'activity.name', 'activity.date', 'activity.time', 'activity.location', 'activity.description',
+  'activity.endTime', 'activity.transport', 'activity.equipment', 'activity.safetyNotes',
 ] as const;
 export type PrefillKey = typeof PREFILL_KEYS[number];
 

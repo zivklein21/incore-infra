@@ -3,9 +3,11 @@ import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { createSessionInstance } from '../sessionInstance';
 import { assignForm } from './adminAssignFormTemplate';
+import { cleanActivityText, cleanEquipmentList } from '../activityDetails';
 
 // POST /adminCreateActivity
 // Body: { name, description?, date (ISO, carries the time), endTime? ("HH:mm"), location?, groupId,
+//         transport?, safetyNotes?, equipment?: string[] ("what to bring"),
 //         forms: [{ templateId, adminAnswers? }], notify?: boolean }
 // Auth: Cognito JWT, admin only. FORCA.
 //
@@ -15,8 +17,10 @@ import { assignForm } from './adminAssignFormTemplate';
 // automatically), but with its own name + description and no training type
 // (sessionInstance.ts `activity`). Each chosen form is then attached to it
 // (assignForm, target 'activity'): every registered trainee's family gets
-// it in "Forms to sign" before the activity; admin event fields set to
-// activity.name / date / time / location / description fill themselves.
+// it in "Forms to sign" before the activity; admin event fields linked to
+// the activity (activity.name / date / time / endTime / location / transport
+// / equipment / safetyNotes / description) fill themselves, and follow later
+// edits of the activity until signed (activityFields.ts).
 //
 // Returns { classId, forms: [{ templateId, ok, assignmentId?, error? }] } —
 // the activity is created even if attaching a form fails (that form can be
@@ -29,6 +33,7 @@ export async function handler(
 
   let body: {
     name?: unknown; description?: unknown; date?: unknown; endTime?: unknown; location?: unknown; groupId?: unknown;
+    transport?: unknown; safetyNotes?: unknown; equipment?: unknown;
     forms?: unknown; notify?: unknown;
   };
   try {
@@ -36,10 +41,12 @@ export async function handler(
   } catch {
     return json(400, { error: 'invalid_json' });
   }
-  const name = typeof body.name === 'string' ? body.name.trim().slice(0, 120) : '';
+  const name = cleanActivityText(body.name, 'className') ?? '';
   const groupId = typeof body.groupId === 'string' ? body.groupId : '';
   const date = typeof body.date === 'string' ? new Date(body.date) : null;
   if (!name || !groupId || !date || Number.isNaN(date.getTime())) return json(400, { error: 'missing_fields', required: ['name', 'groupId', 'date'] });
+  const equipment = body.equipment === undefined ? [] : cleanEquipmentList(body.equipment);
+  if (!equipment) return json(400, { error: 'invalid_equipment' });
   const endTime = typeof body.endTime === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(body.endTime) ? body.endTime : undefined;
 
   const created = await createSessionInstance({
@@ -49,7 +56,13 @@ export async function handler(
     endTime,
     location: typeof body.location === 'string' && body.location.trim() ? body.location.trim().slice(0, 200) : undefined,
     createdBy: uid,
-    activity: { name, description: typeof body.description === 'string' ? body.description.trim().slice(0, 2000) : undefined },
+    activity: {
+      name,
+      description: cleanActivityText(body.description, 'description') || undefined,
+      transport: cleanActivityText(body.transport, 'transport') || undefined,
+      safetyNotes: cleanActivityText(body.safetyNotes, 'safetyNotes') || undefined,
+    },
+    traineeEquipment: equipment,
   });
   if (!created.ok) return json(400, { error: created.error });
 

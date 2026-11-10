@@ -37,7 +37,9 @@ export interface CreateSessionInstanceParams {
    * it shows in the calendar and its roster is the group — which is what
    * forms attached to it go to (formTemplates "activity" assignments).
    */
-  activity?: { name: string; description?: string };
+  activity?: { name: string; description?: string; transport?: string; safetyNotes?: string };
+  /** "What to bring" (ClassItem.traineeEquipment) — set at creation for a special activity; see saveSessionTraineeInfo.ts. */
+  traineeEquipment?: string[];
 }
 
 export type CreateSessionInstanceResult =
@@ -115,7 +117,13 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
     currentAttendeesCount: memberIds.length,
     className: params.activity ? params.activity.name : trainingType?.name,
     notes: group.name,
-    ...(params.activity ? { isSpecialActivity: true, ...(params.activity.description ? { description: params.activity.description } : {}) } : {}),
+    ...(params.activity ? {
+      isSpecialActivity: true,
+      ...(params.activity.description ? { description: params.activity.description } : {}),
+      ...(params.activity.transport ? { transport: params.activity.transport } : {}),
+      ...(params.activity.safetyNotes ? { safetyNotes: params.activity.safetyNotes } : {}),
+    } : {}),
+    ...(params.traineeEquipment?.length ? { traineeEquipment: params.traineeEquipment } : {}),
     isWaitlistEnabled: false,
     waitlist: [],
     isPrivate: true,

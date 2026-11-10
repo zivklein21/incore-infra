@@ -7,8 +7,9 @@ import { FamilyCaller, participatingRoles, resolveFamilyCaller, rolesOnDevice } 
 import {
   assignmentKey, computeSubmissionStatus, getProfile, getTemplateVersion, latestByAssignment, listAssignments, listSubmissionsOfChild,
   listTemplateHeads, loadRosters, parentOf, SIGNUP_ASSIGNMENT_ID, targetIncludes, versionToSign,
-  isCoachProfile,
+  isCoachProfile, loadActivityItems, activityItemOf,
 } from './submissions';
+import { activityDetailsHash, formAnswersFor, isFrozen } from './activityFields';
 import { isCoachForm } from './schema';
 import { prefillValues } from './prefill';
 import { evaluateOutcome } from './logic';
@@ -97,7 +98,7 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
   const parent = parentUid ? await getProfile(caller.brand, parentUid) : null;
   const prefill = prefillValues(child as never, parent as never);
 
-  const rosters = await loadRosters(caller.brand, assignments);
+  const [rosters, activityItems] = await Promise.all([loadRosters(caller.brand, assignments), loadActivityItems(caller.brand, assignments)]);
   // Coach forms are only for coaches, and coaches get nothing else (see TemplateSettings.audience).
   const callerIsCoach = isCoachProfile(child);
   const forms: MyFormRow[] = [];
@@ -125,6 +126,9 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
     const fillOnly = deviceRoles.filter(r => !t.signers.includes(r) && !t.acknowledgers.includes(r) && !signedRoles.includes(r));
     const myRoles = status === 'completed' ? [] : [...fillOnly, ...missing.filter(r => deviceRoles.includes(r))];
     const waiting = missing.filter(r => !deviceRoles.includes(r));
+    // Activity-linked details are the activity's CURRENT ones until someone signs (activityFields.ts).
+    const cls = activityItemOf(activityItems, a.target);
+    const answers = formAnswersFor({ sections: t.sections, assignmentAdminAnswers: a.adminAnswers, cls, sub });
 
     forms.push({
       templateId: a.templateId,
@@ -138,7 +142,11 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       audience: isCoachForm(head.settings) ? 'coaches' : 'members',
       beforeFirstTraining: t.settings.beforeFirstTraining || a.assignmentId === SIGNUP_ASSIGNMENT_ID,
       kind: a.assignmentId === SIGNUP_ASSIGNMENT_ID ? 'signup' : 'activity',
-      activity: a.target.kind === 'activity' ? { name: a.target.className ?? '', date: a.target.date } : null,
+      activity: a.target.kind === 'activity'
+        ? { name: (typeof cls?.className === 'string' ? cls.className : '') || (a.target.className ?? ''), date: (typeof cls?.date === 'string' ? cls.date : '') || a.target.date }
+        : null,
+      // Sent back with submitFormPart, so nobody signs activity details that changed while the form was open.
+      activityDetailsHash: cls && !isFrozen(sub) ? activityDetailsHash(t.sections, answers) : null,
       version,
       signers: t.signers,
       acknowledgers: t.acknowledgers,
@@ -150,7 +158,7 @@ export async function formsForCaller(caller: FamilyCaller): Promise<MyFormRow[] 
       waiting,
       signedRoles,
       ackRoles,
-      answers: { ...(sub?.answers ?? {}), ...a.adminAnswers },
+      answers,
       answeredBy: sub?.answeredBy ?? {},
       signatures: (sub?.signatures ?? []).map(s => ({ fieldId: s.fieldId, role: s.role, name: s.name, paths: s.paths, signedAt: s.signedAt })),
       prefill,

@@ -6,8 +6,9 @@ import { parseBrand } from './shared';
 import { evaluateOutcome } from './logic';
 import {
   assignmentKey, computeSubmissionStatus, getProfile, getTemplateHead, getTemplateVersion, latestByAssignment, listAssignments, listFormPeople,
-  listSubmissionsOfTemplate, loadRosters, parentOf, targetIncludes, versionToSign,
+  listSubmissionsOfTemplate, loadRosters, parentOf, targetIncludes, versionToSign, loadActivityItems, activityItemOf,
 } from './submissions';
+import { liveAdminAnswers, signedOnOlderDetails } from './activityFields';
 import { FileAnswer, isFileAnswer } from './formFiles';
 
 // GET /adminGetFormTracking?templateId=<id>&brand=incore|forca
@@ -17,6 +18,9 @@ import { FileAnswer, isFileAnswer } from './formFiles';
 // version they're on, when it completed and whether a signed PDF exists
 // (download via getSignedFormPdfUrl.ts, which also generates a missing one).
 // Includes trainees who joined after an "all"/group assignment was made.
+// Activity forms: currentAdminAnswers = the details families see now (live
+// from the activity); a row's activityChanged lists the details that changed
+// since that family signed (they signed an older version — activityFields.ts).
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -29,7 +33,8 @@ export async function handler(
   if (!head) return json(404, { error: 'not_found' });
   const [assignments, trainees, subs] = await Promise.all([listAssignments(brand, templateId), listFormPeople(brand, head.settings), listSubmissionsOfTemplate(brand, templateId)]);
 
-  const rosters = await loadRosters(brand, assignments);
+  const [rosters, activityItems] = await Promise.all([loadRosters(brand, assignments), loadActivityItems(brand, assignments)]);
+  const published = head.publishedVersion ? await getTemplateVersion(brand, templateId, head.publishedVersion) : null;
   const parentNames = new Map<string, string>();
   const parentName = async (childId: string) => {
     if (!parentNames.has(childId)) {
@@ -42,6 +47,8 @@ export async function handler(
 
   const out = [];
   for (const a of assignments.sort((x, y) => y.createdAt.localeCompare(x.createdAt))) {
+    const cls = activityItemOf(activityItems, a.target);
+    const assignedVersion = await getTemplateVersion(brand, templateId, a.version) ?? published;
     const rows = [];
     for (const tr of trainees.filter(x => targetIncludes(a.target, x, a.createdAt, rosters))) {
       const existing = latestByAssignment(subs, tr.uid).get(assignmentKey(a.templateId, a.assignmentId));
@@ -66,6 +73,7 @@ export async function handler(
         outcome: status === 'completed' && sub && t ? evaluateOutcome(head.settings.outcome, t.sections, sub.answers) : null,
         hasPdf: !!sub?.pdfS3Key,
         updatedAt: sub?.updatedAt ?? null,
+        activityChanged: t ? signedOnOlderDetails({ sections: t.sections, assignmentAdminAnswers: a.adminAnswers, cls, sub }) : [],
         // Attached files (formFiles.ts) — opened via getSignedFormPdfUrl&fieldId=.
         files: sub && t
           ? t.sections.flatMap(s => s.fields).filter(f => f.type === 'file')
@@ -81,6 +89,8 @@ export async function handler(
       assignmentId: a.assignmentId,
       target: a.target,
       adminAnswers: a.adminAnswers,
+      currentAdminAnswers: cls && assignedVersion ? liveAdminAnswers(assignedVersion.sections, a.adminAnswers, cls) : a.adminAnswers,
+      signedOnOlderDetails: rows.filter(r => r.activityChanged.length > 0).length,
       createdAt: a.createdAt,
       counts: {
         total: rows.length,

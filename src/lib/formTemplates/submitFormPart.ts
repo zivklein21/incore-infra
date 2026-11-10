@@ -11,7 +11,9 @@ import { notifyNextSigner, participatingRoles, resolveFamilyCaller, rolesOnDevic
 import {
   computeSubmissionStatus, FormAssignmentItem, formsTable, FormSubmissionItem, getProfile, getTemplateHead, getTemplateVersion,
   assignmentKey, latestByAssignment, listSubmissionsOfChild, loadRosters, parentOf, targetIncludes, versionToSign, isCoachProfile,
+  loadActivityItems, activityItemOf,
 } from './submissions';
+import { activityDetailsHash, formAnswersFor, isFrozen } from './activityFields';
 import type { SignatureRecord } from './pdf/renderFormPdf';
 import { runInBackground } from '../backgroundJobs';
 import { rememberPrefill } from './prefill';
@@ -21,7 +23,7 @@ import { commitFormFiles } from './formFiles';
 // Body: { templateId, assignmentId, childId?, role: 'parent'|'trainee',
 //         answers: { [fieldId]: value, [fieldId:details]: string },
 //         signatures: { [signatureFieldId]: { paths: string[], typedName: string } },
-//         acknowledge?: true }
+//         acknowledge?: true, activityDetailsHash? }
 // Auth: Cognito JWT — the parent (childId = her linked child) or the trainee
 // herself, and only for a role whose part may be done on that device
 // (familyForms.rolesOnDevice). One call = one signer's whole part: their
@@ -32,6 +34,12 @@ import { commitFormFiles } from './formFiles';
 // can't be signed twice; once every required signer (and acknowledger) is
 // done the submission is Completed and its PDF is generated and stored.
 //
+// Activity forms: the activity's details are taken LIVE until the first
+// part is signed, then frozen with it (activityFields.ts). activityDetailsHash
+// (optional, from getMyForms) is the details the signer was looking at — if
+// the activity was edited since, 409 { error: 'activity_details_changed' } and
+// the app reloads the form instead of signing details nobody saw.
+//
 // 400 { error: 'missing_required', fieldIds } / { error: 'invalid_answer', fieldId, reason }.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
@@ -39,7 +47,7 @@ export async function handler(
   const uid = getUid(event);
   let body: {
     templateId?: unknown; assignmentId?: unknown; childId?: unknown; role?: unknown;
-    answers?: unknown; signatures?: unknown; acknowledge?: unknown;
+    answers?: unknown; signatures?: unknown; acknowledge?: unknown; activityDetailsHash?: unknown;
   };
   try {
     body = JSON.parse(event.body ?? '{}');
@@ -64,7 +72,7 @@ export async function handler(
   if (!head || head.status !== 'published' || !assignment || assignment.cancelledAt || !child) return json(404, { error: 'not_found' });
   // Coach forms are only for coaches, member forms only for members (TemplateSettings.audience).
   if (isCoachForm(head.settings) !== isCoachProfile(child)) return json(404, { error: 'not_found' });
-  const rosters = await loadRosters(caller.brand, [assignment]);
+  const [rosters, activityItems] = await Promise.all([loadRosters(caller.brand, [assignment]), loadActivityItems(caller.brand, [assignment])]);
   if (!targetIncludes(assignment.target, { uid: caller.childId, groupId: child.identity?.groupId, createdAt: (child as { createdAt?: string }).createdAt }, assignment.createdAt, rosters)) {
     return json(404, { error: 'not_found' });
   }
@@ -107,8 +115,16 @@ export async function handler(
     if (signedRoles.includes(role)) return json(409, { error: 'already_signed' });
     if (t.acknowledgers.includes(role)) return json(400, { error: 'acknowledger_cannot_sign' });
 
-    // Admin-filled answers are the assignment's, always — nobody else writes them.
-    const answers: Answers = { ...sub.answers, ...assignment.adminAnswers };
+    // Admin-filled answers are the assignment's (activity details: the
+    // activity's current ones), always — nobody else writes them. Once a part
+    // is signed they stay what was signed (formAnswersFor).
+    const answers: Answers = formAnswersFor({
+      sections: t.sections, assignmentAdminAnswers: assignment.adminAnswers, cls: activityItemOf(activityItems, assignment.target), sub,
+    });
+    if (typeof body.activityDetailsHash === 'string' && !isFrozen(sub)
+      && activityDetailsHash(t.sections, answers) !== body.activityDetailsHash) {
+      return json(409, { error: 'activity_details_changed' });
+    }
     const answeredBy = { ...sub.answeredBy };
     const incoming = (body.answers && typeof body.answers === 'object' ? body.answers : {}) as Record<string, FieldAnswer>;
     const fields = t.sections.flatMap(s => s.fields);

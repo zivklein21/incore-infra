@@ -5,6 +5,7 @@ import { getUid, json } from '../http';
 import { getCoachAccess, sessionInAccess } from '../coachAccess';
 import { notifySessionTrainees, notifySessionUpdated, sessionWhenText, shouldNotifySessionUpdate } from './notifySession';
 import type { ClassItem } from '../entities';
+import { formsSignedOnOlderDetails } from '../formTemplates/activityForms';
 
 export const TRAINEE_NOTE_MAX = 1000;
 export const TRAINEE_EQUIPMENT_MAX_ITEMS = 30;
@@ -115,5 +116,14 @@ export async function handler(
     notified = await notifySessionUpdated(classId, session);
   }
 
-  return json(200, { success: true, notified });
+  // "What to bring" is an activity detail forms can show — report families who signed the older list (activityFields.ts).
+  let signedOnOlderDetails: Awaited<ReturnType<typeof formsSignedOnOlderDetails>> = [];
+  if (equipmentChanged && session.isSpecialActivity) {
+    try {
+      signedOnOlderDetails = await formsSignedOnOlderDetails('forca', classId);
+    } catch (err) {
+      console.warn('[saveSessionTraineeInfo] signed-forms check failed', classId, err);
+    }
+  }
+  return json(200, { success: true, notified, signedOnOlderDetails });
 }
