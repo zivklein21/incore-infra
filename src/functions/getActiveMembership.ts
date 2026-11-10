@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { isMembershipUsableForClass, type ClassItem, type MembershipItem } from '../lib/entities';
+import { pickCurrentMembership } from '../lib/membershipExpiry';
 
 // GET or POST /getActiveMembership?memberId=xxx&classId=yyy
 // Auth: Cognito JWT. Defaults to the caller's own membership; a different
@@ -50,8 +51,9 @@ export async function handler(
   ));
   if (memberships.length === 0) return json(200, { hasActiveMembership: false });
 
-  memberships.sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
-  const m = memberships[0];
+  // The one covering the class (or today) — not simply the newest, which
+  // for a member who bought next month early is next month's.
+  const m = pickCurrentMembership(memberships, classDate ?? new Date())!;
 
   return json(200, {
     hasActiveMembership: true,

@@ -3,6 +3,7 @@ import { QueryCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { adminIdentity } from '../lib/membershipAudit';
 
 // POST /adminClearMemberships
 // Body: { memberId }
@@ -31,6 +32,10 @@ export async function handler(
   }));
 
   const items = (res.Items ?? []) as { PK: string; SK: string }[];
+  // The items are deleted, so the audit can't live on them: log who deleted
+  // what, with each item as it was (before → gone).
+  const by = await adminIdentity(callerUid);
+  console.log(`[adminClearMemberships] AUDIT at=${new Date().toISOString()} by=${JSON.stringify(by)} member=${memberId} deleted=${items.length} before=${JSON.stringify(items)}`);
   await Promise.all(items.map((item) =>
     ddb.send(new DeleteCommand({ TableName: TABLE_NAME, Key: { PK: item.PK, SK: item.SK } })),
   ));

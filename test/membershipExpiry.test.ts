@@ -5,10 +5,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  coversClassDate, firstRecurringChargeDate, initialStatus, isActiveAt, lastDayOf, membershipEndsAt,
-  RENEWAL_GRACE_MS, shouldSupersede, subscriptionPurchaseWindow, sweepAction,
+  CLEANUP_LOOKBACK_MS, coversAt, coversClassDate, EXPIRY_PUSH_BODY, firstRecurringChargeDate, isActiveAt, lastDayOf, membershipEndsAt,
+  needsBookingCleanup, pickCurrentMembership, refundFor, RENEWAL_GRACE_MS, shouldSupersede, subscriptionPurchaseWindow, sweepAction, waitlistWithout,
 } from '../src/lib/membershipExpiry';
-import { membershipForClass } from '../src/lib/registrationMembership';
+import { auditEntry, diffFields } from '../src/lib/membershipAudit';
+import { bookingMembership, membershipForClass } from '../src/lib/registrationMembership';
 import { israelDateStr, type MembershipItem } from '../src/lib/entities';
 
 const at = (iso: string) => new Date(iso);
@@ -72,15 +73,19 @@ test('sweep: auto-renew flag but no active agreement (cancelled, paused) expires
   assert.equal(sweepAction(idit, at('2026-10-31T22:05:00Z'), false), 'expire');
 });
 
-test('sweep: PENDING activates on its start date, and expires if already over', () => {
-  const pending = { targetMonth: '2026-12', status: 'PENDING', startDate: NOV_ENDS, endDate: '2026-12-31T21:59:59.999Z' };
-  assert.equal(sweepAction(pending, at('2026-11-30T21:00:00Z'), false), 'none');
-  assert.equal(sweepAction(pending, at('2026-11-30T22:05:00Z'), false), 'activate');
-  assert.equal(sweepAction(pending, at('2027-01-01T00:00:00Z'), false), 'expire');
+test('sweep: never touches PENDING (new member not yet paid / future-dated admin grant)', () => {
+  const pending = { targetMonth: '2026-11', status: 'PENDING', startDate: '2026-11-01T22:00:00.000Z', endDate: '2026-11-30T21:59:59.999Z' };
+  assert.equal(sweepAction(pending, at('2026-11-15T10:00:00Z'), false), 'none');
+  assert.equal(sweepAction(pending, at('2027-01-01T00:00:00Z'), false), 'none');
+});
+
+test('sweep: next month bought early (ACTIVE, future start) is left alone', () => {
+  const dec = { targetMonth: '2026-12', status: 'ACTIVE', startDate: NOV_ENDS, endDate: '2026-12-31T21:59:59.999Z' };
+  assert.equal(sweepAction(dec, at('2026-11-20T10:00:00Z'), false), 'none');
 });
 
 test('sweep: leaves closed statuses alone, any casing', () => {
-  for (const status of ['EXPIRED', 'expired', 'CANCELLED', 'past_due']) {
+  for (const status of ['EXPIRED', 'expired', 'CANCELLED', 'past_due', 'PENDING']) {
     assert.equal(sweepAction({ ...nov, status }, at('2027-01-01T00:00:00Z'), false), 'none', status);
   }
 });
@@ -146,10 +151,6 @@ test('first recurring charge: the 1st after the period bought', () => {
   assert.equal(iso(firstRecurringChargeDate(at('2026-11-30T21:59:00Z'), '2026-11-29T22:00:00.000Z')), NOV_ENDS); // 23:59 on the last day
 });
 
-test('a membership bought for next month is PENDING until it starts', () => {
-  assert.equal(initialStatus(NOV_ENDS, at('2026-11-20T10:00:00Z')), 'PENDING');
-  assert.equal(initialStatus('2026-11-19T22:00:00.000Z', at('2026-11-20T10:00:00Z')), 'ACTIVE');
-});
 
 test('supersede: the renewal replaces last month; buying next month early keeps this one running', () => {
   assert.equal(shouldSupersede(nov, '2026-12-01T01:00:00.000Z', at('2026-12-01T01:00:00Z')), true); // 03:00 charge on Dec 1
@@ -181,4 +182,148 @@ test('booking ahead still uses this month\'s auto-renewing membership', () => {
 test('booking on the last evening of the month is covered', () => {
   const current = mem({ membershipId: 'c', endDate: '2026-11-30T23:59:59.999Z' });
   assert.equal(membershipForClass([current], at('2026-11-30T18:00:00Z'), '2026-11', true)?.membershipId, 'c'); // 20:00 Israel
+});
+
+// ── Booking ahead (auto-renew only) ──────────────────────────────────────
+
+const NOW_NOV = at('2026-11-20T10:00:00Z');
+const novAuto = mem({ membershipId: 'nov', isAutoRenew: true, startDate: '2026-10-31T22:00:00.000Z', endDate: '2026-11-30T21:59:59.999Z' });
+
+test('booking ahead: auto-renew member books January as FUTURE, against this month — not blocked by the last-day rule', () => {
+  for (const cls of ['2026-12-03T06:00:00Z', '2027-01-14T06:00:00Z']) {
+    const r = bookingMembership([novAuto], at(cls), NOW_NOV);
+    assert.equal(r.isFutureBooking, true, cls);
+    assert.equal(r.treatAsFuture, true, cls);
+    assert.equal(r.membership?.membershipId, 'nov', cls); // bookClass then requires isAutoRenew
+  }
+});
+
+test('booking ahead: a member without auto-renew gets her membership back with isAutoRenew false (bookClass refuses)', () => {
+  const manual = mem({ membershipId: 'man', isAutoRenew: false, endDate: '2026-11-30T21:59:59.999Z' });
+  const r = bookingMembership([manual], at('2026-12-03T06:00:00Z'), NOW_NOV);
+  assert.equal(r.treatAsFuture, true);
+  assert.equal(r.membership?.isAutoRenew, false);
+});
+
+test('booking ahead: next month bought early pays for its own classes directly, not as FUTURE on this month', () => {
+  const dec = mem({ membershipId: 'dec', targetMonth: '2026-12', isAutoRenew: true, startDate: NOV_ENDS, endDate: '2026-12-31T21:59:59.999Z' });
+  const r = bookingMembership([novAuto, dec], at('2026-12-03T06:00:00Z'), NOW_NOV);
+  assert.equal(r.membership?.membershipId, 'dec');
+  assert.equal(r.treatAsFuture, false);
+  // A November class still goes to November.
+  assert.equal(bookingMembership([novAuto, dec], at('2026-11-25T06:00:00Z'), NOW_NOV).membership?.membershipId, 'nov');
+});
+
+test('booking this month after the membership\'s last day: no membership (punch cards only)', () => {
+  const ends15 = mem({ membershipId: 'a', endDate: '2026-11-15T21:59:59.999Z' });
+  const r = bookingMembership([ends15], at('2026-11-25T06:00:00Z'), NOW_NOV);
+  assert.equal(r.membership, null);
+  assert.equal(r.treatAsFuture, false);
+});
+
+test('a bridge running past its month still books into the next month as itself', () => {
+  const bridge = mem({ membershipId: 'br', type: 'CUSTOM_MIGRATION', endDate: '2026-12-10T21:59:59.000Z' } as Partial<MembershipItem>);
+  const r = bookingMembership([bridge], at('2026-12-03T06:00:00Z'), NOW_NOV);
+  assert.equal(r.membership?.membershipId, 'br');
+  assert.equal(r.treatAsFuture, false);
+});
+
+// ── Which membership is "current" ────────────────────────────────────────
+
+test('current: with next month bought early (ACTIVE, future start), this month\'s is shown', () => {
+  const novRec = { ...nov, createdAt: '2026-11-01T01:00:00Z' };
+  const decRec = { targetMonth: '2026-12', status: 'ACTIVE', startDate: NOV_ENDS, endDate: '2026-12-31T21:59:59.999Z', createdAt: '2026-11-20T10:00:00Z' };
+  assert.equal(pickCurrentMembership([decRec, novRec], NOW_NOV), novRec);
+  assert.equal(pickCurrentMembership([decRec, novRec], at('2026-12-02T10:00:00Z')), decRec);
+  assert.equal(coversAt(decRec, NOW_NOV), false);
+});
+
+test('current: only a future-start ACTIVE membership → shown as the plan (not "no active plan")', () => {
+  const decRec = { targetMonth: '2026-12', status: 'ACTIVE', startDate: NOV_ENDS, endDate: '2026-12-31T21:59:59.999Z' };
+  const oct = { targetMonth: '2026-10', status: 'EXPIRED', endDate: '2026-10-31T21:59:59.999Z', createdAt: '2026-10-01T00:00:00Z' };
+  assert.equal(pickCurrentMembership([oct, decRec], NOW_NOV)?.status, 'ACTIVE');
+});
+
+test('current: PENDING (new member, not paid) keeps its old place — after ACTIVE, before lapsed', () => {
+  const pending = { targetMonth: '2026-11', status: 'PENDING', createdAt: '2026-11-19T00:00:00Z' };
+  const expired = { targetMonth: '2026-10', status: 'EXPIRED', createdAt: '2026-11-19T01:00:00Z' };
+  assert.equal(pickCurrentMembership([expired, pending], NOW_NOV), pending);
+  assert.equal(pickCurrentMembership([pending, { ...nov }], NOW_NOV)?.status, 'ACTIVE');
+});
+
+// ── When a membership really ends: cancel future bookings ────────────────
+
+const novEnded = { ...nov, status: 'EXPIRED' };
+const DEC1_0005 = at('2026-11-30T22:05:00Z');
+
+test('cleanup: not renewed (no agreement) → future bookings cancelled at the end of the last day', () => {
+  assert.equal(needsBookingCleanup([novEnded], at('2026-11-30T21:59:00Z'), false), false);
+  assert.equal(needsBookingCleanup([{ ...nov }], DEC1_0005, false), true); // still ACTIVE by status, sweep expires it the same run
+  assert.equal(needsBookingCleanup([novEnded], DEC1_0005, false), true);
+});
+
+test('cleanup: auto-renew waits through the 48h renewal grace, then cancels if still not renewed', () => {
+  const auto = { ...novEnded, isAutoRenew: true };
+  assert.equal(needsBookingCleanup([auto], DEC1_0005, true), false);
+  assert.equal(needsBookingCleanup([auto], at('2026-12-02T01:30:00Z'), true), false); // after the retry charge
+  assert.equal(needsBookingCleanup([auto], new Date(new Date(NOV_ENDS).getTime() + RENEWAL_GRACE_MS), true), true);
+});
+
+test('cleanup: renewed (or next month bought early) → nothing cancelled', () => {
+  const dec = { targetMonth: '2026-12', status: 'ACTIVE', startDate: NOV_ENDS, endDate: '2026-12-31T21:59:59.999Z' };
+  assert.equal(needsBookingCleanup([novEnded, dec], DEC1_0005, false), false);
+});
+
+test('cleanup: once only, never for old history, cancelled or PENDING', () => {
+  assert.equal(needsBookingCleanup([{ ...novEnded, expiryCleanupAt: '2026-11-30T22:05:00Z' }], at('2026-11-30T23:05:00Z'), false), false);
+  assert.equal(needsBookingCleanup([novEnded], new Date(new Date(NOV_ENDS).getTime() + CLEANUP_LOOKBACK_MS + 1), false), false);
+  assert.equal(needsBookingCleanup([{ ...nov, status: 'CANCELLED' }], DEC1_0005, false), false);
+  assert.equal(needsBookingCleanup([{ ...nov, status: 'PENDING' }], DEC1_0005, false), false);
+});
+
+test('cleanup refunds: membership/future sessions none; wallet credit and punches go back', () => {
+  assert.equal(refundFor({ consumedFrom: 'MEMBERSHIP' }, false), 'none');
+  assert.equal(refundFor({ consumedFrom: 'FUTURE_SUBSCRIPTION' }, false), 'none');
+  assert.equal(refundFor({ consumedFrom: 'TRIAL' }, false), 'none');
+  assert.equal(refundFor({ consumedFrom: 'EXTRA_PUNCH' }, false), 'wallet');
+  assert.equal(refundFor({ consumedFrom: 'ADMIN_CARD', adminCardId: 'c1' }, true), 'punch_card');
+  assert.equal(refundFor({ consumedFrom: 'ADMIN_CARD', adminCardId: 'c1' }, false), 'wallet');
+  assert.equal(refundFor({ consumedFrom: 'ADMIN_CARD' }, true), 'none'); // free admin add
+});
+
+test('cleanup waitlists: her entries go; a live offer she held is passed on', () => {
+  const wl = [{ member: 'a', status: 'waiting' }, { member: 'me', status: 'pending' }, { member: 'b', status: 'waiting' }];
+  assert.deepEqual(waitlistWithout(wl, 'me'), { waitlist: [wl[0], wl[2]], removed: 1, hadOffer: true });
+  assert.deepEqual(waitlistWithout(wl, 'zz'), { waitlist: wl, removed: 0, hadOffer: false });
+});
+
+test('the push text', () => {
+  assert.equal(EXPIRY_PUSH_BODY, 'המנוי שלך הסתיים וההרשמות העתידיות בוטלו. אפשר להירשם מחדש לאחר חידוש המנוי.');
+});
+
+// ── Admin audit trail ────────────────────────────────────────────────────
+
+const by = { uid: 'admin1', name: 'Or Saraf' };
+
+test('audit: an edit records who, when, and each changed field before → after', () => {
+  const before = { status: 'ACTIVE', startDate: '2026-11-01T22:00:00.000Z', endDate: '2026-11-30T23:59:59.999Z', monthlyLimit: 8, usage: { totalMonthlyUsed: 3 } };
+  const e = auditEntry(by, 'edited', 'adminSaveMemberSubscription', before,
+    { status: 'ACTIVE', startDate: '2026-10-31T22:00:00.000Z', endDate: '2026-11-30T21:59:59.999Z', monthlyLimit: 8 }, {}, '2026-11-10T12:00:00Z');
+  assert.equal(e.at, '2026-11-10T12:00:00Z');
+  assert.deepEqual(e.by, by);
+  assert.deepEqual(e.changes, ['startDate', 'endDate']);
+  assert.deepEqual(e.diff, {
+    startDate: { from: '2026-11-01T22:00:00.000Z', to: '2026-10-31T22:00:00.000Z' },
+    endDate: { from: '2026-11-30T23:59:59.999Z', to: '2026-11-30T21:59:59.999Z' },
+  });
+});
+
+test('audit: a create records every audited field from null; usage is not audited', () => {
+  const e = auditEntry(by, 'created', 'adminGrantMembership', null, { status: 'ACTIVE', targetMonth: '2026-11', usage: {} });
+  assert.deepEqual(e.diff, { status: { from: null, to: 'ACTIVE' }, targetMonth: { from: null, to: '2026-11' } });
+  assert.equal(e.changes, undefined);
+});
+
+test('audit: unlinking a payment shows as value → null', () => {
+  assert.deepEqual(diffFields({ paymentOrderId: 'o1' }, { paymentOrderId: null }), { paymentOrderId: { from: 'o1', to: null } });
 });

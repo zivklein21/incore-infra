@@ -5,6 +5,7 @@ import { ddb } from './dynamo';
 import { resolveMemberProfile } from './memberLookup';
 import { s3, BUCKET_NAME } from './s3';
 import { computeComplianceFlags, type ForcaBillingAgreementItem, type GroupItem, type MembershipItem } from './entities';
+import { pickCurrentMembership } from './membershipExpiry';
 import { applySignupFlow, loadSignupFlow } from './signupFlow/shared';
 import { signupGateFor } from './formTemplates/signupGate';
 import { parentContactOf } from './quickDial';
@@ -47,7 +48,8 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   }));
 
   const memberships = (membershipsRes.Items ?? []) as MembershipItem[];
-  const activeMembership = memberships[0] ?? null;
+  // The one covering today (next month's, bought early, is ACTIVE too).
+  const activeMembership = pickCurrentMembership(memberships, new Date());
 
   const role = profile.identity?.role ?? profile.role ?? 'member';
   const name = profile.identity?.name

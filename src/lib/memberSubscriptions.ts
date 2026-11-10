@@ -5,8 +5,8 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import { getUid, json } from './http';
 import { isAdmin } from './auth';
-import { resolveMemberProfile } from './memberLookup';
-import { deriveMemberName, monthKey, type HypOrderItem, type MembershipItem } from './entities';
+import { monthKey, type HypOrderItem, type MembershipItem } from './entities';
+import { adminIdentity, auditEntry, type ManualLogEntry } from './membershipAudit';
 import { queryFutureSubscriptionRegistrations } from './membershipQueries';
 
 // INCORE admin: a member's subscriptions (MembershipItem), managed by hand.
@@ -55,19 +55,7 @@ type Sub = MembershipItem & {
   price?: number;
 };
 
-export interface ManualLogEntry {
-  at: string;
-  by: { uid: string; name: string };
-  action: 'created' | 'duplicated' | 'edited' | 'cancelled';
-  /** Field names that changed, for 'edited'. */
-  changes?: string[];
-  /** The subscription this one was copied from, for 'duplicated'. */
-  fromMembershipId?: string;
-  /** For an edit that moved it to another month (its key changes with it). */
-  fromMonth?: string;
-  toMonth?: string;
-  reason?: string;
-}
+export type { ManualLogEntry } from './membershipAudit';
 
 export interface SubscriptionWarning {
   code: 'overlap_same_plan' | 'payment_already_linked' | 'replaces_live' | 'month_later_than_bookings';
@@ -181,10 +169,6 @@ async function queryOrders(memberId: string): Promise<(HypOrderItem)[]> {
   return out.filter((o) => !o.isCardUpdateOnly && (o.status === 'completed' || o.status === 'refunded'));
 }
 
-async function adminIdentity(uid: string): Promise<{ uid: string; name: string }> {
-  const resolved = await resolveMemberProfile(uid);
-  return { uid, name: resolved ? deriveMemberName(resolved.profile) : uid };
-}
 
 function parseBody(event: APIGatewayProxyEventV2WithJWTAuthorizer): Record<string, unknown> | null {
   try {
@@ -415,10 +399,14 @@ export async function adminSaveMemberSubscription(
     Update: {
       TableName: TABLE_NAME,
       Key: { PK: old.PK, SK: old.SK },
-      UpdateExpression: 'SET #status = :expired, supersededBy = :newId, updatedAt = :now',
+      UpdateExpression: 'SET #status = :expired, supersededBy = :newId, updatedAt = :now, manualLog = list_append(if_not_exists(manualLog, :none), :entry)',
       ConditionExpression: '#status = :prev',
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':expired': 'EXPIRED', ':newId': membershipId, ':now': nowIso, ':prev': old.status },
+      ExpressionAttributeValues: {
+        ':expired': 'EXPIRED', ':newId': membershipId, ':now': nowIso, ':prev': old.status, ':none': [],
+        ':entry': [auditEntry(by, 'edited', 'adminSaveMemberSubscription', old as unknown as Record<string, unknown>,
+          { status: 'EXPIRED', supersededBy: membershipId }, { reason: `Replaced by ${planName} (${targetMonth})` }, nowIso)],
+      },
     },
   }));
 
@@ -432,9 +420,14 @@ export async function adminSaveMemberSubscription(
     if (status !== 'EXPIRED') migratedRegs = await queryFutureSubscriptionRegistrations(memberId, targetMonth);
     const weeklyUsage: Record<string, number> = {};
     for (const r of migratedRegs) if (r.weekKey) weeklyUsage[r.weekKey] = (weeklyUsage[r.weekKey] ?? 0) + 1;
+    const created = {
+      status, targetMonth, productId: plan.productId, productName: planName,
+      startDate: startDate.toISOString(), endDate: endDate.toISOString(), isAutoRenew, monthlyLimit, weeklyLimit,
+      allowedLegalCancellationsPerMonth: allowedLegal, totalAmount, paymentOrderId: linkOrderId,
+    };
     const entry: ManualLogEntry = duplicatedFrom
-      ? { at: nowIso, by, action: 'duplicated', fromMembershipId: duplicatedFrom }
-      : { at: nowIso, by, action: 'created' };
+      ? auditEntry(by, 'duplicated', 'adminSaveMemberSubscription', null, created, { fromMembershipId: duplicatedFrom }, nowIso)
+      : auditEntry(by, 'created', 'adminSaveMemberSubscription', null, created, {}, nowIso);
     write = {
       Put: {
         TableName: TABLE_NAME,
@@ -488,9 +481,16 @@ export async function adminSaveMemberSubscription(
     if (monthChanged) changes.push('targetMonth');
     if (changes.length === 0) return json(200, { success: true, membershipId, status: existing.status, unchanged: true });
 
-    const entry: ManualLogEntry = monthChanged
-      ? { at: nowIso, by, action: 'edited', changes, fromMonth: existing.targetMonth, toMonth: targetMonth }
-      : { at: nowIso, by, action: 'edited', changes };
+    // before → after for each changed field (dates as stored, ISO).
+    const after: Record<string, unknown> = { ...next, startDate: startDate.toISOString(), endDate: endDate.toISOString() };
+    if (paymentOrderId !== undefined) after.paymentOrderId = paymentOrderId ?? null;
+    if (monthChanged) after.targetMonth = targetMonth;
+    const audited = auditEntry(by, 'edited', 'adminSaveMemberSubscription', existing as unknown as Record<string, unknown>, after, {}, nowIso);
+    const entry: ManualLogEntry = {
+      ...audited,
+      changes,
+      ...(monthChanged ? { fromMonth: existing.targetMonth, toMonth: targetMonth } : {}),
+    };
   if (monthChanged) {
     // Bookings in the new month that were waiting for a subscription.
     if (LIVE.has(status)) migratedRegs = await queryFutureSubscriptionRegistrations(memberId, targetMonth);
@@ -662,7 +662,8 @@ export async function adminCancelMemberSubscription(
 
   const by = await adminIdentity(adminUid);
   const nowIso = new Date().toISOString();
-  const entry: ManualLogEntry = { at: nowIso, by, action: 'cancelled', ...(reason ? { reason } : {}) };
+  const entry: ManualLogEntry = auditEntry(by, 'cancelled', 'adminCancelMemberSubscription', sub as unknown as Record<string, unknown>,
+    { status: 'CANCELLED' }, reason ? { reason } : {}, nowIso);
 
   try {
     await ddb.send(new UpdateCommand({

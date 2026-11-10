@@ -1,24 +1,22 @@
 // Run: TABLE_NAME=incore-production-table AWS_REGION=eu-central-1 \
 //   npx --yes --package=tsx@4.19.2 -- tsx scripts/fixMembershipStatuses.ts [--apply]
-// Dry run unless --apply is passed. INCORE only. One-time, alongside the
-// expireMemberships deploy (which keeps statuses right from then on).
+// Dry run unless --apply is passed. INCORE only. One-time, after the
+// expireMemberships deploy.
 //
-// 1. Every ACTIVE/PENDING membership gets what expireMemberships would do now:
-//    past its last day (Israel time) → EXPIRED, PENDING that has started →
-//    ACTIVE. Auto-renewing ones with an active billing agreement inside the
-//    48h renewal grace are reported and left alone. Same code as the job.
-// 2. status 'expired' (lowercase, written by monthEndRollover for
-//    CUSTOM_MIGRATION) → 'EXPIRED'. Nothing else about those items changes.
+// Writes (with --apply) only one thing: status 'expired' (lowercase, written
+// by monthEndRollover for CUSTOM_MIGRATION) → 'EXPIRED'. Each write is
+// conditional on the lowercase value it read; nothing else on the item changes.
 //
-// Every write is conditional on the status it read, so a renewal or an admin
-// edit in between wins.
+// Reports (never writes): what the hourly expireMemberships job would do right
+// now — memberships it would expire, and members whose future bookings it
+// would cancel. That job does those itself, with its push and its log.
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../src/lib/dynamo';
-import { sweepMemberships } from '../src/functions/expireMemberships';
+import { cleanupStep, expireStep, scanAllMemberships } from '../src/functions/expireMemberships';
 
 const apply = process.argv.includes('--apply');
 
-async function lowercaseExpired(): Promise<{ PK: string; SK: string; targetMonth?: string; productName?: string }[]> {
+async function lowercaseExpired(): Promise<{ PK: string; SK: string }[]> {
   const out: { PK: string; SK: string }[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
@@ -37,14 +35,10 @@ async function lowercaseExpired(): Promise<{ PK: string; SK: string; targetMonth
 
 (async () => {
   if (!TABLE_NAME) throw new Error('TABLE_NAME is not set');
-  console.log(`${apply ? 'APPLY' : 'DRY RUN'} on ${TABLE_NAME}\n`);
-
-  const rows = await sweepMemberships(new Date(), !apply);
-  console.log(`1. Status by date: ${rows.length} membership(s)`);
-  for (const r of rows) console.log(`   ${r.action.padEnd(13)} ${r.memberId} ${r.SK} (${r.status}, "${r.productName}", ended/starts ${r.endsAt})`);
+  console.log(`${apply ? 'APPLY (casing only)' : 'DRY RUN'} on ${TABLE_NAME}\n`);
 
   const lower = await lowercaseExpired();
-  console.log(`\n2. Lowercase 'expired' → 'EXPIRED': ${lower.length} membership(s)`);
+  console.log(`1. Lowercase 'expired' → 'EXPIRED': ${lower.length} membership(s)`);
   let fixed = 0;
   for (const m of lower) {
     console.log(`   ${m.PK} ${m.SK}`);
@@ -64,7 +58,16 @@ async function lowercaseExpired(): Promise<{ PK: string; SK: string; targetMonth
     }
   }
 
-  console.log(apply
-    ? `\nDone: ${rows.filter((r) => r.action === 'expire' || r.action === 'activate').length} status-by-date change(s) attempted, ${fixed} lowercase fixed.`
-    : '\nNothing written. Re-run with --apply.');
+  // Report only — always a dry run.
+  const now = new Date();
+  const all = await scanAllMemberships();
+  const expired = await expireStep(all, now, true);
+  console.log(`\n2. Report: the hourly job would now expire ${expired.filter((r) => r.action === 'expire').length}, hold ${expired.filter((r) => r.action === 'renewal_grace').length} for renewal`);
+  for (const r of expired) console.log(`   ${r.action.padEnd(13)} ${r.memberId} ${r.SK} ("${r.productName}", ended ${r.endsAt})`);
+  for (const r of expired) if (r.action === 'expire') { const m = all.find((x) => x.PK === `MEMBER#${r.memberId}` && x.SK === r.SK); if (m) m.status = 'EXPIRED'; }
+  const cleanups = await cleanupStep(all, now, true);
+  console.log(`3. Report: future bookings it would cancel for ${cleanups.length} member(s)`);
+  for (const c of cleanups) console.log(`   ${c.memberId}: ${c.bookings.length} booking(s) ${JSON.stringify(c.bookings)}`);
+
+  console.log(apply ? `\nDone: ${fixed} status(es) uppercased. Nothing else written.` : '\nNothing written. Re-run with --apply to uppercase the statuses in 1.');
 })().catch((err) => { console.error(err); process.exit(1); });

@@ -4,25 +4,20 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { MembershipItem, ProductItem } from '../lib/entities';
+import { pickCurrentMembership } from '../lib/membershipExpiry';
 
-// PENDING ranks above the lapsed statuses — a member with a future-dated
-// grant queued up and an old CANCELLED/EXPIRED record from a prior month
-// should see the pending one, not the stale one, when only one can be shown.
-const STATUS_PRIORITY: Record<string, number> = { ACTIVE: 0, PENDING: 1, PAST_DUE: 2, CANCELLED: 3, EXPIRED: 4 };
 
 type FullMembershipItem = MembershipItem & {
   productId?: string; productName?: string; startDate?: string; endDate?: string; createdAt?: string;
   isManuallyCreated?: boolean;
 };
 
-export function pickActive(items: FullMembershipItem[]): FullMembershipItem | null {
-  if (items.length === 0) return null;
-  return [...items].sort((a, b) => {
-    const pa = STATUS_PRIORITY[a.status ?? 'ACTIVE'] ?? 99;
-    const pb = STATUS_PRIORITY[b.status ?? 'ACTIVE'] ?? 99;
-    if (pa !== pb) return pa - pb;
-    return (b.createdAt ?? '').localeCompare(a.createdAt ?? '');
-  })[0];
+// The membership covering today first — a member who bought next month
+// early holds two ACTIVE ones, and the current month's is the one to show;
+// then one still to come; then PENDING > PAST_DUE > CANCELLED > EXPIRED as
+// before (lib/membershipExpiry.ts pickCurrentMembership).
+export function pickActive(items: FullMembershipItem[], now: Date = new Date()): FullMembershipItem | null {
+  return pickCurrentMembership(items, now);
 }
 
 export async function buildMembershipResponse(item: FullMembershipItem) {

@@ -4,6 +4,7 @@ import { GetCommand, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { adminIdentity, auditEntry } from '../lib/membershipAudit';
 import { endOfMonth, israelDayStart, monthKey } from '../lib/entities';
 
 // POST /adminGrantMembership
@@ -78,28 +79,31 @@ export async function handler(
 
   const membershipId = randomUUID();
   const nowIso = new Date().toISOString();
+  const item = {
+    PK: `MEMBER#${memberId}`,
+    SK: `MEMBERSHIP#${targetMonth}#${membershipId}`,
+    membershipId,
+    productId,
+    productName,
+    status: 'ACTIVE',
+    targetMonth,
+    startDate: startDate.toISOString(),
+    endDate: endDate.toISOString(),
+    isAutoRenew,
+    monthlyLimit,
+    weeklyLimit,
+    allowedLegalCancellationsPerMonth: allowedLegal,
+    usage: { totalMonthlyUsed: 0, legalCancellationsUsed: 0, lateCancellationsUsed: 0 },
+    weeklyUsage: {},
+    createdByAdmin: adminUid,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  const by = await adminIdentity(adminUid);
 
   await ddb.send(new PutCommand({
     TableName: TABLE_NAME,
-    Item: {
-      PK: `MEMBER#${memberId}`,
-      SK: `MEMBERSHIP#${targetMonth}#${membershipId}`,
-      membershipId,
-      productId,
-      productName,
-      status: 'ACTIVE',
-      targetMonth,
-      startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
-      isAutoRenew,
-      monthlyLimit,
-      weeklyLimit,
-      allowedLegalCancellationsPerMonth: allowedLegal,
-      usage: { totalMonthlyUsed: 0, legalCancellationsUsed: 0, lateCancellationsUsed: 0 },
-      weeklyUsage: {},
-      createdAt: nowIso,
-      updatedAt: nowIso,
-    },
+    Item: { ...item, manualLog: [auditEntry(by, 'created', 'adminGrantMembership', null, item, {}, nowIso)] },
   }));
 
   console.log(`[adminGrantMembership] admin=${adminUid} member=${memberId} type=${subType} month=${targetMonth} membershipId=${membershipId}`);

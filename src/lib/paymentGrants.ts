@@ -5,7 +5,7 @@ import { ddb, TABLE_NAME } from './dynamo';
 import type { MembershipItem, ProductItem, RegistrationItem } from './entities';
 import { putPunchCardItem } from './punchCards';
 import { queryFutureSubscriptionRegistrations, queryAllActiveMemberships, queryMembershipForMonth, queryMembershipsForMonth } from './membershipQueries';
-import { initialStatus, shouldSupersede } from './membershipExpiry';
+import { shouldSupersede } from './membershipExpiry';
 
 // Shared payment-success/payment-failure business logic, called by the
 // HYP-driven flow (hypPayments.ts) and adminEvictFutureRegistrations.ts.
@@ -94,8 +94,7 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
   // exactly the case this guards against), so only an existing non-bridge
   // ACTIVE item means this purchase was already granted.
   const existingForMonth = await queryMembershipsForMonth(userId, targetMonth);
-  // PENDING too: a purchase for next month is PENDING until it starts.
-  const existingReal = existingForMonth.find((m) => (m.status === 'ACTIVE' || m.status === 'PENDING') && m.type !== 'CUSTOM_MIGRATION');
+  const existingReal = existingForMonth.find((m) => m.status === 'ACTIVE' && m.type !== 'CUSTOM_MIGRATION');
   if (existingReal) {
     console.log(`[paymentGrants] Membership for ${userId} in ${targetMonth} already active — skipping create.`);
     return;
@@ -132,8 +131,9 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
       membershipId,
       productId,
       productName,
-      // PENDING when bought for next month (expireMemberships activates it on its start date).
-      status: initialStatus(new Date(startDate).toISOString(), grantNow),
+      // ACTIVE even when bought for next month: its startDate says when it
+      // begins, and readers pick the one covering today/the class by date.
+      status: 'ACTIVE',
       targetMonth,
       startDate: new Date(startDate).toISOString(),
       endDate: new Date(endDate).toISOString(),

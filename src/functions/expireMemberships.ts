@@ -1,47 +1,51 @@
 // EventBridge Scheduled Rule — "cron(5 * * * ? *)" (hourly, :05), Asia/Jerusalem.
-// INCORE only. Keeps MembershipItem.status in step with its dates:
-//   PENDING whose start has come      → ACTIVE
-//   ACTIVE/PENDING past its last day  → EXPIRED (end of that day, Israel time)
-// See lib/membershipExpiry.ts for the date rules.
+// INCORE only. Two steps, both by date (rules in lib/membershipExpiry.ts):
 //
-// Before this, nothing expired a regular subscription by date: monthEndRollover
-// only marks them processed, and billing expires one only when a renewal
-// charge succeeds (supersede) or declines. A subscription whose agreement was
-// cancelled, a manual one, or a mid_month one stayed ACTIVE indefinitely —
-// and checkout then sold the member the NEXT month, as if this month were
-// already covered.
+// 1. Expire: an ACTIVE membership past the end of its last day (Israel time)
+//    becomes EXPIRED. An auto-renewing one with an active billing agreement
+//    waits up to RENEWAL_GRACE_MS: chargeHypBillingAgreements (03:00 on the
+//    1st, a decline retried the next day) replaces it on success.
+//    PENDING (new member not yet paid / future-dated admin grant) is not
+//    touched — activatePendingMemberships owns it.
 //
-// An auto-renewing membership with an active billing agreement is left alone
-// for up to RENEWAL_GRACE_MS after its end: chargeHypBillingAgreements (03:00
-// on the 1st) replaces it on success and expires it on a decline, so it never
-// shows as expired between the end of the month and the renewal.
+// 2. Clean up: a member whose membership really ended (nothing ACTIVE left
+//    to run, no renewal pending — needsBookingCleanup) loses every future
+//    booking and waitlist place, and gets a push (lib/membershipExpiryCleanup.ts).
+//    Runs once per ended membership (expiryCleanupAt); only for memberships
+//    that ended in the last CLEANUP_LOOKBACK_MS, so history is never touched.
+//
+// Before this, nothing expired a regular subscription by date (monthEndRollover
+// only marks it processed; billing only on a renewal or a decline), and
+// checkout then sold the member the NEXT month, as if this one were covered.
 //
 // Invoke with {"dryRun": true} to log what it would do without writing.
 import { ScanCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import type { MembershipItem } from '../lib/entities';
 import { queryOpenAgreementsForMember } from '../lib/hypAgreementQueries';
-import { membershipEndsAt, sweepAction, type SweepAction } from '../lib/membershipExpiry';
+import { CLEANUP_LOOKBACK_MS, membershipEndsAt, needsBookingCleanup, sweepAction, type SweepAction } from '../lib/membershipExpiry';
+import { cleanUpAfterExpiry } from '../lib/membershipExpiryCleanup';
 
-export async function scanLiveMemberships(): Promise<MembershipItem[]> {
-  const out: MembershipItem[] = [];
+type Item = MembershipItem & { productName?: string; expiryCleanupAt?: string };
+
+export async function scanAllMemberships(): Promise<Item[]> {
+  const out: Item[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
     const res = await ddb.send(new ScanCommand({
       TableName: TABLE_NAME,
-      FilterExpression: 'begins_with(SK, :prefix) AND #status IN (:active, :pending)',
-      ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':prefix': 'MEMBERSHIP#', ':active': 'ACTIVE', ':pending': 'PENDING' },
+      FilterExpression: 'begins_with(SK, :prefix) AND begins_with(PK, :member)',
+      ExpressionAttributeValues: { ':prefix': 'MEMBERSHIP#', ':member': 'MEMBER#' },
       ExclusiveStartKey: lastKey,
     }));
-    out.push(...((res.Items ?? []) as MembershipItem[]));
+    out.push(...((res.Items ?? []) as Item[]));
     lastKey = res.LastEvaluatedKey;
   } while (lastKey);
   return out;
 }
 
-/** Whether the member has an active (not paused/cancelled) subscription agreement that will renew. */
-async function makeRenewalLookup(): Promise<(memberId: string) => Promise<boolean>> {
+/** Whether the member has an active (not paused/cancelled/failed) subscription agreement that will renew. */
+function makeRenewalLookup(): (memberId: string) => Promise<boolean> {
   const cache = new Map<string, boolean>();
   return async (memberId) => {
     if (!cache.has(memberId)) {
@@ -53,58 +57,79 @@ async function makeRenewalLookup(): Promise<(memberId: string) => Promise<boolea
 }
 
 export interface SweepRow { memberId: string; SK: string; action: SweepAction; status: string; endsAt: string; productName: string }
+export interface CleanupRow { memberId: string; endedSKs: string[]; cancelled: number; bookings: string[]; waitlistsLeft: number }
 
-/** Decides (and, unless dryRun, applies) the action for every live membership. Shared with scripts/fixMembershipStatuses.ts. */
-export async function sweepMemberships(now: Date, dryRun: boolean): Promise<SweepRow[]> {
-  const memberships = await scanLiveMemberships();
-  const hasActiveRenewal = await makeRenewalLookup();
+/** Step 1. Shared with scripts/fixMembershipStatuses.ts (report only there). */
+export async function expireStep(all: Item[], now: Date, dryRun: boolean, hasActiveRenewal = makeRenewalLookup()): Promise<SweepRow[]> {
   const rows: SweepRow[] = [];
   const nowIso = now.toISOString();
-
-  for (const m of memberships) {
+  for (const m of all) {
     const memberId = m.PK.replace('MEMBER#', '');
     let action = sweepAction(m, now, false);
-    // Only an ACTIVE auto-renewing membership past its end needs the agreement lookup.
-    if (action === 'expire' && m.status === 'ACTIVE' && m.isAutoRenew === true) {
-      action = sweepAction(m, now, await hasActiveRenewal(memberId));
-    }
+    if (action === 'expire' && m.isAutoRenew === true) action = sweepAction(m, now, await hasActiveRenewal(memberId));
     if (action === 'none') continue;
-    rows.push({
-      memberId, SK: m.SK, action, status: m.status,
-      endsAt: membershipEndsAt(m).toISOString(),
-      productName: (m as MembershipItem & { productName?: string }).productName ?? '',
-    });
-    if (dryRun || action === 'renewal_grace') continue;
-
-    const next = action === 'expire' ? 'EXPIRED' : 'ACTIVE';
+    rows.push({ memberId, SK: m.SK, action, status: m.status, endsAt: membershipEndsAt(m).toISOString(), productName: m.productName ?? '' });
+    if (dryRun || action !== 'expire') continue;
     try {
       await ddb.send(new UpdateCommand({
         TableName: TABLE_NAME,
         Key: { PK: m.PK, SK: m.SK },
-        UpdateExpression: action === 'expire'
-          ? 'SET #status = :next, expiredAt = :now, expiredBy = :by, updatedAt = :now'
-          : 'SET #status = :next, updatedAt = :now',
+        UpdateExpression: 'SET #status = :expired, expiredAt = :now, expiredBy = :by, updatedAt = :now',
         // Only if nothing (a renewal, an admin edit) changed it since the scan.
         ConditionExpression: '#status = :prev',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: {
-          ':next': next, ':now': nowIso, ':prev': m.status,
-          ...(action === 'expire' ? { ':by': 'expireMemberships' } : {}),
-        },
+        ExpressionAttributeValues: { ':expired': 'EXPIRED', ':now': nowIso, ':by': 'expireMemberships', ':prev': m.status },
       }));
+      m.status = 'EXPIRED';
     } catch (err) {
-      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') continue;
-      console.error(`[expireMemberships] ${action} failed member=${memberId} SK=${m.SK}`, err);
+      if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') console.error(`[expireMemberships] expire failed member=${memberId} SK=${m.SK}`, err);
     }
   }
   return rows;
 }
 
-export async function handler(event?: { dryRun?: boolean }): Promise<{ dryRun: boolean; rows: SweepRow[] }> {
+/** Step 2. */
+export async function cleanupStep(all: Item[], now: Date, dryRun: boolean, hasActiveRenewal = makeRenewalLookup()): Promise<CleanupRow[]> {
+  const byMember = new Map<string, Item[]>();
+  for (const m of all) {
+    const id = m.PK.replace('MEMBER#', '');
+    byMember.set(id, [...(byMember.get(id) ?? []), m]);
+  }
+  const rows: CleanupRow[] = [];
+  for (const [memberId, items] of byMember) {
+    // Cheap pre-check without the agreement lookup: anything to do at all?
+    if (!needsBookingCleanup(items, now, false)) continue;
+    if (!needsBookingCleanup(items, now, await hasActiveRenewal(memberId))) continue;
+    const ended = items.filter((m) => {
+      const s = (m.status ?? '').toUpperCase();
+      const endsAt = membershipEndsAt(m).getTime();
+      return (s === 'EXPIRED' || s === 'ACTIVE') && !m.expiryCleanupAt && endsAt <= now.getTime() && now.getTime() - endsAt <= CLEANUP_LOOKBACK_MS;
+    });
+    try {
+      const res = await cleanUpAfterExpiry(memberId, ended, now, dryRun);
+      rows.push({
+        memberId, endedSKs: ended.map((m) => m.SK), cancelled: res.cancelled.length,
+        bookings: dryRun ? res.wouldCancel : res.cancelled.map((c) => `${c.classId}@${c.classDate}(${c.consumedFrom}→${c.refundTo})`),
+        waitlistsLeft: res.waitlistsLeft.length,
+      });
+    } catch (err) {
+      console.error(`[expireMemberships] cleanup failed member=${memberId}`, err);
+    }
+  }
+  return rows;
+}
+
+export async function handler(event?: { dryRun?: boolean }): Promise<{ dryRun: boolean; expired: SweepRow[]; cleanups: CleanupRow[] }> {
   const dryRun = event?.dryRun === true;
-  const rows = await sweepMemberships(new Date(), dryRun);
-  for (const r of rows) console.log(`[expireMemberships]${dryRun ? ' DRY' : ''} ${r.action} member=${r.memberId} SK=${r.SK} status=${r.status} endsAt=${r.endsAt}`);
-  const count = (a: SweepAction) => rows.filter((r) => r.action === a).length;
-  console.log(`[expireMemberships]${dryRun ? ' DRY' : ''} expired=${count('expire')} activated=${count('activate')} renewal_grace=${count('renewal_grace')}`);
-  return { dryRun, rows };
+  const now = new Date();
+  const all = await scanAllMemberships();
+  const hasActiveRenewal = makeRenewalLookup();
+  const expired = await expireStep(all, now, dryRun, hasActiveRenewal);
+  const cleanups = await cleanupStep(all, now, dryRun, hasActiveRenewal);
+
+  const tag = `[expireMemberships]${dryRun ? ' DRY' : ''}`;
+  for (const r of expired) console.log(`${tag} ${r.action} member=${r.memberId} SK=${r.SK} endsAt=${r.endsAt}`);
+  for (const c of cleanups) console.log(`${tag} cleanup member=${c.memberId} ended=${c.endedSKs.join(',')} bookings=${JSON.stringify(c.bookings)} waitlistsLeft=${c.waitlistsLeft}`);
+  console.log(`${tag} expired=${expired.filter((r) => r.action === 'expire').length} renewal_grace=${expired.filter((r) => r.action === 'renewal_grace').length} cleanups=${cleanups.length}`);
+  return { dryRun, expired, cleanups };
 }
