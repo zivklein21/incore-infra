@@ -4,15 +4,16 @@ Backend for the INCORE and FORCA apps: Terraform plus TypeScript Lambdas (AWS, e
 
 ## Where to work
 - Work only from `~/dev/INCORE`. Never from `~/Desktop/INCORE.old.nosync` or anything else on the Desktop (iCloud deleted files there).
-- Release branches take commits directly (`release/x.y.z`). Only a PR takes a release into `main`.
+- Work only on `release/1.5.2`, in both repos. Every fix and feature is committed directly on it (one commit per change) and pushed. Don't create new branches, even if a task asks for one. Only a PR takes a release into `main`.
+- `feature/ses-cognito-email` and `feature/history-paging-phase2` are parked: don't work on them or deploy from them.
 
 ## Terraform state
 - State is in S3: bucket `incore-terraform-state-112712884639`, key `incore-infra/terraform.tfstate`, native S3 lockfile, Terraform ≥ 1.10. The bucket is in `state_backend.tf` (`prevent_destroy`).
-- Only plan or apply from a branch that has the `backend "s3"` block in `provider.tf` (release/1.5.2 from `8383161` on). Older branches have none and would plan against an empty local state: rebase first.
+- Plan and apply only from `release/1.5.2` (it has the `backend "s3"` block in `provider.tf`). Older branches have none and would plan against an empty local state.
 - There is no local `terraform.tfstate`. Copies named `*.MIGRATED-DO-NOT-USE` are retired and must never be used.
 
 ## Deploys (Claude runs them; the user approves)
-1. `git pull` on the release branch, then `npm run build`.
+1. On `release/1.5.2` only: `git pull`, then `npm run build`. `git status` must be clean and everything pushed before any deploy.
 2. `terraform plan`. Show the user the summary: the resources, and which attributes change (expect `source_code_hash`/`last_modified` for code-only Lambda changes).
 3. Apply **only after the user approves**, and only what was approved (a saved plan, or `-target=aws_lambda_function.fn["name"]` per instance plus `null_resource.build_functions`).
 4. Snapshot first: run `scripts/releaseSnapshot.sh` (or a copy with the release's function list) into a root `rollback*/` folder. It's gitignored.
@@ -27,6 +28,6 @@ Backend for the INCORE and FORCA apps: Terraform plus TypeScript Lambdas (AWS, e
 - FORCA and INCORE are separate tables with different class models. FORCA: groups and rosters, no capacity, no waitlist, no credits. INCORE: booked classes with capacity, waitlist and credits/punch cards. Don't share logic between them that assumes one model.
 
 ## Every change
-- Run the tests (`npm test`) and the typecheck (`npm run typecheck`). One commit per feature, pushed.
+- Run the tests (`npm test`) and the typecheck (`npm run typecheck`). One commit per change on `release/1.5.2`, pushed.
 - Keep the backend backward compatible with the app version in the stores: add optional params or new modes (e.g. `?paged=1`), and never change what an existing request returns.
 - The API Gateway is at its 300-integration cap: new endpoints must ride an existing shared integration (e.g. `incoreWorkoutApi.ts`).
