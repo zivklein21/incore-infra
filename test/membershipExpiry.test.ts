@@ -6,7 +6,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CLEANUP_LOOKBACK_MS, coversAt, coversClassDate, EXPIRY_PUSH_BODY, firstRecurringChargeDate, isActiveAt, lastDayOf, membershipEndsAt,
-  needsBookingCleanup, pickCurrentMembership, refundFor, RENEWAL_GRACE_MS, shouldSupersede, subscriptionPurchaseWindow, sweepAction, waitlistWithout,
+  needsBookingCleanup, pickCurrentMembership, RENEWAL_GRACE_MS, shouldSupersede, subscriptionPurchaseWindow, sweepAction,
+  paidByMembership, expiryPushBody, EXPIRY_PUSH_BODY_NO_BOOKINGS, DECLINE_PUSH_BODY, declineAction,
 } from '../src/lib/membershipExpiry';
 import { auditEntry, diffFields } from '../src/lib/membershipAudit';
 import { bookingMembership, membershipForClass } from '../src/lib/registrationMembership';
@@ -281,24 +282,36 @@ test('cleanup: once only, never for old history, cancelled or PENDING', () => {
   assert.equal(needsBookingCleanup([{ ...nov, status: 'PENDING' }], DEC1_0005, false), false);
 });
 
-test('cleanup refunds: membership/future sessions none; wallet credit and punches go back', () => {
-  assert.equal(refundFor({ consumedFrom: 'MEMBERSHIP' }, false), 'none');
-  assert.equal(refundFor({ consumedFrom: 'FUTURE_SUBSCRIPTION' }, false), 'none');
-  assert.equal(refundFor({ consumedFrom: 'TRIAL' }, false), 'none');
-  assert.equal(refundFor({ consumedFrom: 'EXTRA_PUNCH' }, false), 'wallet');
-  assert.equal(refundFor({ consumedFrom: 'ADMIN_CARD', adminCardId: 'c1' }, true), 'punch_card');
-  assert.equal(refundFor({ consumedFrom: 'ADMIN_CARD', adminCardId: 'c1' }, false), 'wallet');
-  assert.equal(refundFor({ consumedFrom: 'ADMIN_CARD' }, true), 'none'); // free admin add
+test('cleanup cancels only bookings the membership paid for; credit, punch-card and trial bookings stay', () => {
+  assert.equal(paidByMembership({ consumedFrom: 'MEMBERSHIP' }), true);
+  assert.equal(paidByMembership({ consumedFrom: 'FUTURE_SUBSCRIPTION' }), true);
+  for (const c of ['EXTRA_PUNCH', 'ADMIN_CARD', 'TRIAL', '']) assert.equal(paidByMembership({ consumedFrom: c }), false, c);
 });
 
-test('cleanup waitlists: her entries go; a live offer she held is passed on', () => {
-  const wl = [{ member: 'a', status: 'waiting' }, { member: 'me', status: 'pending' }, { member: 'b', status: 'waiting' }];
-  assert.deepEqual(waitlistWithout(wl, 'me'), { waitlist: [wl[0], wl[2]], removed: 1, hadOffer: true });
-  assert.deepEqual(waitlistWithout(wl, 'zz'), { waitlist: wl, removed: 0, hadOffer: false });
+test('expiry push: always sent, text depends on whether bookings were cancelled', () => {
+  assert.equal(expiryPushBody(2), 'המנוי שלך הסתיים וההרשמות העתידיות בוטלו. אפשר להירשם מחדש לאחר חידוש המנוי.');
+  assert.equal(expiryPushBody(0), 'המנוי שלך הסתיים. אפשר לחדש אותו באפליקציה.');
+  assert.equal(EXPIRY_PUSH_BODY_NO_BOOKINGS, expiryPushBody(0));
 });
 
-test('the push text', () => {
-  assert.equal(EXPIRY_PUSH_BODY, 'המנוי שלך הסתיים וההרשמות העתידיות בוטלו. אפשר להירשם מחדש לאחר חידוש המנוי.');
+test('decline: first decline only notifies; expire after the retry fails too', () => {
+  assert.equal(declineAction({ token: 't', consecutiveFailures: 0 }), 'notify');
+  assert.equal(declineAction({ token: 't', consecutiveFailures: 1 }), 'expire');
+  assert.equal(DECLINE_PUSH_BODY, 'החיוב החודשי נכשל. נא לעדכן אמצעי תשלום כדי לשמור על המנוי וההרשמות.');
+});
+
+test('decline with no card: notify once, never expire here (the renewal grace does)', () => {
+  assert.equal(declineAction({ consecutiveFailures: 0 }), 'notify');
+  assert.equal(declineAction({ consecutiveFailures: 0, noCardAdminNotified: true }), 'none');
+});
+
+test('decline: during the retry the membership is kept (renewal grace), and expired after the final decline', () => {
+  const auto = { ...nov, isAutoRenew: true };
+  // Dec 1 03:00 first decline → agreement still active: kept, bookings kept.
+  assert.equal(sweepAction(auto, at('2026-12-01T01:05:00Z'), true), 'renewal_grace');
+  assert.equal(needsBookingCleanup([auto], at('2026-12-01T01:05:00Z'), true), false);
+  // Dec 2 03:00 retry declined → expired, agreement failed (not active) → cleanup next run.
+  assert.equal(needsBookingCleanup([{ ...auto, status: 'EXPIRED' }], at('2026-12-02T01:05:00Z'), false), true);
 });
 
 // ── Admin audit trail ────────────────────────────────────────────────────

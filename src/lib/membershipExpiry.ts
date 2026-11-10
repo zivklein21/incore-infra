@@ -166,29 +166,39 @@ export function needsBookingCleanup(
   return !(hasActiveRenewal && t < lastEnd + RENEWAL_GRACE_MS);
 }
 
-export type RefundTo = 'none' | 'wallet' | 'punch_card';
+/**
+ * Whether an expired membership was paying for this booking: a session taken
+ * from a membership (MEMBERSHIP) or booked ahead on one (FUTURE_SUBSCRIPTION).
+ * Bookings paid with wallet credit or a punch card (EXTRA_PUNCH, ADMIN_CARD)
+ * and trials stay. Cleanup only runs when she has no live membership left,
+ * so every membership-paid future booking is one an expired membership paid
+ * for (a FUTURE_SUBSCRIPTION booking can point at an earlier record in the
+ * same renewal chain).
+ */
+export function paidByMembership(reg: { consumedFrom?: string }): boolean {
+  return reg.consumedFrom === 'MEMBERSHIP' || reg.consumedFrom === 'FUTURE_SUBSCRIPTION';
+}
+
+export const PUSH_TITLE = 'INCORE';
+/** Sent when a membership expires and bookings it paid for were cancelled. */
+export const EXPIRY_PUSH_BODY = 'המנוי שלך הסתיים וההרשמות העתידיות בוטלו. אפשר להירשם מחדש לאחר חידוש המנוי.';
+/** Sent when a membership expires with no bookings to cancel. */
+export const EXPIRY_PUSH_BODY_NO_BOOKINGS = 'המנוי שלך הסתיים. אפשר לחדש אותו באפליקציה.';
+/** Sent after the first declined monthly charge (the retry is the next day). */
+export const DECLINE_PUSH_BODY = 'החיוב החודשי נכשל. נא לעדכן אמצעי תשלום כדי לשמור על המנוי וההרשמות.';
+
+export function expiryPushBody(cancelledCount: number): string {
+  return cancelledCount > 0 ? EXPIRY_PUSH_BODY : EXPIRY_PUSH_BODY_NO_BOOKINGS;
+}
 
 /**
- * Where a cancelled future booking's session goes. Membership sessions
- * (MEMBERSHIP / FUTURE_SUBSCRIPTION) and trials go nowhere — the membership
- * is over. Wallet credit goes back to the wallet; a punch card gets its punch
- * back (to the wallet if the card is gone) — same rules as cancelBooking.
+ * A declined monthly renewal charge: 'expire' on the final decline (the
+ * retry failed too — consecutiveFailures reaches 2), 'notify' on the first
+ * one (push to update the card; the membership and bookings stay), and with
+ * no card on file — no retry counter, the agreement just waits — 'notify'
+ * once; expireMemberships expires it after the renewal grace.
  */
-export function refundFor(reg: { consumedFrom?: string; adminCardId?: string | null }, adminCardExists: boolean): RefundTo {
-  if (reg.consumedFrom === 'EXTRA_PUNCH') return 'wallet';
-  if (reg.consumedFrom === 'ADMIN_CARD' && reg.adminCardId) return adminCardExists ? 'punch_card' : 'wallet';
-  return 'none';
+export function declineAction(a: { token?: string; consecutiveFailures: number; noCardAdminNotified?: boolean }): 'expire' | 'notify' | 'none' {
+  if (!a.token) return a.noCardAdminNotified ? 'none' : 'notify';
+  return a.consecutiveFailures + 1 >= 2 ? 'expire' : 'notify';
 }
-
-/** Her entries removed from a class waitlist; `hadOffer` when one was a live offer, so the spot must be offered on. */
-export function waitlistWithout<E extends { member: string; status: string }>(waitlist: E[], memberId: string): { waitlist: E[]; removed: number; hadOffer: boolean } {
-  const kept = waitlist.filter((e) => e.member !== memberId);
-  return {
-    waitlist: kept,
-    removed: waitlist.length - kept.length,
-    hadOffer: waitlist.some((e) => e.member === memberId && e.status === 'pending'),
-  };
-}
-
-export const EXPIRY_PUSH_TITLE = 'INCORE';
-export const EXPIRY_PUSH_BODY = 'המנוי שלך הסתיים וההרשמות העתידיות בוטלו. אפשר להירשם מחדש לאחר חידוש המנוי.';

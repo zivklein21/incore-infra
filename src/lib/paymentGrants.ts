@@ -239,7 +239,10 @@ export async function grantPunchCardSessions(userId: string, productId: string, 
 
 // ─── payment_failed / subscription_cancelled handler ─────────────────────────
 
-export async function handlePaymentFailure(userId: string, targetMonth: string): Promise<void> {
+// evictBookings: false for the billing-agreement path — there the hourly
+// expireMemberships job cancels the bookings the membership paid for (with
+// proper cancel records, freed seats and the member's push) once it's expired.
+export async function handlePaymentFailure(userId: string, targetMonth: string, opts: { evictBookings?: boolean } = {}): Promise<void> {
   const nowIso = new Date().toISOString();
 
   const monthMembership = await queryMembershipForMonth(userId, targetMonth);
@@ -268,7 +271,7 @@ export async function handlePaymentFailure(userId: string, targetMonth: string):
     console.log(`[paymentGrants] Expired ${priorActive.length} membership(s) for ${userId} after failed renewal (${targetMonth})`);
   }
 
-  await evictFutureRegistrations(userId, targetMonth);
+  if (opts.evictBookings !== false) await evictFutureRegistrations(userId, targetMonth);
 }
 
 // ─── Eviction routine ─────────────────────────────────────────────────────

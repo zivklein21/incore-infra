@@ -9,8 +9,11 @@
 //    touched — activatePendingMemberships owns it.
 //
 // 2. Clean up: a member whose membership really ended (nothing ACTIVE left
-//    to run, no renewal pending — needsBookingCleanup) loses every future
-//    booking and waitlist place, and gets a push (lib/membershipExpiryCleanup.ts).
+//    to run, no renewal pending — needsBookingCleanup) loses the future
+//    bookings it paid for (credit / punch-card bookings stay) and always gets
+//    a push saying it ended (lib/membershipExpiryCleanup.ts). A declined
+//    renewal is expired by chargeOneAgreement only after its retry fails;
+//    this step then picks it up.
 //    Runs once per ended membership (expiryCleanupAt); only for memberships
 //    that ended in the last CLEANUP_LOOKBACK_MS, so history is never touched.
 //
@@ -57,7 +60,7 @@ function makeRenewalLookup(): (memberId: string) => Promise<boolean> {
 }
 
 export interface SweepRow { memberId: string; SK: string; action: SweepAction; status: string; endsAt: string; productName: string }
-export interface CleanupRow { memberId: string; endedSKs: string[]; cancelled: number; bookings: string[]; waitlistsLeft: number }
+export interface CleanupRow { memberId: string; endedSKs: string[]; cancelled: number; bookings: string[] }
 
 /** Step 1. Shared with scripts/fixMembershipStatuses.ts (report only there). */
 export async function expireStep(all: Item[], now: Date, dryRun: boolean, hasActiveRenewal = makeRenewalLookup()): Promise<SweepRow[]> {
@@ -109,8 +112,7 @@ export async function cleanupStep(all: Item[], now: Date, dryRun: boolean, hasAc
       const res = await cleanUpAfterExpiry(memberId, ended, now, dryRun);
       rows.push({
         memberId, endedSKs: ended.map((m) => m.SK), cancelled: res.cancelled.length,
-        bookings: dryRun ? res.wouldCancel : res.cancelled.map((c) => `${c.classId}@${c.classDate}(${c.consumedFrom}→${c.refundTo})`),
-        waitlistsLeft: res.waitlistsLeft.length,
+        bookings: dryRun ? res.wouldCancel : res.cancelled.map((c) => `${c.classId}@${c.classDate}(${c.consumedFrom})`),
       });
     } catch (err) {
       console.error(`[expireMemberships] cleanup failed member=${memberId}`, err);
@@ -129,7 +131,7 @@ export async function handler(event?: { dryRun?: boolean }): Promise<{ dryRun: b
 
   const tag = `[expireMemberships]${dryRun ? ' DRY' : ''}`;
   for (const r of expired) console.log(`${tag} ${r.action} member=${r.memberId} SK=${r.SK} endsAt=${r.endsAt}`);
-  for (const c of cleanups) console.log(`${tag} cleanup member=${c.memberId} ended=${c.endedSKs.join(',')} bookings=${JSON.stringify(c.bookings)} waitlistsLeft=${c.waitlistsLeft}`);
+  for (const c of cleanups) console.log(`${tag} cleanup member=${c.memberId} ended=${c.endedSKs.join(',')} bookings=${JSON.stringify(c.bookings)}`);
   console.log(`${tag} expired=${expired.filter((r) => r.action === 'expire').length} renewal_grace=${expired.filter((r) => r.action === 'renewal_grace').length} cleanups=${cleanups.length}`);
   return { dryRun, expired, cleanups };
 }
