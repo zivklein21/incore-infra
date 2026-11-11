@@ -37,7 +37,69 @@ resource "aws_cognito_user_pool" "incore_user_pool" {
     define_auth_challenge          = aws_lambda_function.cognito_trigger_fn["cognitoDefineAuthChallenge"].arn
     create_auth_challenge          = aws_lambda_function.cognito_trigger_fn["cognitoCreateAuthChallenge"].arn
     verify_auth_challenge_response = aws_lambda_function.cognito_trigger_fn["cognitoVerifyAuthChallengeResponse"].arn
+
+    # 5. Every email Cognito sends (reset codes, verification codes,
+    # invitations) goes through cognitoCustomEmailSender.ts and lib/mailer.ts,
+    # so it comes from no-reply@incoretraining.com as "INCORE" or "FORCA".
+    # Cognito encrypts the code with this key before handing it over.
+    kms_key_id = aws_kms_key.cognito_email.arn
+    custom_email_sender {
+      lambda_arn     = aws_lambda_function.cognito_trigger_fn["cognitoCustomEmailSender"].arn
+      lambda_version = "V1_0"
+    }
   }
+}
+
+# Encrypts the codes Cognito passes to the Custom Email Sender. Cognito may
+# only Encrypt with it; only the Lambda role may Decrypt. The pool ARN is
+# matched by pattern, not referenced, to avoid a cycle (the pool needs this
+# key's ARN).
+resource "aws_kms_key" "cognito_email" {
+  description             = "Cognito Custom Email Sender codes"
+  deletion_window_in_days = 30
+  enable_key_rotation     = true
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid       = "AccountAdmin"
+        Effect    = "Allow"
+        Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root" }
+        Action    = "kms:*"
+        Resource  = "*"
+      },
+      {
+        Sid       = "CognitoEncrypt"
+        Effect    = "Allow"
+        Principal = { Service = "cognito-idp.amazonaws.com" }
+        Action    = "kms:Encrypt"
+        Resource  = "*"
+        Condition = {
+          StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id }
+          ArnLike      = { "aws:SourceArn" = "arn:aws:cognito-idp:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:userpool/*" }
+        }
+      },
+    ]
+  })
+}
+
+resource "aws_kms_alias" "cognito_email" {
+  name          = "alias/incore-cognito-email"
+  target_key_id = aws_kms_key.cognito_email.key_id
+}
+
+resource "aws_iam_role_policy" "lambda_cognito_email_decrypt" {
+  name = "incore-lambda-cognito-email-decrypt"
+  role = aws_iam_role.lambda_execution_role.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["kms:Decrypt"]
+      Resource = aws_kms_key.cognito_email.arn
+    }]
+  })
 }
 
 # Lets the User Pool invoke each of the three CUSTOM_AUTH trigger Lambdas —

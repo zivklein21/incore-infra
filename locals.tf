@@ -477,10 +477,13 @@ locals {
   charge_safety_mode = "enforce"
   charge_functions   = ["chargeForcaSubscriptions", "chargeHypBillingAgreements", "adminChargeHypAgreementNow", "adminRunHypBillingCycle"]
 
+  # Every Cognito trigger Lambda (built by cognito_trigger_fn, invokable by the
+  # pool). Despite the name, it also holds the Custom Email Sender.
   cognito_custom_auth_functions = [
     "cognitoDefineAuthChallenge",
     "cognitoCreateAuthChallenge",
     "cognitoVerifyAuthChallengeResponse",
+    "cognitoCustomEmailSender",
   ]
 
   all_function_names = distinct(concat(

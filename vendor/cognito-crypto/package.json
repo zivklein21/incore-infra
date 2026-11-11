@@ -1,0 +1,8 @@
+{
+  "name": "incore-vendor-cognito-crypto",
+  "private": true,
+  "description": "AWS Encryption SDK for cognitoCustomEmailSender only. Kept out of the root package.json so the shared dependencies layer (and every function pinned to it) is untouched; scripts/build.mjs bundles it into that one function.",
+  "dependencies": {
+    "@aws-crypto/client-node": "4.2.4"
+  }
+}

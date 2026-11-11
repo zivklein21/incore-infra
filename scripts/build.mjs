@@ -19,7 +19,8 @@
 // a platform-native binary that must be required as an ordinary package,
 // not inlined.
 import { build } from 'esbuild';
-import { readFileSync, rmSync, readdirSync } from 'node:fs';
+import { readFileSync, rmSync, readdirSync, existsSync } from 'node:fs';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -38,6 +39,17 @@ const entryPoints = readdirSync(functionsDir)
   .filter((f) => f.endsWith('.ts'))
   .map((f) => path.join(functionsDir, f));
 
+// The AWS Encryption SDK (cognitoCustomEmailSender only) lives in its own
+// vendor/cognito-crypto install with its own lockfile: adding it to the root
+// package.json moved shared @aws-sdk/* versions, which re-stages the layer
+// and redeploys every function. It is not external, so esbuild inlines it
+// into that one bundle. nodePaths is only a fallback: anything the root
+// node_modules has still resolves there first.
+const vendorCryptoDir = path.join(rootDir, 'vendor', 'cognito-crypto');
+if (!existsSync(path.join(vendorCryptoDir, 'node_modules'))) {
+  execSync('npm ci --no-audit --no-fund', { cwd: vendorCryptoDir, stdio: 'inherit' });
+}
+
 rmSync(outDir, { recursive: true, force: true });
 
 await build({
@@ -49,6 +61,7 @@ await build({
   target: 'node20',
   format: 'cjs',
   external,
+  nodePaths: [path.join(vendorCryptoDir, 'node_modules')],
   sourcemap: false,
   minify: false,
   logLevel: 'info',
