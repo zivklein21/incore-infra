@@ -2,6 +2,8 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { DeleteCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../dynamo';
 import { getUid, json } from '../http';
+import type { IncoreWorkoutLogItem } from '../entities';
+import { refreshLastWeights } from './lastWeights';
 
 // POST /deleteMyWorkoutLog
 // Body: { id: string }
@@ -23,10 +25,18 @@ export async function handler(
   const id = typeof body.id === 'string' ? body.id : '';
   if (!id) return json(400, { error: 'missing_id' });
 
-  await ddb.send(new DeleteCommand({
+  const res = await ddb.send(new DeleteCommand({
     TableName: TABLE_NAME,
     Key: { PK: `MEMBER#${callerUid}`, SK: `WORKOUTLOG#${id}` },
+    ReturnValues: 'ALL_OLD',
   }));
+
+  // The deleted log may have been some exercise's "last working weight".
+  const removed = res.Attributes as IncoreWorkoutLogItem | undefined;
+  const touched = (removed?.exercises ?? []).map((e) => e.exerciseId);
+  if (touched.length > 0) {
+    await refreshLastWeights(callerUid, touched).catch((err) => console.error('[deleteMyWorkoutLog] lastWeights refresh failed', err));
+  }
 
   return json(200, { success: true });
 }

@@ -323,14 +323,16 @@ locals {
   # their own function anymore. All JWT-authenticated. GET/POST only (not
   # ANY), so none needs a dedicated OPTIONS preflight route either.
   incore_workout_routes = {
-    adminDeleteIncoreExercise = "POST" # admin: delete a catalog exercise
-    adminListIncoreExercises  = "GET"  # admin: catalog incl. drafts
-    adminSaveIncoreExercise   = "POST" # admin: create/edit (name, description, image, muscle group, metric combination)
-    adminSeedIncoreExercises  = "POST" # admin: import the starter library (idempotent)
-    deleteMyWorkoutLog        = "POST" # trainee: delete one of their own logs
-    getIncoreExercises        = "GET"  # trainee: active catalog exercises
-    getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
-    saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
+    adminDeleteIncoreExercise           = "POST" # admin: delete a catalog exercise
+    adminListIncoreExercises            = "GET"  # admin: catalog incl. drafts
+    adminSaveIncoreExercise             = "POST" # admin: create/edit (name, description, image, muscle group, metric combination)
+    adminSeedIncoreExercises            = "POST" # admin: import the starter library (idempotent)
+    deleteMyWorkoutLog                  = "POST" # trainee: delete one of their own logs
+    getIncoreExercises                  = "GET"  # trainee: active catalog exercises
+    getMyWorkoutJournal                 = "GET"  # trainee: own logs + attended-but-unlogged classes
+    saveMyWorkoutLog                    = "POST" # trainee: create/edit a free or class-linked workout log
+    getWorkoutLastWeights               = "GET"  # last working weight per exercise (self, or a member for admin/coach)
+    adminSaveWorkoutLogReminderSettings = "POST" # admin: workout-logging reminder on/off + delay
     # Manage → Forms → Form Templates (custom admin-built templates; same shared integration)
     adminListFormTemplates   = "GET"  # admin: list custom form templates for a brand
     adminSaveFormTemplate    = "POST" # admin: create/edit a custom form template (name + sections)
@@ -421,6 +423,7 @@ locals {
     chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
     checkPushReceipts              = "cron(0/30 * * * ? *)"    # every 30 minutes — Expo push receipts (see lib/push.ts)
+    workoutLogReminders            = "cron(0/15 * * * ? *)"    # every 15 minutes — INCORE "log your workout" push after a class (off until an admin enables it)
   }
 
   # DynamoDB Streams consumers — every one of these must filter internally

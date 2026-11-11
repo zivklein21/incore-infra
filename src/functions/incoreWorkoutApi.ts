@@ -10,6 +10,8 @@ import { handler as getIncoreExercises } from '../lib/incoreWorkout/getIncoreExe
 import { handler as getMyWorkoutJournal } from '../lib/incoreWorkout/getMyWorkoutJournal';
 import { handler as saveMyWorkoutLog } from '../lib/incoreWorkout/saveMyWorkoutLog';
 import { handler as deleteMyWorkoutLog } from '../lib/incoreWorkout/deleteMyWorkoutLog';
+import { getWorkoutLastWeights } from '../lib/incoreWorkout/lastWeights';
+import { handler as adminSaveWorkoutLogReminderSettings } from '../lib/incoreWorkout/adminSaveWorkoutLogReminderSettings';
 import { handler as adminListFormTemplates } from '../lib/formTemplates/adminListFormTemplates';
 import { handler as adminSaveFormTemplate } from '../lib/formTemplates/adminSaveFormTemplate';
 import { handler as adminDeleteFormTemplate } from '../lib/formTemplates/adminDeleteFormTemplate';
@@ -53,6 +55,8 @@ const HANDLERS: Record<string, Handler> = {
   getMyWorkoutJournal,
   saveMyWorkoutLog,
   deleteMyWorkoutLog,
+  getWorkoutLastWeights,
+  adminSaveWorkoutLogReminderSettings,
   // Not workout-related — Manage → Forms → Form Templates. Rides this
   // Lambda's integration for the same 300-integration-cap reason.
   adminListFormTemplates,

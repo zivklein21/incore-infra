@@ -62,3 +62,39 @@ export async function patchScheduleAlertSettings(patch: Record<string, unknown>)
     ExpressionAttributeValues: { ':v': { ...current, ...patch } },
   }));
 }
+
+// INCORE workout-logging reminder (lib/workoutLogReminder.ts). Off until an
+// admin turns it on, so deploying it never starts pushing members by itself.
+export interface WorkoutLogReminderSettings {
+  enabled: boolean;
+  /** Minutes after the class ends. */
+  delayMinutes: number;
+}
+
+export const WORKOUT_LOG_REMINDER_DEFAULTS: WorkoutLogReminderSettings = { enabled: false, delayMinutes: 60 };
+export const WORKOUT_LOG_REMINDER_MAX_DELAY = 12 * 60;
+
+export function normalizeWorkoutLogReminder(d: unknown): WorkoutLogReminderSettings {
+  const r = (d ?? {}) as Partial<WorkoutLogReminderSettings>;
+  const delay = typeof r.delayMinutes === 'number' && Number.isFinite(r.delayMinutes)
+    ? Math.min(WORKOUT_LOG_REMINDER_MAX_DELAY, Math.max(0, Math.round(r.delayMinutes)))
+    : WORKOUT_LOG_REMINDER_DEFAULTS.delayMinutes;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : WORKOUT_LOG_REMINDER_DEFAULTS.enabled,
+    delayMinutes: delay,
+  };
+}
+
+export async function getWorkoutLogReminderSettings(): Promise<WorkoutLogReminderSettings> {
+  return normalizeWorkoutLogReminder((await getSettingsItem()).workoutLogReminder);
+}
+
+export async function saveWorkoutLogReminderSettings(next: WorkoutLogReminderSettings): Promise<void> {
+  await ddb.send(new UpdateCommand({
+    TableName: TABLE_NAME,
+    Key: CONFIG_KEY,
+    UpdateExpression: 'SET workoutLogReminder = :v',
+    ExpressionAttributeValues: { ':v': next },
+  }));
+}
+
