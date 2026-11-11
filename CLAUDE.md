@@ -20,7 +20,7 @@ Backend for the INCORE and FORCA apps: Terraform plus TypeScript Lambdas (AWS, e
 5. After apply, verify every changed Lambda: its live `CodeSha256` must equal the SHA-256 (base64) of `exports/<name>.zip`.
 
 ## Never
-- Never include `cognito.tf` / `ses.tf` / `variables.tf` SES changes until SES production access is approved. They live on `feature/ses-cognito-email`, not on a release branch.
+- SES production access was granted (case 179277066200702). All email, Cognito's included (via `cognitoCustomEmailSender`), goes through SES from `no-reply@incoretraining.com`. Never remove the Custom Email Sender or its KMS key without putting another sender in place: without one, password-reset codes stop. `feature/ses-cognito-email` is superseded; don't merge it.
 - Never delete or weaken the signed-PDF protection in `signed_forms.tf`: `prevent_destroy`, the KMS key, and the bucket policy that denies deletes to everyone except the retention job's role.
 - Never hard-delete a member. Deletion follows the retention rules in `src/lib/memberDeletion.ts` / `memberArchive.ts`: stop every charge first, then archive (kept 7 years). Don't delete.
 
