@@ -381,6 +381,11 @@ locals {
     adminCancelMemberSubscription = "POST" # admin: cancel a subscription (logged)
     # FORCA chat (same shared integration)
     getForcaChatContacts = "GET" # trainee / parent: who they can write to (admin, their group's coaches); admin: every coach
+    # Quick replies, both brands (same shared integration)
+    adminListQuickReplies = "GET"  # admin: a brand's quick replies (+ FORCA member quick messages) with usage counts; seeds defaults once
+    adminSaveQuickReplies = "POST" # admin: save / delete / duplicate / reorder
+    getQuickReplies       = "GET"  # chat: replies the admin / coach may use, or a FORCA member's quick messages
+    useQuickReply         = "POST" # chat: count one use of a reply
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
