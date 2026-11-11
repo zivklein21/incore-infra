@@ -532,6 +532,12 @@ export interface TemplateSettings {
    * Absent = members (trainees + parents).
    */
   audience?: 'coaches';
+  /**
+   * Activity forms only: pre-selected under "Forms to sign" when an admin
+   * creates a new activity (ActivitiesScreen). She can still untick it.
+   * Absent = not pre-selected.
+   */
+  defaultForActivities?: boolean;
 }
 
 export const isCoachForm = (settings: { audience?: string } | undefined) => settings?.audience === 'coaches';
@@ -585,6 +591,8 @@ export function normalizeSettings(raw: Record<string, unknown>, fallbackDevice: 
     showIn: (VISIBLE_ON as readonly string[]).includes(raw.showIn as string) ? raw.showIn as VisibleOn : 'both',
     ...(normalizeOutcome(raw.outcome) ? { outcome: normalizeOutcome(raw.outcome) } : {}),
     ...(raw.numberQuestions === true ? { numberQuestions: true } : {}),
+    // Only member activity forms can be attached to an activity.
+    ...(raw.defaultForActivities === true && raw.kind !== 'signup' && raw.audience !== 'coaches' ? { defaultForActivities: true } : {}),
     // A coach form is always "her own phone", manually assigned (never a sign-up form).
     ...(raw.audience === 'coaches' ? { audience: 'coaches' as const, visibleOn: 'trainee' as const, kind: 'activity' as const, beforeFirstTraining: false, showIn: 'trainee' as const } : {}),
   };
