@@ -10,6 +10,7 @@ const { computeLastByExercise, getWorkoutLastWeights, refreshLastWeights } = req
 const { selectDueClasses, classEndMs, reminderText, runWorkoutLogReminders } = require('../src/lib/workoutLogReminder');
 const { normalizeWorkoutLogReminder } = require('../src/lib/notificationTiming');
 const { handler: saveSettings } = require('../src/lib/incoreWorkout/adminSaveWorkoutLogReminderSettings');
+const { handler: getJournal } = require('../src/lib/incoreWorkout/getMyWorkoutJournal');
 
 const realSend = ddb.send;
 const realFetch = globalThis.fetch;
@@ -131,6 +132,20 @@ test('refreshLastWeights moves the pointer back when the newest log loses the ex
   rows.delete('MEMBER#m1|WORKOUTLOG#a');
   await refreshLastWeights('m1', ['bench']);
   assert.equal(rows.has('MEMBER#m1|EXLAST#bench'), false, 'no logs left → pointer removed');
+});
+
+test('getMyWorkoutJournal: own journal by default, another member only for admin/coach', async () => {
+  memTable([
+    logItem('a', '2026-11-01', [ex('bench', 40)]),
+  ], { m1: { role: 'member' }, m2: { role: 'member' }, admin1: { role: 'admin' } });
+  const own = JSON.parse((await getJournal(event('m1'))).body);
+  assert.deepEqual(own.logs.map((l: any) => l.id), ['a']);
+  assert.equal((await getJournal(event('m2', { queryStringParameters: { memberId: 'm1' } }))).statusCode, 403);
+  const admin = await getJournal(event('admin1', { queryStringParameters: { memberId: 'm1' } }));
+  assert.equal(admin.statusCode, 200);
+  assert.deepEqual(JSON.parse(admin.body).logs.map((l: any) => l.id), ['a']);
+  const adminOwn = JSON.parse((await getJournal(event('admin1'))).body);
+  assert.deepEqual(adminOwn.logs, [], "without memberId it's still the caller's own journal");
 });
 
 // ─── Part B: logging reminder ───────────────────────────────────────────────
