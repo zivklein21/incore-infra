@@ -37,6 +37,7 @@ export async function handler(
     sender: m.sender ?? 'member',
     senderName: m.senderName ?? null,
     messageKey: m.messageKey,
+    isAutoReply: !!m.isAutoReply,
     createdAt: m.createdAt,
   });
   const byTime = (a: ForcaSupportInquiryMessageItem, b: ForcaSupportInquiryMessageItem) =>

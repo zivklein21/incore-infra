@@ -7,6 +7,7 @@ import { verifyFamilyLink } from '../lib/familyLinks';
 import { deriveMemberName, type ForcaSupportInquiryItem, type GroupItem, type MemberProfileItem } from '../lib/entities';
 import { activitySk, messageSk, recipientPartition } from '../lib/forcaChat/access';
 import { listForcaCoaches, notifyChat, resolveChatCaller } from '../lib/forcaChat/store';
+import { autoReplyFor, getForcaChatSettings } from '../lib/forcaChat/settings';
 
 // POST /createForcaSupportInquiry
 // Body: { subject, message, recipientRole: 'admin' | 'coach', recipientUid?, childUid? }
@@ -17,6 +18,8 @@ import { listForcaCoaches, notifyChat, resolveChatCaller } from '../lib/forcaCha
 // the child's. recipientUid picks one coach of that child's group (app 1.5.2+).
 // Without it (app versions in the stores) a coach thread goes to the group's
 // only coach, or stays a group thread when the group has several.
+// The admin's auto-reply for that recipient (lib/forcaChat/settings.ts) is
+// added by the server, so it reaches every app version.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -35,7 +38,7 @@ export async function handler(
   const requestedCoach = typeof body.recipientUid === 'string' ? body.recipientUid.trim() : '';
   const childUid = typeof body.childUid === 'string' ? body.childUid.trim() : '';
 
-  const caller = await resolveChatCaller(callerUid);
+  const [caller, settings] = await Promise.all([resolveChatCaller(callerUid), getForcaChatSettings()]);
   if (caller.isAdmin || caller.coachGroupIds) return json(403, { error: 'members_only' });
   if (!caller.profile) return json(404, { error: 'member_not_found' });
   const isParent = caller.profile.identity?.accountType === 'parent_only';
@@ -72,7 +75,13 @@ export async function handler(
   }
 
   const inquiryId = randomUUID();
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  // The auto-reply lands 1 ms after her message, as INCORE's does. The thread
+  // shows it as the last message, but lastSender stays 'member' so it's
+  // still unread for the recipient, and she has read it herself.
+  const autoReply = autoReplyFor(settings, recipientRole);
+  const lastIso = autoReply ? new Date(now.getTime() + 1).toISOString() : nowIso;
   const inquiryKey = { PK: `FORCAINQUIRY#${inquiryId}`, SK: 'METADATA' };
   const ownerName = deriveMemberName(caller.profile);
   const traineeName = deriveMemberName(trainee);
@@ -83,8 +92,8 @@ export async function handler(
     GSI1PK: `MEMBER#${callerUid}`,
     GSI1SK: `FORCAINQUIRY#${nowIso}#${inquiryId}`,
     GSI2PK: 'FORCAINQUIRY',
-    GSI2SK: activitySk(nowIso, inquiryId),
-    ...(partition ? { GSI3PK: partition, GSI3SK: activitySk(nowIso, inquiryId) } : {}),
+    GSI2SK: activitySk(lastIso, inquiryId),
+    ...(partition ? { GSI3PK: partition, GSI3SK: activitySk(lastIso, inquiryId) } : {}),
     status: 'OPEN',
     ownerUid: callerUid,
     ownerRole: childUid ? 'parent' : 'trainee',
@@ -98,10 +107,10 @@ export async function handler(
     ...(recipientUid ? { recipientUid, recipientName } : {}),
     ...(groupId ? { groupId, groupName: groupName ?? '' } : {}),
     subject,
-    lastMessage: message,
-    lastMessageAt: nowIso,
+    lastMessage: autoReply ?? message,
+    lastMessageAt: lastIso,
     lastSender: 'member',
-    memberReadAt: nowIso,
+    memberReadAt: lastIso,
     sortableMessages: true,
     createdAt: nowIso,
     ...(childUid ? { childUid, childName: traineeName, payerUid: callerUid, payerName: ownerName } : {}),
@@ -116,6 +125,15 @@ export async function handler(
           Item: { PK: inquiryKey.PK, SK: messageSk(nowIso, randomUUID()), text: message, sender: 'member', senderUid: callerUid, senderName: ownerName, createdAt: nowIso },
         },
       },
+      ...(autoReply ? [{
+        Put: {
+          TableName: FORCA_TABLE_NAME,
+          Item: {
+            PK: inquiryKey.PK, SK: messageSk(lastIso, randomUUID()), text: autoReply,
+            sender: recipientRole, isAutoReply: true, senderName: 'הודעה אוטומטית', createdAt: lastIso,
+          },
+        },
+      }] : []),
     ],
   }));
 

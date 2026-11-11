@@ -1281,6 +1281,8 @@ export interface ForcaSupportInquiryMessageItem {
   createdAt: string;
   senderUid?: string;
   senderName?: string;
+  /** The admin's auto-reply (lib/forcaChat/settings.ts): no push, not an answer. */
+  isAutoReply?: boolean;
 }
 
 // ─── FORCA Weekly Tasks (Homework) ──────────────────────────────────────────

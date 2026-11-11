@@ -171,6 +171,11 @@ test('only trainees and parents start threads; a parent\'s thread lands in her o
   assert.equal(item.ownerRole, 'parent');
   assert.equal(item.aboutChildUid, 'child1');
   assert.equal(item.GSI3PK, 'FORCACHAT#coach#coachA');
+  const auto = writes.find((w) => w.type === 'TransactWriteCommand').input.TransactItems[2]?.Put.Item;
+  assert.equal(auto?.isAutoReply, true, "the coach auto-reply is added by the server");
+  assert.equal(auto?.sender, 'coach');
+  assert.equal(item.lastSender, 'member', 'still unread for the coach');
+  assert.equal(item.memberReadAt, item.lastMessageAt, 'already read by her');
 });
 
 test('a store build without recipientUid: single coach gets it, several keep it a group thread', async () => {
