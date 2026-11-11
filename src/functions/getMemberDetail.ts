@@ -7,6 +7,7 @@ import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ForcaBillingAgreementItem, GroupItem, MemberProfileItem } from '../lib/entities';
+import { forcaRowLabel, legacyPlanLabel, planLabelsFor, queryPlanItems } from '../lib/memberPlanLabel';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -77,7 +78,7 @@ export async function handler(
   const pc = forms.parental_consent;
 
   const groupId = brand === 'forca' ? p.identity?.groupId : undefined;
-  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, orthopedicSignatureUrl, groupRes, agreementRes] = await Promise.all([
+  const [pdfUrl, doctorApprovalUrl, signatureUrl, medicalClearanceUrl, orthopedicSignatureUrl, groupRes, agreementRes, planLabels] = await Promise.all([
     presign(hd?.pdf_key),
     presign(hd?.doctor_approval_key),
     presign(pc?.signatureKey),
@@ -98,6 +99,13 @@ export async function handler(
           ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'AGREEMENT#' },
         }))
       : Promise.resolve(null),
+    // INCORE: her current plan's name for the header (lib/memberPlanLabel.ts).
+    brand === 'incore'
+      ? queryPlanItems([memberId]).then((items) => planLabelsFor(items)).catch((err) => {
+          console.error('[getMemberDetail] plan label lookup failed', err);
+          return new Map<string, string>();
+        })
+      : Promise.resolve(new Map<string, string>()),
   ]);
   const groupName = (groupRes?.Item as GroupItem | undefined)?.name ?? null;
 
@@ -143,7 +151,13 @@ export async function handler(
     id: memberId,
     name: p.identity?.name || p.identity?.full_name || [firstName, lastName].filter(Boolean).join(' ') || p.name || 'Unknown',
     firstName, lastName,
-    subtitle: typeof membership.plan === 'string' ? membership.plan : '',
+    // Same label the member lists show: INCORE current plan, FORCA group.
+    subtitle: brand === 'forca'
+      ? forcaRowLabel({
+          role: p.identity?.role ?? p.role ?? 'member', accountType: p.identity?.accountType ?? 'member',
+          groupId: p.identity?.groupId ?? null, groupIds: [],
+        }, new Map(groupId && groupName ? [[groupId, groupName]] : []))
+      : (planLabels.get(memberId) || legacyPlanLabel(membership, new Date())),
     membershipStatus,
     monthlyLateCancellations: 0,
     monthlyValidCancellations: 0,
