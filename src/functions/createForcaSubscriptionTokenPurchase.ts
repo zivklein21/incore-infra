@@ -7,6 +7,7 @@ import { getMemberFullName, buildHypInfo, getMemberIdNumber, HYP_NO_ID_PLACEHOLD
 import { chargeHypToken } from '../lib/hypClient';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import { applyForcaSubscriptionCharge } from '../lib/forcaSubscriptionPayments';
+import { forcaSignupClosed } from '../lib/forcaPeriods/store';
 import type { ForcaSubscriptionOrderItem, ForcaSubscriptionProductItem, GroupItem, MemberProfileItem } from '../lib/entities';
 
 // POST /createForcaSubscriptionTokenPurchase
@@ -38,6 +39,9 @@ export async function handler(
 
   const link = await verifyFamilyLink(callerUid, childUid);
   if (!link.ok) return json(403, { error: 'forbidden' });
+  // Between activity periods sign-up is closed (new families and renewals alike).
+  const closed = await forcaSignupClosed();
+  if (closed) return json(409, closed);
 
   const [childRes, payerRes, productRes] = await Promise.all([
     ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${childUid}`, SK: 'PROFILE' } })),

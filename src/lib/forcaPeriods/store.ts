@@ -2,7 +2,7 @@ import { BatchGetCommand, GetCommand, PutCommand, QueryCommand } from '@aws-sdk/
 import { ddb, FORCA_TABLE_NAME } from '../dynamo';
 import type { ForcaBillingAgreementItem, MemberProfileItem } from '../entities';
 import { israelDateStrOf } from '../israelTime';
-import { DEFAULT_SETTINGS, effectiveChargeDay, sortPeriods, type ActivityPeriod, type PeriodSettings } from './rules';
+import { DEFAULT_SETTINGS, effectiveChargeDay, nextPeriodAfter, periodOn, signupClosedLabel, sortPeriods, type ActivityPeriod, type PeriodSettings } from './rules';
 
 // One record in the FORCA table holds every period plus the reminder
 // settings: PK=APPCONFIG SK=FORCA_ACTIVITY_PERIODS. `version` goes up by one
@@ -104,4 +104,27 @@ export function effectiveNextChargeDateOf(periods: ActivityPeriod[] | null, next
   const due = new Date(nextChargeDate);
   if (Number.isNaN(due.getTime())) return null;
   return effectiveChargeDay(periods, israelDateStrOf(due), israelDateStrOf(now));
+}
+
+export type SignupClosed = { error: 'signup_closed'; message: string; nextStart: string | null };
+
+/**
+ * Parents can subscribe (new or renewing) only on a day inside an activity
+ * period; between periods the purchase flow shows "ההרשמה לעונה הבאה נפתחת
+ * ב-1/9" instead of the payment button, and the payment requests refuse.
+ * Same leaning as the charge job: no periods, or periods unreadable, means
+ * closed. Admin grants (adminGrantForcaMembership) are not gated.
+ */
+export async function forcaSignupClosed(now: Date = new Date()): Promise<SignupClosed | null> {
+  let periods: ActivityPeriod[];
+  try {
+    periods = (await loadPeriodSettings()).periods;
+  } catch (err) {
+    console.error('[forcaPeriods] could not read activity periods — sign-up closed for now:', err);
+    return { error: 'signup_closed', message: 'לא ניתן להירשם כרגע — נסו שוב מאוחר יותר', nextStart: null };
+  }
+  const today = israelDateStrOf(now);
+  if (periodOn(periods, today)) return null;
+  const nextStart = nextPeriodAfter(periods, today)?.start ?? null;
+  return { error: 'signup_closed', message: signupClosedLabel(nextStart), nextStart };
 }

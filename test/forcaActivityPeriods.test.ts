@@ -18,7 +18,11 @@ const rules = require('../src/lib/forcaPeriods/rules');
 const { runForcaBillingCycle } = require('../src/lib/forcaBillingAgreements');
 const { adminListForcaPeriods, adminSaveForcaPeriods, getForcaActivityStatus } = require('../src/lib/forcaPeriods/handlers');
 const { runPeriodEndReminders } = require('../src/lib/forcaPeriods/reminders');
-const { effectiveNextChargeDateOf } = require('../src/lib/forcaPeriods/store');
+const { effectiveNextChargeDateOf, forcaSignupClosed } = require('../src/lib/forcaPeriods/store');
+const { israelDateStrOf } = require('../src/lib/israelTime');
+const { handler: createPaymentPage } = require('../src/functions/createForcaSubscriptionPaymentPage');
+const { handler: createTokenPurchase } = require('../src/functions/createForcaSubscriptionTokenPurchase');
+const { handler: productsForParent } = require('../src/functions/getForcaSubscriptionProductsForParent');
 
 const realSend = ddb.send;
 const realFetch = globalThis.fetch;
@@ -133,6 +137,7 @@ const PROFILES: Record<string, any> = {
   'forca|MEMBER#kid1|PROFILE': { PK: 'MEMBER#kid1', SK: 'PROFILE', identity: { first_name: 'נועה', last_name: 'כהן', role: 'member' } },
   'forca|MEMBER#parent1|PROFILE': { PK: 'MEMBER#parent1', SK: 'PROFILE', identity: { first_name: 'דנה', last_name: 'כהן', email: 'p@example.com', idNumber: '000000018' }, expoPushToken: 'ExponentPushToken[x]' },
   'incore|MEMBER#admin1|PROFILE': { role: 'admin' },
+  'forca|MEMBER#parent1|FAMILY#kid1': { PK: 'MEMBER#parent1', SK: 'FAMILY#kid1', childUid: 'kid1' },
 };
 
 type Stub = { calls: { name: string; input: any }[]; hyp: number; push: number };
@@ -312,4 +317,55 @@ test('notice: nothing outside the window', async () => {
   const res = await runPeriodEndReminders(at('2026-11-13'));
   assert.equal(res.periods, 0);
   assert.equal(gsi3Queried(s), false);
+});
+
+// ── Sign-up closed between periods ──────────────────────────────────────────
+
+test('sign-up gate: open inside a period, closed in July with the next start', async () => {
+  stub(SEED);
+  assert.equal(await forcaSignupClosed(at('2026-12-01')), null);
+  assert.equal(await forcaSignupClosed(at('2027-09-15')), null, 'September is open');
+  const july = await forcaSignupClosed(at('2027-07-10'));
+  assert.deepEqual(july, { error: 'signup_closed', message: 'ההרשמה לעונה הבאה נפתחת ב-1/9', nextStart: '2027-09-01' });
+  assert.equal((await forcaSignupClosed(at('2027-10-05'))).message, 'ההרשמה לעונה הבאה תיפתח בקרוב', 'no period ahead');
+  stub('none');
+  assert.ok(await forcaSignupClosed(at('2026-12-01')), 'no periods → closed');
+  stub('throw');
+  assert.equal((await forcaSignupClosed(at('2026-12-01'))).error, 'signup_closed', 'unreadable → closed');
+});
+
+// The purchase requests use the real clock, so "today" is placed inside or outside a period around it.
+const todayIl = () => israelDateStrOf(new Date());
+const around = (inside: boolean) => inside
+  ? [{ id: 'now', name: 'עכשיו', start: rules.addDays(todayIl(), -10), end: rules.addDays(todayIl(), 10) }]
+  : [{ id: 'later', name: 'אחר כך', start: rules.addDays(todayIl(), 30), end: rules.addDays(todayIl(), 60) }];
+
+for (const [label, fn] of [['payment page', createPaymentPage], ['saved-card purchase', createTokenPurchase]] as const) {
+  test(`${label}: between periods → 409 signup_closed, nothing written`, async () => {
+    const s = stub(around(false));
+    const res = await fn(ev('parent1', { subscriptionProductId: 'sp1', childUid: 'kid1' }));
+    assert.equal(res.statusCode, 409);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, 'signup_closed');
+    assert.equal(body.nextStart, rules.addDays(todayIl(), 30));
+    assert.equal(s.calls.filter((c) => c.name === 'PutCommand' || c.name === 'UpdateCommand').length, 0);
+    assert.equal(s.hyp, 0);
+  });
+
+  test(`${label}: inside a period → passes the gate`, async () => {
+    stub(around(true));
+    const res = await fn(ev('parent1', { subscriptionProductId: 'missing', childUid: 'kid1' }));
+    assert.notEqual(res.statusCode, 409);
+    assert.equal(res.statusCode, 404, 'stops later, at the unknown product');
+  });
+}
+
+test('products for parent: signupClosed only between periods; products unchanged', async () => {
+  stub(around(false));
+  const closed = JSON.parse((await productsForParent(ev('parent1'))).body);
+  assert.equal(closed.signupClosed.nextStart, rules.addDays(todayIl(), 30));
+  assert.ok(Array.isArray(closed.children));
+  stub(around(true));
+  const open = JSON.parse((await productsForParent(ev('parent1'))).body);
+  assert.equal(open.signupClosed, null);
 });

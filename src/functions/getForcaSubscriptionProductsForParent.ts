@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
+import { forcaSignupClosed } from '../lib/forcaPeriods/store';
 import { deriveMemberName, type FamilyLinkItem, type ForcaSubscriptionProductItem, type GroupItem, type MemberProfileItem } from '../lib/entities';
 
 // ANY /getForcaSubscriptionProductsForParent
@@ -68,5 +69,11 @@ export async function handler(
     };
   }));
 
-  return json(200, { children: children.filter((c): c is NonNullable<typeof c> => c !== null) });
+  // New optional field: between activity periods the app shows its message
+  // instead of the payment button (the payment requests refuse anyway).
+  const closed = await forcaSignupClosed();
+  return json(200, {
+    children: children.filter((c): c is NonNullable<typeof c> => c !== null),
+    signupClosed: closed ? { message: closed.message, nextStart: closed.nextStart } : null,
+  });
 }

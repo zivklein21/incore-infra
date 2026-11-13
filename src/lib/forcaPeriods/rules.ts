@@ -132,6 +132,11 @@ export function activityStatus(periods: ActivityPeriod[], today: string): Activi
   };
 }
 
+/** What the FORCA purchase flow shows between periods instead of the payment button. */
+export function signupClosedLabel(nextStart: string | null): string {
+  return nextStart ? `ההרשמה לעונה הבאה נפתחת ב-${shortDay(nextStart)}` : 'ההרשמה לעונה הבאה תיפתח בקרוב';
+}
+
 export function offPeriodLabel(nextStart: string | null): string {
   return nextStart ? `אין פעילות – חוזרים ב-${shortDay(nextStart)}` : 'אין פעילות';
 }
