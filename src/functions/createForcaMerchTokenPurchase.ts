@@ -5,6 +5,7 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { getMemberFullName, getMemberIdNumber, buildHypInfo, HYP_NO_ID_PLACEHOLDER } from '../lib/hypOrders';
 import { chargeHypToken } from '../lib/hypClient';
+import { resolveReceiptEmail } from '../lib/receiptEmail';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import { applyMerchOrderCharge } from '../lib/merchPayments';
 import type { MemberProfileItem, MerchOrderItem, MerchOrderLineItem, MerchProductItem } from '../lib/entities';
@@ -142,7 +143,8 @@ export async function handler(
       userId: getMemberIdNumber(billedMember) || HYP_NO_ID_PLACEHOLDER,
       clientName: getMemberFullName(billedMember),
       info: childName ? buildHypInfo(infoLine, `שם הילדה: ${childName}`) : buildHypInfo(infoLine),
-      email: billedMember.identity?.email || billedMember.email || undefined,
+      // callerUid is whoever is billed: the parent when childUid is set, else the member.
+      email: await resolveReceiptEmail('forca', callerUid, billedMember.identity?.email || billedMember.email),
       sendReceipt: true,
     });
   } catch (err: any) {

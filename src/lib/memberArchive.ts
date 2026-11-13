@@ -40,7 +40,7 @@ export function classifyRow(row: { PK: string; SK: string }): RetainedKind | nul
 }
 
 const SECRET_KEY = /token/i;
-const DROPPED_KEYS = new Set(['payment', 'device', 'photoKey', 'GSI1PK', 'GSI1SK', 'GSI2PK', 'GSI2SK', 'GSI3PK', 'GSI3SK']);
+const DROPPED_KEYS = new Set(['payment', 'device', 'photoKey', 'emergencyContact', 'GSI1PK', 'GSI1SK', 'GSI2PK', 'GSI2SK', 'GSI3PK', 'GSI3SK']);
 
 /** A copy with no card or push tokens at any depth, and no app-only fields. */
 export function scrubForArchive<T>(value: T): T {

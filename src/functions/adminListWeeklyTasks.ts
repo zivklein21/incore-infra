@@ -63,6 +63,7 @@ export async function handler(
     exerciseIds: t.exerciseIds ?? null,
     exerciseNames: t.exerciseIds ? t.exerciseIds.map((id) => exerciseNameById.get(id) ?? id) : null,
     running: !!t.running,
+    runType: t.running ? t.runType ?? null : null,
   }));
 
   return json(200, { tasks: result });

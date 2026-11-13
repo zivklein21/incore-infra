@@ -37,7 +37,9 @@ export interface CreateSessionInstanceParams {
    * it shows in the calendar and its roster is the group — which is what
    * forms attached to it go to (formTemplates "activity" assignments).
    */
-  activity?: { name: string; description?: string };
+  activity?: { name: string; description?: string; transport?: string; safetyNotes?: string };
+  /** "What to bring" (ClassItem.traineeEquipment) — set at creation for a special activity; see saveSessionTraineeInfo.ts. */
+  traineeEquipment?: string[];
 }
 
 export type CreateSessionInstanceResult =
@@ -115,7 +117,13 @@ export async function createSessionInstance(params: CreateSessionInstanceParams)
     currentAttendeesCount: memberIds.length,
     className: params.activity ? params.activity.name : trainingType?.name,
     notes: group.name,
-    ...(params.activity ? { isSpecialActivity: true, ...(params.activity.description ? { description: params.activity.description } : {}) } : {}),
+    ...(params.activity ? {
+      isSpecialActivity: true,
+      ...(params.activity.description ? { description: params.activity.description } : {}),
+      ...(params.activity.transport ? { transport: params.activity.transport } : {}),
+      ...(params.activity.safetyNotes ? { safetyNotes: params.activity.safetyNotes } : {}),
+    } : {}),
+    ...(params.traineeEquipment?.length ? { traineeEquipment: params.traineeEquipment } : {}),
     isWaitlistEnabled: false,
     waitlist: [],
     isPrivate: true,
@@ -366,7 +374,7 @@ export function israelDateStrRange(fromIso: string, toIso: string): string[] {
  * from the calendar) build on, so the two never drift on what "delete an
  * instance" actually means.
  */
-export async function deleteSessionInstance(classId: string): Promise<void> {
+export async function deleteSessionInstance(classId: string, options: { keepPlanCopy?: boolean } = {}): Promise<void> {
   const regsRes = await ddb.send(new QueryCommand({
     TableName: FORCA_TABLE_NAME,
     KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
@@ -376,7 +384,29 @@ export async function deleteSessionInstance(classId: string): Promise<void> {
   await Promise.all(regs.map((r) =>
     ddb.send(new DeleteCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `CLASS#${classId}`, SK: r.SK } })),
   ));
-  await ddb.send(new DeleteCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `CLASS#${classId}`, SK: 'METADATA' } }));
+  const deleted = await ddb.send(new DeleteCommand({
+    TableName: FORCA_TABLE_NAME,
+    Key: { PK: `CLASS#${classId}`, SK: 'METADATA' },
+    ReturnValues: 'ALL_OLD',
+  }));
+  const session = deleted.Attributes as ClassItem | undefined;
+  if (!options.keepPlanCopy && session?.planOverride && session.workoutPlanId) await deletePlanCopy(session.workoutPlanId);
+}
+
+/**
+ * Deletes a session's private plan copy (see WorkoutPlanItem.sessionCopyOf).
+ * Refuses anything that isn't one: a library plan's partition is never
+ * deleted from here, however this got called.
+ */
+export async function deletePlanCopy(planId: string): Promise<void> {
+  const res = await ddb.send(new QueryCommand({
+    TableName: FORCA_TABLE_NAME,
+    KeyConditionExpression: 'PK = :pk',
+    ExpressionAttributeValues: { ':pk': `WORKOUTPLAN#${planId}` },
+  }));
+  const items = (res.Items ?? []) as { PK: string; SK: string; sessionCopyOf?: string }[];
+  if (!items.find((i) => i.SK === 'METADATA')?.sessionCopyOf) return;
+  await Promise.all(items.map((i) => ddb.send(new DeleteCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: i.PK, SK: i.SK } }))));
 }
 
 /**
@@ -386,17 +416,105 @@ export async function deleteSessionInstance(classId: string): Promise<void> {
  * occurrences shouldn't happen either). Past instances are never touched —
  * they're the historical record getTrainingHistory.ts reads.
  */
-export async function deleteFutureInstances(recurringSessionId: string): Promise<number> {
-  const nowIso = new Date().toISOString();
-  const res = await ddb.send(new ScanCommand({
+export async function deleteFutureInstances(recurringSessionId: string, options: { keepPlanCopies?: boolean } = {}): Promise<number> {
+  const items = await futureInstances(recurringSessionId);
+  await Promise.all(items.map((item) => deleteSessionInstance(item.PK.replace('CLASS#', ''), { keepPlanCopy: options.keepPlanCopies })));
+  return items.length;
+}
+
+async function futureInstances(recurringSessionId: string): Promise<ClassItem[]> {
+  return (await scanAll({
     TableName: FORCA_TABLE_NAME,
     FilterExpression: 'recurringSessionId = :rsid AND #dt >= :now',
     ExpressionAttributeNames: { '#dt': 'date' },
-    ExpressionAttributeValues: { ':rsid': recurringSessionId, ':now': nowIso },
+    ExpressionAttributeValues: { ':rsid': recurringSessionId, ':now': new Date().toISOString() },
+  })) as unknown as ClassItem[];
+}
+
+/** The not-yet-occurred instances of a template that carry a per-session override. */
+export async function futureOverriddenInstances(recurringSessionId: string): Promise<ClassItem[]> {
+  return (await futureInstances(recurringSessionId)).filter((s) => s.planOverride || s.equipmentOverride);
+}
+
+// Half a week each way: a Tuesday session moved to Wednesday or Monday is still
+// "that week's session", without ever reaching into the next one's week.
+const OVERRIDE_CARRY_WINDOW_MS = 3.5 * 24 * 60 * 60 * 1000;
+
+/**
+ * Pairs each overridden session with the regenerated occurrence that replaces
+ * it: the nearest one within OVERRIDE_CARRY_WINDOW_MS, each taken only once.
+ * An override with no such occurrence (its week is gone from the schedule) is
+ * returned in `lost`.
+ */
+export function matchOverridesToOccurrences<T extends { date: string }>(
+  overridden: T[],
+  created: { classId: string; date: string }[],
+): { pairs: { from: T; toClassId: string }[]; lost: T[] } {
+  const free = new Map(created.map((c) => [c.classId, new Date(c.date).getTime()]));
+  const pairs: { from: T; toClassId: string }[] = [];
+  const lost: T[] = [];
+  for (const from of [...overridden].sort((a, b) => a.date.localeCompare(b.date))) {
+    const at = new Date(from.date).getTime();
+    let best: { classId: string; gap: number } | null = null;
+    for (const [classId, when] of free) {
+      const gap = Math.abs(when - at);
+      if (gap <= OVERRIDE_CARRY_WINDOW_MS && (!best || gap < best.gap)) best = { classId, gap };
+    }
+    if (best) { free.delete(best.classId); pairs.push({ from, toClassId: best.classId }); }
+    else lost.push(from);
+  }
+  return { pairs, lost };
+}
+
+/**
+ * A template pattern change deletes and regenerates every future instance;
+ * this moves each override onto its regenerated session so the edit survives.
+ * Returns how many had nowhere to go (their private copies are deleted).
+ */
+export async function carrySessionOverrides(
+  overridden: ClassItem[],
+  created: { classId: string; date: string }[],
+  template: { workoutPlanId?: string; workoutPlanName?: string },
+): Promise<number> {
+  const { pairs, lost } = matchOverridesToOccurrences(overridden, created);
+  await Promise.all(pairs.map(async ({ from, toClassId }) => {
+    const sets: string[] = [];
+    const removes: string[] = [];
+    const values: Record<string, unknown> = {};
+    if (from.equipmentOverride) { sets.push('equipmentOverride = :equipment'); values[':equipment'] = from.equipmentOverride; }
+    if (from.sessionEditLog) { sets.push('sessionEditLog = :log'); values[':log'] = from.sessionEditLog; }
+    if (from.traineesNotifiedAt) { sets.push('traineesNotifiedAt = :notified'); values[':notified'] = from.traineesNotifiedAt; }
+    if (from.planOverride && from.workoutPlanId) {
+      sets.push('workoutPlanId = :planId', 'workoutPlanName = :planName', 'planOverride = :override');
+      values[':planId'] = from.workoutPlanId;
+      values[':planName'] = from.workoutPlanName;
+      values[':override'] = rebasePlanOverride(from.planOverride, template);
+      // A session is a plan OR a test session, and the edited plan wins here.
+      removes.push('isTestSession', 'testGroupId', 'testGroupName', 'testComponentIds');
+      if (from.isRunningSession) { sets.push('isRunningSession = :isRunning'); values[':isRunning'] = true; }
+      await ddb.send(new UpdateCommand({
+        TableName: FORCA_TABLE_NAME,
+        Key: { PK: `WORKOUTPLAN#${from.workoutPlanId}`, SK: 'METADATA' },
+        UpdateExpression: 'SET sessionClassId = :classId',
+        ExpressionAttributeValues: { ':classId': toClassId },
+      }));
+    }
+    await ddb.send(new UpdateCommand({
+      TableName: FORCA_TABLE_NAME,
+      Key: { PK: `CLASS#${toClassId}`, SK: 'METADATA' },
+      UpdateExpression: `SET ${sets.join(', ')}${removes.length ? ` REMOVE ${removes.join(', ')}` : ''}`,
+      ExpressionAttributeValues: values,
+    }));
   }));
-  const items = (res.Items ?? []) as { PK: string }[];
+  await Promise.all(lost.map((s) => (s.planOverride && s.workoutPlanId ? deletePlanCopy(s.workoutPlanId) : Promise.resolve())));
+  return lost.length;
+}
 
-  await Promise.all(items.map((item) => deleteSessionInstance(item.PK.replace('CLASS#', ''))));
-
-  return items.length;
+/** "Reset to original" follows the template: its current plan, when it has one. */
+export function rebasePlanOverride(
+  override: NonNullable<ClassItem['planOverride']>,
+  template: { workoutPlanId?: string; workoutPlanName?: string },
+): NonNullable<ClassItem['planOverride']> {
+  if (!template.workoutPlanId) return override;
+  return { ...override, basePlanId: template.workoutPlanId, basePlanName: template.workoutPlanName ?? override.basePlanName };
 }

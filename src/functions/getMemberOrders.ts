@@ -1,9 +1,8 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, tableForBrand } from '../lib/dynamo';
+import { tableForBrand } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { MerchOrderItem } from '../lib/entities';
+import { merchOrderHistory } from '../lib/merchOrderHistory';
 
 // GET or POST /getMemberOrders?memberId=xxx&brand=incore|forca
 // Auth: Cognito JWT, caller must be admin
@@ -22,31 +21,7 @@ export async function handler(
   if (!memberId) return json(400, { error: 'missing_member_id' });
   const brand = event.queryStringParameters?.brand === 'forca' ? 'forca' as const : 'incore' as const;
 
-  const res = await ddb.send(new QueryCommand({
-    TableName: tableForBrand(brand),
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'MERCHORDER#' },
-    ScanIndexForward: false,
-  }));
-  const items = (res.Items ?? []) as MerchOrderItem[];
-
-  const orders = items.map((o) => ({
-    id: o.orderId,
-    status: o.status,
-    amount: o.amount,
-    items: o.items.map((li) => ({
-      productName: li.merchProductName,
-      variantLabel: li.merchVariantLabel,
-      quantity: li.quantity,
-      unitPrice: li.unitPrice,
-    })),
-    createdAt: o.createdAt,
-    refundedAmount: o.refundedAmount ?? null,
-    refundedAt: o.refundedAt ?? null,
-    deliveryStatus: o.deliveryStatus ?? null,
-    deliveredAt: o.deliveredAt ?? null,
-  }));
-
-  return json(200, { orders });
+  const result = await merchOrderHistory(tableForBrand(brand), memberId, event.queryStringParameters ?? {});
+  if (!result.ok) return json(400, { error: result.error });
+  return json(200, result.body);
 }

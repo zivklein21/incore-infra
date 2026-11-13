@@ -12,8 +12,8 @@ import type { ClassItem } from '../lib/entities';
 // or admin (see getCoachAccess.ts) — results are scoped to sessions actually
 // assigned to her (both her group AND her coachId — see sessionInAccess()),
 // not every session in a group she happens to share with other coaches. An
-// admin sees everything, unrestricted. medicalFlag is stripped when she has
-// no healthDeclarations permission.
+// admin sees everything, unrestricted. medicalFlag is admin-only; a coach gets
+// medicalAlert (see lib/sessionDetail.ts).
 //
 // Lists FORCA training sessions (a ClassItem with a groupId — see
 // createTrainingSession.ts) with their full roster and equipment pack list

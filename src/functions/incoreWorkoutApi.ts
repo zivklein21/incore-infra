@@ -10,6 +10,8 @@ import { handler as getIncoreExercises } from '../lib/incoreWorkout/getIncoreExe
 import { handler as getMyWorkoutJournal } from '../lib/incoreWorkout/getMyWorkoutJournal';
 import { handler as saveMyWorkoutLog } from '../lib/incoreWorkout/saveMyWorkoutLog';
 import { handler as deleteMyWorkoutLog } from '../lib/incoreWorkout/deleteMyWorkoutLog';
+import { getWorkoutLastWeights } from '../lib/incoreWorkout/lastWeights';
+import { handler as adminSaveWorkoutLogReminderSettings } from '../lib/incoreWorkout/adminSaveWorkoutLogReminderSettings';
 import { handler as adminListFormTemplates } from '../lib/formTemplates/adminListFormTemplates';
 import { handler as adminSaveFormTemplate } from '../lib/formTemplates/adminSaveFormTemplate';
 import { handler as adminDeleteFormTemplate } from '../lib/formTemplates/adminDeleteFormTemplate';
@@ -29,10 +31,18 @@ import { handler as adminSaveSignupFlowConfig } from '../lib/signupFlow/adminSav
 import { handler as getFormWording } from '../lib/formWording/getFormWording';
 import { handler as adminSaveFormWording } from '../lib/formWording/adminSaveFormWording';
 import { handler as saveSessionTraineeInfo } from '../lib/sessionInfo/saveSessionTraineeInfo';
+import { getSessionPlan, resetSessionOverride, saveSessionOverride } from '../lib/sessionEdit/handlers';
 import { changePhotoConsent, getPhotoConsent, getPhotoConsentPdfUrl } from '../lib/photoConsent/handlers';
+import { getSessionContacts, saveEmergencyContact } from '../lib/quickDial';
+import { adminSetMedicalAlert } from '../lib/medicalAlert';
 import { handler as removeMySavedCard } from '../lib/removeMySavedCard';
 import { adminGetArchivedFileUrl, adminGetDeletedMember, adminListDeletedMembers } from '../lib/memberArchive';
 import { handler as adminSetMemberTestFlag } from '../lib/memberTestFlag';
+import { getMemberBookings } from '../lib/memberBookings';
+import { adminCancelMemberSubscription, adminListMemberSubscriptions, adminSaveMemberSubscription } from '../lib/memberSubscriptions';
+import { getForcaChatContacts } from '../lib/forcaChat/contacts';
+import { adminListForcaPeriods, adminSaveForcaPeriods, getForcaActivityStatus } from '../lib/forcaPeriods/handlers';
+import { adminListQuickReplies, adminSaveQuickReplies, getQuickReplies, useQuickReply } from '../lib/quickReplies/handlers';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
 
@@ -46,6 +56,8 @@ const HANDLERS: Record<string, Handler> = {
   getMyWorkoutJournal,
   saveMyWorkoutLog,
   deleteMyWorkoutLog,
+  getWorkoutLastWeights,
+  adminSaveWorkoutLogReminderSettings,
   // Not workout-related — Manage → Forms → Form Templates. Rides this
   // Lambda's integration for the same 300-integration-cap reason.
   adminListFormTemplates,
@@ -71,6 +83,15 @@ const HANDLERS: Record<string, Handler> = {
   adminSaveFormWording,
   // FORCA: per-session trainee note + equipment list (coach/admin).
   saveSessionTraineeInfo,
+  // FORCA: one session's effective plan + equipment, and its overrides.
+  getSessionPlan,
+  saveSessionOverride,
+  resetSessionOverride,
+  // FORCA quick dial.
+  getSessionContacts,
+  saveEmergencyContact,
+  // FORCA: the short medical alert coaches see.
+  adminSetMedicalAlert,
   // FORCA: a member removing their own saved card.
   removeMySavedCard,
   // Deleted members' retained records.
@@ -82,6 +103,23 @@ const HANDLERS: Record<string, Handler> = {
   getPhotoConsent,
   changePhotoConsent,
   getPhotoConsentPdfUrl,
+  // INCORE: profile Bookings tab, newest first, paged.
+  getMemberBookings,
+  // INCORE: admin subscription management.
+  adminListMemberSubscriptions,
+  adminSaveMemberSubscription,
+  adminCancelMemberSubscription,
+  // FORCA chat: who a trainee / parent can write to.
+  getForcaChatContacts,
+  // Quick replies (both brands): management + the chat picker.
+  adminListQuickReplies,
+  adminSaveQuickReplies,
+  getQuickReplies,
+  useQuickReply,
+  // FORCA activity periods: charging days, exit points, end-of-period notice.
+  adminListForcaPeriods,
+  adminSaveForcaPeriods,
+  getForcaActivityStatus,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

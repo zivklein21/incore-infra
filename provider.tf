@@ -11,8 +11,20 @@ terraform {
     }
   }
 
-  # Define the minimum required version of Terraform CLI
-  required_version = ">= 1.5.0"
+  # Define the minimum required version of Terraform CLI. 1.10+ for the S3
+  # backend's native lockfile (use_lockfile).
+  required_version = ">= 1.10.0"
+
+  # Remote state (state_backend.tf manages this bucket). Versioned,
+  # encrypted, private, TLS-only; locked with an S3 lockfile, so two applies
+  # can't run at once. Never use a local terraform.tfstate again.
+  backend "s3" {
+    bucket       = "incore-terraform-state-112712884639"
+    key          = "incore-infra/terraform.tfstate"
+    region       = "eu-central-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 # 2. Configure the AWS Provider

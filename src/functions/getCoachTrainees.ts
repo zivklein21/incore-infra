@@ -33,13 +33,9 @@ function computeAge(birthday: string | number | undefined): number | null {
 // groups (empty groupIds, the deny-by-default case, returns nothing).
 //
 // ?scope=all includes every age (Coach Role epic, item 7's Trainee
-// Management — "her own trainees" generally), plus a groupName, age, and
-// medicalFlag per trainee (own-profile "details + medical status" view —
-// same coarse boolean-flag-not-clinical-detail convention as
-// sessionDetail.ts's roster medicalFlag: true iff any health declaration
-// answer is 'yes'; gated by healthDeclarations !== 'none' same as there).
-// Default (or any other/missing value) keeps the original under-18-only,
-// id/name/phone-only behavior, matching ForcaTrackerScreen.tsx's admin
+// Management — "her own trainees" generally), plus an age per trainee. No
+// medical data in any scope. Default (or any other/missing value) keeps the
+// original under-18-only behavior, matching ForcaTrackerScreen.tsx's admin
 // picker — FORCA's Tracker is scoped to the kids program even though the
 // brand has adult members too; only the Settings hub's management list
 // needs everyone/the extra fields.
@@ -80,20 +76,14 @@ export async function handler(
       const age = computeAge(p.identity?.birthday ?? p.birthday ?? undefined);
       return age !== null && age < 18;
     })
-    .map((p) => {
-      const healthAnswers = p.forms?.health_declaration?.answers ?? {};
-      return {
-        id: p.PK.replace('MEMBER#', ''),
-        name: deriveName(p),
-        phone: p.identity?.phone ?? p.phone ?? '',
-        groupName: groupNameById.get(p.identity?.groupId ?? '') ?? null,
-        age: allAges ? computeAge(p.identity?.birthday ?? p.birthday ?? undefined) : null,
-        photoConsent: consents && p.identity?.accountType !== 'parent_only' ? (consents.get(p.PK.replace('MEMBER#', '')) ?? 'not_approved') : null,
-        medicalFlag: allAges && access.permissions.healthDeclarations !== 'none'
-          ? Object.values(healthAnswers).some((v) => v === 'yes')
-          : false,
-      };
-    })
+    .map((p) => ({
+      id: p.PK.replace('MEMBER#', ''),
+      name: deriveName(p),
+      phone: p.identity?.phone ?? p.phone ?? '',
+      groupName: groupNameById.get(p.identity?.groupId ?? '') ?? null,
+      age: allAges ? computeAge(p.identity?.birthday ?? p.birthday ?? undefined) : null,
+      photoConsent: consents && p.identity?.accountType !== 'parent_only' ? (consents.get(p.PK.replace('MEMBER#', '')) ?? 'not_approved') : null,
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return json(200, { trainees });

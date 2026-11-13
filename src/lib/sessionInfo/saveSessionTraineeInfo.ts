@@ -1,13 +1,11 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { randomUUID } from 'crypto';
-import { GetCommand, PutCommand, QueryCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../dynamo';
 import { getUid, json } from '../http';
 import { getCoachAccess, sessionInAccess } from '../coachAccess';
-import { getExpoPushToken, sendExpoPushBatch, type ExpoPushMessage } from '../push';
-import { fmtDate, fmtTime } from '../templateResolver';
-import { getProfile, parentOf } from '../formTemplates/submissions';
-import type { ClassItem, RegistrationItem } from '../entities';
+import { notifySessionTrainees, notifySessionUpdated, sessionWhenText, shouldNotifySessionUpdate } from './notifySession';
+import type { ClassItem } from '../entities';
+import { formsSignedOnOlderDetails } from '../formTemplates/activityForms';
 
 export const TRAINEE_NOTE_MAX = 1000;
 export const TRAINEE_EQUIPMENT_MAX_ITEMS = 30;
@@ -29,8 +27,9 @@ export const TRAINEE_EQUIPMENT_ITEM_MAX = 60;
 // the session hasn't started yet, every trainee registered to it (plus each
 // one's linked parent, who usually holds the device for a minor) gets a
 // push + inbox message with the session date/time and the note. Saving the
-// same note again, clearing it, or editing only the equipment list sends
-// nothing.
+// same note again or clearing it sends nothing. A changed equipment list
+// sends the "session updated" push under shouldNotifySessionUpdate()'s rule,
+// unless the note push is already going out for this same save.
 export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
@@ -77,6 +76,7 @@ export async function handler(
     }
   }
 
+  let equipmentChanged = false;
   if (body.traineeEquipment !== undefined) {
     if (body.traineeEquipment !== null && !Array.isArray(body.traineeEquipment)) return json(400, { error: 'invalid_equipment' });
     const items: string[] = [];
@@ -88,6 +88,7 @@ export async function handler(
     if (items.length > TRAINEE_EQUIPMENT_MAX_ITEMS) return json(400, { error: 'too_many_equipment_items' });
     if (items.length > 0) { sets.push('traineeEquipment = :equipment'); values[':equipment'] = items; }
     else if (session.traineeEquipment) removes.push('traineeEquipment');
+    equipmentChanged = JSON.stringify(items) !== JSON.stringify(session.traineeEquipment ?? []);
   }
 
   if (sets.length > 0 || removes.length > 0) {
@@ -102,70 +103,27 @@ export async function handler(
     }));
   }
 
-  const notified = noteChanged && newNote && new Date(session.date).getTime() > Date.now()
-    ? await notifySessionTrainees(classId, session, newNote)
-    : 0;
+  let notified = 0;
+  if (noteChanged && newNote && new Date(session.date).getTime() > Date.now()) {
+    const { date, time } = sessionWhenText(session);
+    notified = await notifySessionTrainees(classId, session, {
+      title: session.className ? `הערה לאימון ${session.className}` : 'הערה לאימון',
+      body: `${date} · ${time}\n${newNote}`,
+      pushType: 'session_note',
+      messagePrefix: 'sessionnote',
+    });
+  } else if (equipmentChanged && shouldNotifySessionUpdate(session)) {
+    notified = await notifySessionUpdated(classId, session);
+  }
 
-  return json(200, { success: true, notified });
-}
-
-async function notifySessionTrainees(classId: string, session: ClassItem, note: string): Promise<number> {
-  const regsRes = await ddb.send(new QueryCommand({
-    TableName: FORCA_TABLE_NAME,
-    KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-    ExpressionAttributeValues: { ':pk': `CLASS#${classId}`, ':prefix': 'REG#' },
-  }));
-  const traineeIds = new Set<string>(((regsRes.Items ?? []) as RegistrationItem[]).map((r) => r.userId));
-  for (const id of session.allowedMemberIds ?? []) traineeIds.add(id);
-  if (traineeIds.size === 0) return 0;
-
-  // Trainee + linked parent, deduped (siblings share one parent).
-  const recipientIds = new Set<string>(traineeIds);
-  await Promise.all([...traineeIds].map(async (id) => {
-    const parentId = await parentOf('forca', id);
-    if (parentId) recipientIds.add(parentId);
-  }));
-
-  const start = new Date(session.date);
-  const when = `${fmtDate(start, 'he')} · ${fmtTime(start)}`;
-  const title = session.className ? `הערה לאימון ${session.className}` : 'הערה לאימון';
-  const bodyText = `${when}\n${note}`;
-
-  const nowMs = Date.now();
-  const messageId = `sessionnote_${classId}_${randomUUID()}`;
-  const expiresAtMs = nowMs + 7 * 24 * 60 * 60 * 1000;
-  const pushMessages: ExpoPushMessage[] = [];
-
-  await Promise.all([...recipientIds].map(async (uid) => {
-    const profile = await getProfile('forca', uid);
-    if (!profile) return;
-    // suppressPush=true: pushed directly below, same convention as
-    // sendCoachNotification.ts's MESSAGE# writes.
-    await ddb.send(new PutCommand({
-      TableName: FORCA_TABLE_NAME,
-      Item: {
-        PK: `MEMBER#${uid}`,
-        SK: `MESSAGE#${messageId}`,
-        type: 'broadcast',
-        title,
-        body: bodyText,
-        bgColor: '#7A004B',
-        textColor: '#FFFFFF',
-        createdAt: new Date(nowMs).toISOString(),
-        expiresAt: new Date(expiresAtMs).toISOString(),
-        expiresAtEpoch: Math.floor(expiresAtMs / 1000),
-        requiresAction: false,
-        read: false,
-        suppressPush: true,
-      },
-    }));
-    // sessionId, not classId: the app routes any push with data.classId to
-    // the INCORE BookClass screen (usePushNotifications.ts), wrong for FORCA.
-    const token = getExpoPushToken(profile);
-    if (token) pushMessages.push({ to: token, title, body: bodyText, sound: 'default', data: { type: 'session_note', sessionId: classId } });
-  }));
-
-  const dispatched = await sendExpoPushBatch(pushMessages, 'saveSessionTraineeInfo');
-  console.log(`[saveSessionTraineeInfo] class=${classId} recipients=${recipientIds.size} pushed=${dispatched}`);
-  return dispatched;
+  // "What to bring" is an activity detail forms can show — report families who signed the older list (activityFields.ts).
+  let signedOnOlderDetails: Awaited<ReturnType<typeof formsSignedOnOlderDetails>> = [];
+  if (equipmentChanged && session.isSpecialActivity) {
+    try {
+      signedOnOlderDetails = await formsSignedOnOlderDetails('forca', classId);
+    } catch (err) {
+      console.warn('[saveSessionTraineeInfo] signed-forms check failed', classId, err);
+    }
+  }
+  return json(200, { success: true, notified, signedOnOlderDetails });
 }

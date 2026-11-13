@@ -5,10 +5,13 @@ import type { HypBillingAgreementItem, MemberProfileItem, ProductItem, Membershi
 import { applyChargeSafety, chargeBlockReason } from './chargeSafety';
 import { monthKey, endOfMonth, firstOfNextMonth, israelDateStr } from './entities';
 import { chargeHypToken } from './hypClient';
+import { resolveReceiptEmail } from './receiptEmail';
 import { getMemberIdNumber, getMemberFullName, buildHypInfo, getPolicySettings, HYP_NO_ID_PLACEHOLDER } from './hypOrders';
 import { queryOpenAgreementsForMember } from './hypAgreementQueries';
 import { handlePaymentSuccess, handlePaymentFailure, type PaymentSuccessPayload } from './paymentGrants';
 import { notifyAdminsPaymentFailed, type PaymentFailureTransactionType } from './adminNotify';
+import { pushMember } from './membershipExpiryCleanup';
+import { DECLINE_PUSH_BODY, declineAction } from './membershipExpiry';
 
 // Charges a single billing agreement and applies its grant/failure handling.
 // Used by both the nightly cron (chargeHypBillingAgreements) and the admin
@@ -34,7 +37,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
   }
   const chargeUserId = (member && getMemberIdNumber(member)) || HYP_NO_ID_PLACEHOLDER;
   const chargeClientName = member ? getMemberFullName(member) : 'Member';
-  const chargeEmail = member?.identity?.email || member?.email || '';
+  const chargeEmail = await resolveReceiptEmail('incore', agreement.userId, member?.identity?.email || member?.email);
 
   let result: { success: boolean; ccode: number; transactionId?: string; authCode?: string };
   if (!agreement.token) {
@@ -52,7 +55,7 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
         userId: chargeUserId,
         clientName: chargeClientName,
         info: buildHypInfo(agreement.productName, agreement.description),
-        email: chargeEmail || undefined,
+        email: chargeEmail,
         sendReceipt: true,
       });
     } catch (err: any) {
@@ -165,10 +168,17 @@ export async function chargeOneAgreement(agreement: HypBillingAgreementItem): Pr
           }),
     }));
   } else {
+    // A declined renewal is retried the next day (consecutiveFailures). The
+    // membership and its bookings stay until the retry fails too: only then
+    // is it expired here, and expireMemberships cancels the bookings it paid
+    // for and tells her. After the first decline she gets a push to update
+    // her card. With no card on file there's no retry counter — the agreement
+    // keeps waiting, and expireMemberships expires the membership once its
+    // 48h renewal grace is over.
     if (agreement.kind === 'subscription') {
-      // Also closes out whatever membership the member currently has —
-      // there's no successful charge to hang a new one off of.
-      await handlePaymentFailure(agreement.userId, chargeMonth);
+      const action = declineAction(agreement);
+      if (action === 'expire') await handlePaymentFailure(agreement.userId, chargeMonth, { evictBookings: false });
+      else if (action === 'notify') await pushMember(agreement.userId, DECLINE_PUSH_BODY, { type: 'payment_declined' });
     }
 
     const transactionType: PaymentFailureTransactionType =

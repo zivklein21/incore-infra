@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {
   normalizeAcknowledgers,
   resolveTraineeDevice,
-  convertLegacySections, normalizeSections, normalizeSigners, templateContentHash, TemplateValidationError,
+  convertLegacySections, normalizeSections, normalizeSettings, normalizeSigners, templateContentHash, TemplateValidationError,
 } from '../src/lib/formTemplates/schema';
 import { completionStatus } from '../src/lib/formTemplates/completion';
 import { formTemplateVersionKey, fromStored, FORM_TEMPLATE_SK_PREFIX } from '../src/lib/formTemplates/shared';
@@ -159,4 +159,11 @@ test("coach isn't a template role: dropped from signers/acknowledgers, coach-fil
   assert.deepEqual(normalizeAcknowledgers(['coach', 'trainee'], ['parent']), ['trainee']);
   const [section] = normalizeSections([{ id: 's', fields: [{ id: 'a', type: 'short_text', label: 'A', filledBy: 'coach' }] }], 'parent');
   assert.equal(section.fields[0].filledBy, 'parent');
+});
+
+test('defaultForActivities: kept only on member activity forms', () => {
+  assert.equal(normalizeSettings({ defaultForActivities: true }, 'either').defaultForActivities, true);
+  assert.equal(normalizeSettings({ defaultForActivities: true, kind: 'signup' }, 'either').defaultForActivities, undefined);
+  assert.equal(normalizeSettings({ defaultForActivities: true, audience: 'coaches' }, 'either').defaultForActivities, undefined);
+  assert.equal(normalizeSettings({}, 'either').defaultForActivities, undefined);
 });

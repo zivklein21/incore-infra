@@ -3,6 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isStillUpcomingForTrainee } from '../lib/sessionVisibility';
+import { sessionFlagsResolver } from '../lib/sessionEdit/sessionFlags';
 import { isAdmin } from '../lib/auth';
 import type { ClassItem, GroupItem, MemberProfileItem, RegistrationItem } from '../lib/entities';
 
@@ -68,6 +69,8 @@ export async function handler(
     return name;
   }
 
+  const sessionFlags = sessionFlagsResolver(FORCA_TABLE_NAME);
+
   const sessions = await Promise.all(registrations.map(async (r) => {
     const classRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `CLASS#${r.classId}`, SK: 'METADATA' } }));
     const session = classRes.Item as ClassItem | undefined;
@@ -80,6 +83,7 @@ export async function handler(
       location: session.location ?? null,
       traineeNote: session.traineeNote ?? null,
       traineeEquipment: session.traineeEquipment ?? [],
+      ...(await sessionFlags(session)),
       coachName: session.coachName ?? null,
       coachPhone: await resolveCoachPhone(session.coachId),
       groupName: await resolveGroupName(session.groupId),

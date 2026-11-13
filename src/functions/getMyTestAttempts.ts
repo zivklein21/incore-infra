@@ -4,6 +4,7 @@ import { ddb } from '../lib/dynamo';
 import { resolveMemberProfile } from '../lib/memberLookup';
 import { getUid, json } from '../lib/http';
 import { rankAttemptsByDate, changeVsPrevious } from '../lib/testAttemptOrdering';
+import { decodeRowCursor, windowRows } from '../lib/datePaging';
 import type { TestGroupItem, TestAttemptItem } from '../lib/entities';
 
 // GET or POST /getMyTestAttempts?groupId=yyy
@@ -67,6 +68,22 @@ export async function handler(
       overallPassed: attempt.overallPassed,
     };
   });
+
+  // ?paged=1 (app 1.5.2+): newest first, the last 2 months, then 2 more per
+  // Load more. Ranking and change-vs-previous are computed on the full set
+  // above, so they stay correct on every page.
+  const qs = event.queryStringParameters ?? {};
+  if (qs.paged === '1' || qs.paged === 'true') {
+    const cursor = qs.cursor ? decodeRowCursor(qs.cursor) : null;
+    if (qs.cursor && !cursor) return json(400, { error: 'invalid_cursor' });
+    const page = windowRows(attempts.map((a) => ({ a, id: a.id, date: a.date })), cursor);
+    return json(200, {
+      testGroup: { id: groupId, name: group.name },
+      attempts: page.items.map((x) => x.a),
+      nextCursor: page.nextCursor,
+      coveredFrom: page.coveredFrom,
+    });
+  }
 
   return json(200, {
     testGroup: { id: groupId, name: group.name },

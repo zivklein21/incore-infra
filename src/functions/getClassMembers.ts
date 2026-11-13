@@ -3,9 +3,9 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
-import type { ClassItem, MemberProfileItem, MembershipItem, RegistrationItem } from '../lib/entities';
+import type { ClassItem, MemberProfileItem, RegistrationItem } from '../lib/entities';
+import { legacyPlanLabel, loadProductNames, planLabel, planNameOf, queryPlanItems, type MemberPlanItems } from '../lib/memberPlanLabel';
 
-type FullMembershipItem = MembershipItem & { productName?: string; title?: string };
 
 // GET or POST /getClassMembers?classId=xxx
 // Auth: Cognito JWT, caller must be admin
@@ -23,16 +23,21 @@ function deriveName(p: MemberProfileItem | undefined): string {
     || 'Unknown Member';
 }
 
-// CUSTOM_MIGRATION memberships (manually-created bridges for trainees
-// onboarded mid-cycle from the old system, see adminGrantCustomMigration.ts)
-// never populate the legacy profile.membership.plan bag, so a migrated
-// member's registration otherwise falls through to a blank subtitle.
-function deriveSubtitle(p: MemberProfileItem | undefined, membership?: FullMembershipItem): string {
-  if (membership?.type === 'CUSTOM_MIGRATION') {
-    return membership.productName || membership.title || 'מנוי מעבר';
+// The member's current plan (lib/memberPlanLabel.ts); for a booking with
+// no current plan behind it any more (a past class), the membership it was
+// booked against; then the legacy badge. '' = really no plan.
+function deriveSubtitle(
+  p: MemberProfileItem | undefined, items: MemberPlanItems | undefined, productNames: Map<string, string>,
+  now: Date, bookedMembershipId?: string,
+): string {
+  const current = planLabel(items?.memberships ?? [], items?.punchCards ?? [], productNames, now);
+  if (current) return current;
+  const booked = bookedMembershipId ? items?.memberships.find((m) => m.membershipId === bookedMembershipId) : undefined;
+  if (booked) {
+    const name = planNameOf(booked, booked.productId ? productNames.get(booked.productId) : undefined);
+    if (name) return name;
   }
-  const plan = p?.membership?.plan;
-  return typeof plan === 'string' ? plan : '';
+  return legacyPlanLabel(p?.membership, now);
 }
 
 function deriveStatus(p: MemberProfileItem | undefined): 'active' | 'expiring' | 'expired' {
@@ -79,26 +84,17 @@ export async function handler(
     ...registrations.filter((r) => r.consumedFrom !== 'TRIAL').map((r) => r.userId),
     ...waitlist.map((w) => w.member),
   ]));
-  const profiles = await Promise.all(
-    memberIds.map((id) => ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${id}`, SK: 'PROFILE' } }))),
-  );
+  // Profiles, plus every listed member's memberships/punch cards (one Query
+  // per prefix per member — a roster is a handful of people), then one
+  // product-name batch.
+  const now = new Date();
+  const [profiles, planItems] = await Promise.all([
+    Promise.all(memberIds.map((id) => ddb.send(new GetCommand({ TableName: TABLE_NAME, Key: { PK: `MEMBER#${id}`, SK: 'PROFILE' } })))),
+    queryPlanItems(memberIds),
+  ]);
   const profileById = new Map(memberIds.map((id, i) => [id, profiles[i].Item as MemberProfileItem | undefined]));
-
-  // Resolve the actual MembershipItem each registration was booked against
-  // (rather than the member's current active membership — the reg may be
-  // for a past date) so CUSTOM_MIGRATION bridges resolve to a readable
-  // subtitle instead of the empty legacy profile.membership bag.
-  const membershipRegs = registrations.filter(
-    (r) => (r.consumedFrom === 'MEMBERSHIP' || r.consumedFrom === 'FUTURE_SUBSCRIPTION') && r.membershipId,
-  );
-  const memberships = await Promise.all(
-    membershipRegs.map((r) => ddb.send(new GetCommand({
-      TableName: TABLE_NAME,
-      Key: { PK: `MEMBER#${r.userId}`, SK: `MEMBERSHIP#${r.targetMonth}#${r.membershipId}` },
-    }))),
-  );
-  const membershipByRegKey = new Map(
-    membershipRegs.map((r, i) => [`${r.userId}#${r.membershipId}`, memberships[i].Item as FullMembershipItem | undefined]),
+  const productNames = await loadProductNames(
+    Array.from(planItems.values()).flatMap((i) => i.memberships.map((m) => m.productId ?? '')),
   );
 
   const registered = registrations.map((r) => {
@@ -109,8 +105,8 @@ export async function handler(
       return { id: r.userId, name: r.fullName || 'Trial Trainee', subtitle: '', membershipStatus: 'active' as const, isTrial: true, brand: 'incore' as const };
     }
     const p = profileById.get(r.userId);
-    const membership = membershipByRegKey.get(`${r.userId}#${r.membershipId}`);
-    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p, membership), membershipStatus: deriveStatus(p), isTrial: false, brand: p?.identity?.brand ?? 'incore' };
+    const bookedId = r.consumedFrom === 'MEMBERSHIP' || r.consumedFrom === 'FUTURE_SUBSCRIPTION' ? r.membershipId : undefined;
+    return { id: r.userId, name: deriveName(p), subtitle: deriveSubtitle(p, planItems.get(r.userId), productNames, now, bookedId), membershipStatus: deriveStatus(p), isTrial: false, brand: p?.identity?.brand ?? 'incore' };
   });
 
   const waitlistOut = waitlist.map((w) => {
@@ -118,7 +114,7 @@ export async function handler(
     return {
       id: w.member,
       name: deriveName(p),
-      subtitle: deriveSubtitle(p),
+      subtitle: deriveSubtitle(p, planItems.get(w.member), productNames, now),
       membershipStatus: deriveStatus(p),
       since: w.since,
       status: w.status,

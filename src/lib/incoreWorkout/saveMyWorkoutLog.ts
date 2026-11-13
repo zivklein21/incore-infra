@@ -12,6 +12,7 @@ import {
   type RegistrationItem,
 } from '../entities';
 import { cleanSets, exerciseKey, muscleGroupsOf, toWorkoutLogDto } from '../incoreExercises';
+import { refreshLastWeights } from './lastWeights';
 
 const MAX_EXERCISES = 30;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -133,6 +134,12 @@ export async function handler(
   };
 
   await ddb.send(new PutCommand({ TableName: TABLE_NAME, Item: item }));
+
+  // Keep the per-exercise "last working weight" pointers current for every
+  // exercise this save added, changed or dropped. Derived data only: a
+  // failure here must never fail the save (the next read rebuilds).
+  const touched = [...new Set([...exercises.map((e) => e.exerciseId), ...previousById.keys()])];
+  await refreshLastWeights(callerUid, touched).catch((err) => console.error('[saveMyWorkoutLog] lastWeights refresh failed', err));
 
   return json(200, { success: true, log: toWorkoutLogDto(item) });
 }

@@ -1,6 +1,6 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { getUid, json } from '../lib/http';
-import { getReminderSettings, getScheduleAlertSettings } from '../lib/notificationTiming';
+import { getReminderSettings, getScheduleAlertSettings, getWorkoutLogReminderSettings } from '../lib/notificationTiming';
 
 // GET or POST /getNotificationTimingSettings
 // Auth: Cognito JWT (any signed-in member — no admin check in the original)
@@ -14,10 +14,12 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   getUid(event); // enforces the JWT authorizer already ran; matches original's auth-only check
 
-  const [reminder, scheduleAlert] = await Promise.all([
+  const [reminder, scheduleAlert, workoutLogReminder] = await Promise.all([
     getReminderSettings(),
     getScheduleAlertSettings(),
+    getWorkoutLogReminderSettings(),
   ]);
 
-  return json(200, { reminder, scheduleAlert });
+  // workoutLogReminder is additive: older apps ignore the extra key.
+  return json(200, { reminder, scheduleAlert, workoutLogReminder });
 }

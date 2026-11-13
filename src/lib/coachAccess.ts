@@ -4,7 +4,6 @@ import { resolveMemberProfile } from './memberLookup';
 export interface CoachPermissions {
   attendance: 'none' | 'read' | 'write';
   performance: 'none' | 'read';
-  healthDeclarations: 'none' | 'read';
   /** Recording/deleting FORCA test attempts (write) vs. only viewing a trainee's attempt history (read) — split off from `performance` since that only ever gated viewing before. */
   testsGrading: 'none' | 'read' | 'write';
   /** The session pack-list check-out/return actions AND managing the global Equipment Pool catalog itself (adminSaveEquipment.ts/adminDeleteEquipment.ts) — split off from `attendance` so a coach can run a session without necessarily managing equipment. No 'read' tier: there's no equipment view separate from the session screen/pool list itself. */
@@ -23,11 +22,11 @@ export interface CoachAccess {
 }
 
 const ADMIN_PERMISSIONS: CoachPermissions = {
-  attendance: 'write', performance: 'read', healthDeclarations: 'read',
+  attendance: 'write', performance: 'read',
   testsGrading: 'write', equipment: 'write', workoutPlans: 'write', notifications: 'write',
 };
 const DENIED_PERMISSIONS: CoachPermissions = {
-  attendance: 'none', performance: 'none', healthDeclarations: 'none',
+  attendance: 'none', performance: 'none',
   testsGrading: 'none', equipment: 'none', workoutPlans: 'none', notifications: 'none',
 };
 
@@ -36,7 +35,7 @@ const DENIED_PERMISSIONS: CoachPermissions = {
 // always have (view everything, mark attendance, grade tests, manage
 // equipment, notify her own trainees).
 export const DEFAULT_COACH_PERMISSIONS: CoachPermissions = {
-  attendance: 'write', performance: 'read', healthDeclarations: 'read',
+  attendance: 'write', performance: 'read',
   testsGrading: 'write', equipment: 'write', workoutPlans: 'read', notifications: 'write',
 };
 
@@ -53,8 +52,6 @@ export function parseCoachPermissions(raw: unknown, fallback: Partial<CoachPermi
     ? r.attendance : (fallback.attendance ?? DEFAULT_COACH_PERMISSIONS.attendance);
   const performance = r.performance === 'read' || r.performance === 'none'
     ? r.performance : (fallback.performance ?? DEFAULT_COACH_PERMISSIONS.performance);
-  const healthDeclarations = r.healthDeclarations === 'read' || r.healthDeclarations === 'none'
-    ? r.healthDeclarations : (fallback.healthDeclarations ?? DEFAULT_COACH_PERMISSIONS.healthDeclarations);
   const testsGrading = r.testsGrading === 'read' || r.testsGrading === 'write' || r.testsGrading === 'none'
     ? r.testsGrading : (fallback.testsGrading ?? DEFAULT_COACH_PERMISSIONS.testsGrading);
   const equipment = r.equipment === 'write' || r.equipment === 'none'
@@ -63,7 +60,7 @@ export function parseCoachPermissions(raw: unknown, fallback: Partial<CoachPermi
     ? r.workoutPlans : (fallback.workoutPlans ?? DEFAULT_COACH_PERMISSIONS.workoutPlans);
   const notifications = r.notifications === 'write' || r.notifications === 'none'
     ? r.notifications : (fallback.notifications ?? DEFAULT_COACH_PERMISSIONS.notifications);
-  return { attendance, performance, healthDeclarations, testsGrading, equipment, workoutPlans, notifications };
+  return { attendance, performance, testsGrading, equipment, workoutPlans, notifications };
 }
 
 export function groupInAccess(access: CoachAccess, groupId: string | undefined): boolean {

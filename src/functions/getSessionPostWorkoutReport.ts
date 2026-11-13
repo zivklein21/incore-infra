@@ -77,7 +77,7 @@ export async function handler(
     // ForcaSessionDetailPanel usage; WorkoutLogGradingPanel filters this down
     // to actualAttendance==='present' itself (only an attended trainee has
     // anything to log).
-    roster: detail.roster.map((r) => ({ memberId: r.memberId, name: r.name, actualAttendance: r.actualAttendance })),
+    roster: detail.roster.map((r) => ({ memberId: r.memberId, name: r.name, actualAttendance: r.actualAttendance, medicalAlert: r.medicalAlert })),
     workoutLogStatus,
     runningReports,
   });

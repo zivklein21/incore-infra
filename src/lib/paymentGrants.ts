@@ -5,6 +5,7 @@ import { ddb, TABLE_NAME } from './dynamo';
 import type { MembershipItem, ProductItem, RegistrationItem } from './entities';
 import { putPunchCardItem } from './punchCards';
 import { queryFutureSubscriptionRegistrations, queryAllActiveMemberships, queryMembershipForMonth, queryMembershipsForMonth } from './membershipQueries';
+import { shouldSupersede } from './membershipExpiry';
 
 // Shared payment-success/payment-failure business logic, called by the
 // HYP-driven flow (hypPayments.ts) and adminEvictFutureRegistrations.ts.
@@ -99,8 +100,14 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
     return;
   }
 
-  // ── Supersede any other ACTIVE membership before creating the new one ─────
-  const priorActive = await queryAllActiveMemberships(userId);
+  // ── Supersede the ACTIVE memberships this one replaces ────────────────────
+  // Ones that overlap it or have already ended. A membership still running
+  // that ends before this one starts (next month bought early) runs to its
+  // own end; expireMemberships closes it then. Before, it was expired on the
+  // spot and the member lost the rest of the month they'd paid for.
+  const grantNow = new Date();
+  const priorActive = (await queryAllActiveMemberships(userId))
+    .filter((old) => shouldSupersede(old, new Date(startDate).toISOString(), grantNow));
 
   // ── Collect all FUTURE_SUBSCRIPTION registrations for this month ──────────
   const futureRegs = await queryFutureSubscriptionRegistrations(userId, targetMonth);
@@ -124,6 +131,8 @@ export async function handlePaymentSuccess(userId: string, payload: PaymentSucce
       membershipId,
       productId,
       productName,
+      // ACTIVE even when bought for next month: its startDate says when it
+      // begins, and readers pick the one covering today/the class by date.
       status: 'ACTIVE',
       targetMonth,
       startDate: new Date(startDate).toISOString(),
@@ -230,7 +239,10 @@ export async function grantPunchCardSessions(userId: string, productId: string, 
 
 // ─── payment_failed / subscription_cancelled handler ─────────────────────────
 
-export async function handlePaymentFailure(userId: string, targetMonth: string): Promise<void> {
+// evictBookings: false for the billing-agreement path — there the hourly
+// expireMemberships job cancels the bookings the membership paid for (with
+// proper cancel records, freed seats and the member's push) once it's expired.
+export async function handlePaymentFailure(userId: string, targetMonth: string, opts: { evictBookings?: boolean } = {}): Promise<void> {
   const nowIso = new Date().toISOString();
 
   const monthMembership = await queryMembershipForMonth(userId, targetMonth);
@@ -259,7 +271,7 @@ export async function handlePaymentFailure(userId: string, targetMonth: string):
     console.log(`[paymentGrants] Expired ${priorActive.length} membership(s) for ${userId} after failed renewal (${targetMonth})`);
   }
 
-  await evictFutureRegistrations(userId, targetMonth);
+  if (opts.evictBookings !== false) await evictFutureRegistrations(userId, targetMonth);
 }
 
 // ─── Eviction routine ─────────────────────────────────────────────────────

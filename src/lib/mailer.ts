@@ -8,12 +8,14 @@ import * as nodemailer from 'nodemailer';
 //                         yet, sandbox rejecting an unverified recipient,
 //                         client unavailable, ...) send via Gmail instead, so
 //                         no member ever misses a password-reset code.
-//  - 'ses':               SES only, once production access is granted.
+//  - 'ses':               SES only. Current setting: SES production access
+//                         was granted (case 179277066200702), so every email
+//                         now comes from our domain and never from Gmail.
 // A code constant rather than a Lambda env var on purpose: env vars are set
 // on the shared aws_lambda_function.fn block, so changing one redeploys all
 // ~330 functions; this keeps the switch to the three sending functions.
 export type MailProvider = 'gmail' | 'ses_with_fallback' | 'ses';
-export const MAIL_PROVIDER: MailProvider = 'ses_with_fallback';
+export const MAIL_PROVIDER: MailProvider = 'ses';
 
 // Sender settings: set the env var to override, otherwise these defaults apply.
 // A new From address must also match ses.tf's local.ses_from_address — the

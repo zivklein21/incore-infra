@@ -282,9 +282,11 @@ resource "aws_lambda_function" "cognito_trigger_fn" {
   layers           = [aws_lambda_layer_version.dependencies.arn]
 
   environment {
-    variables = {
+    variables = merge({
       TABLE_NAME       = aws_dynamodb_table.incore_table.name
       FORCA_TABLE_NAME = aws_dynamodb_table.forca_table.name
-    }
+      }, each.key == "cognitoCustomEmailSender" ? {
+      COGNITO_EMAIL_KMS_KEY_ARN = aws_kms_key.cognito_email.arn
+    } : {})
   }
 }

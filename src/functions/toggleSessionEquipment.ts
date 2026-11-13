@@ -72,7 +72,12 @@ export async function handler(
       : null;
     const trainingType = trainingTypeRes?.Item as TrainingTypeItem | undefined;
     const requirement = trainingType?.equipmentRequirements?.find((r) => r.equipmentId === equipmentId);
-    if (requirement?.mode === 'custom') {
+    // This session's own quantity wins over anything computed — same order
+    // of precedence as computeSessionEquipment().
+    const sessionQuantity = (session.equipmentOverride?.items ?? session.manualEquipment)?.find((m) => m.equipmentId === equipmentId)?.quantity;
+    if (sessionQuantity !== undefined) {
+      neededQuantity = sessionQuantity;
+    } else if (requirement?.mode === 'custom') {
       neededQuantity = requirement.customQuantity ?? 0;
     } else if (requirement?.mode === 'per_member') {
       const regsRes = await ddb.send(new QueryCommand({

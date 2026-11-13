@@ -4,6 +4,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { SupportInquiryItem } from '../lib/entities';
+import { INCORE_ADMIN_UNREAD_FILTER, isIncoreUnreadFor } from '../lib/incoreChatRead';
 
 // GET or POST /getAllInquiries
 // Auth: Cognito JWT, caller must be admin
@@ -16,6 +17,33 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
+
+  // ?openCount=1 — the admin tab bar's support badge (app 1.5.2+): just the
+  // number of open inquiries waiting on an admin reply, instead of every
+  // inquiry. Still a Scan (INCORE inquiries have no index yet; DynamoDB
+  // bills a Scan by data read even with Select COUNT), but it returns one
+  // number and follows every page, so the badge no longer misses inquiries
+  // past the first 1 MB. The index-based fix is phase 2 of the history-
+  // paging work.
+  const openCountParam = event.queryStringParameters?.openCount;
+  if (openCountParam === '1' || openCountParam === 'true') {
+    let openCount = 0;
+    let lastKey: Record<string, unknown> | undefined;
+    do {
+      const page = await ddb.send(new ScanCommand({
+        TableName: TABLE_NAME,
+        Select: 'COUNT',
+        // Unread for the admin: open, the member wrote last, after the admin's read marker.
+        FilterExpression: INCORE_ADMIN_UNREAD_FILTER,
+        ExpressionAttributeNames: { '#status': 'status' },
+        ExpressionAttributeValues: { ':prefix': 'INQUIRY#', ':metadata': 'METADATA', ':open': 'OPEN', ':member': 'member' },
+        ExclusiveStartKey: lastKey,
+      }));
+      openCount += page.Count ?? 0;
+      lastKey = page.LastEvaluatedKey;
+    } while (lastKey);
+    return json(200, { openCount });
+  }
 
   const res = await ddb.send(new ScanCommand({
     TableName: TABLE_NAME,
@@ -35,6 +63,7 @@ export async function handler(
       lastSender: i.lastSender ?? 'member',
       createdAt: i.createdAt ?? null,
       lastMessageAt: i.lastMessageAt ?? null,
+      unread: isIncoreUnreadFor(i, 'admin'),
     }))
     .sort((a, b) => (b.lastMessageAt ?? b.createdAt ?? '').localeCompare(a.lastMessageAt ?? a.createdAt ?? ''));
 

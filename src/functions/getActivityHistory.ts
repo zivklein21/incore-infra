@@ -1,11 +1,12 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
+import { GetCommand, QueryCommand, type QueryCommandInput } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { decodeRowCursor, windowRows } from '../lib/datePaging';
 import type { CancellationItem, ClassItem, MembershipItem, RegistrationItem } from '../lib/entities';
 
-// GET or POST /getActivityHistory?memberId=xxx
+// GET or POST /getActivityHistory?memberId=xxx[&paged=1&filter=<chip>&cursor=…]
 // Auth: Cognito JWT. Defaults to caller's own history; a different memberId
 // requires admin (same pattern as getProfile.ts/getWallet.ts).
 //
@@ -29,24 +30,28 @@ export async function handler(
   const memberId = event.queryStringParameters?.memberId || callerUid;
   if (memberId !== callerUid && !(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  const [regsRes, cancelsRes] = await Promise.all([
-    ddb.send(new QueryCommand({
+  const qs = event.queryStringParameters ?? {};
+  const paged = qs.paged === '1' || qs.paged === 'true';
+  const filter = (qs.filter ?? 'all') as ActivityFilter;
+  const cursor = paged && qs.cursor ? decodeRowCursor(qs.cursor) : null;
+  if (paged && qs.cursor && !cursor) return json(400, { error: 'invalid_cursor' });
+
+  const [registrations, cancellations] = await Promise.all([
+    queryAll<RegistrationItem>({
       TableName: TABLE_NAME,
       IndexName: 'GSI1',
       KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
       FilterExpression: '#status = :registered',
       ExpressionAttributeNames: { '#status': 'status' },
       ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'REG#', ':registered': 'REGISTERED' },
-    })),
-    ddb.send(new QueryCommand({
+    }),
+    queryAll<CancellationItem>({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
       ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'CANCEL#' },
-    })),
+    }),
   ]);
 
-  const registrations = (regsRes.Items ?? []) as RegistrationItem[];
-  const cancellations = (cancelsRes.Items ?? []) as CancellationItem[];
   const now = new Date();
 
   const classIds = Array.from(new Set([
@@ -98,5 +103,40 @@ export async function handler(
     (a, b) => new Date(b.classDate as string).getTime() - new Date(a.classDate as string).getTime(),
   );
 
-  return json(200, { items });
+  if (!paged) return json(200, { items });
+
+  // ?paged=1 (app 1.5.2+): the status filter runs here so it covers the full
+  // history, then 1 month per page, newest first. A month with nothing
+  // matching is skipped, and nextCursor is set only while older matching
+  // activity exists.
+  const matching = items.filter((i) => matchesActivityFilter(String(i.status), filter));
+  const page = windowRows(matching.map((i) => ({ i, date: String(i.classDate), id: String(i.id) })), cursor, { months: ACTIVITY_WINDOW_MONTHS });
+  return json(200, { items: page.items.map((x) => x.i), nextCursor: page.nextCursor, coveredFrom: page.coveredFrom });
+}
+
+const ACTIVITY_WINDOW_MONTHS = 1;
+
+type ActivityFilter = 'all' | 'arrived' | 'late_cancel' | 'legal_cancel' | 'admin_cancel';
+
+/** Same groups as the app's filter chips (ActivityHistoryList.tsx matchesFilter). */
+export function matchesActivityFilter(status: string, filter: ActivityFilter): boolean {
+  switch (filter) {
+    case 'arrived':      return status === 'REGISTERED' || status === 'ATTENDED' || status === 'COMPLETED';
+    case 'late_cancel':  return status === 'LATE_CANCELLED' || status === 'NO_SHOW';
+    case 'legal_cancel': return status === 'LEGALLY_CANCELLED' || status === 'LEGAL_CANCELLED' || status === 'SWAPPED';
+    case 'admin_cancel': return status === 'ADMIN_CANCELLED';
+    default:             return true;
+  }
+}
+
+/** Every page of a Query (a single call stops at 1 MB). */
+async function queryAll<T>(input: QueryCommandInput): Promise<T[]> {
+  const out: T[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const res = await ddb.send(new QueryCommand({ ...input, ExclusiveStartKey: lastKey }));
+    out.push(...((res.Items ?? []) as T[]));
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
+  return out;
 }

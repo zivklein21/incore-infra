@@ -46,7 +46,8 @@ export async function handler(
   const lookups = await fetchSessionLookups(sessionItems);
   const sessions = await Promise.all(sessionItems.map(async (session) => {
     const detail = await resolveSessionDetail(session, lookups, access);
-    const roster = detail.roster.map((r) => ({ ...r, attendanceMatch: computeAttendanceMatch(r) }));
+    // The medical alert is only for the live attendance list and test grading.
+    const roster = detail.roster.map(({ medicalAlert: _, ...r }) => ({ ...r, attendanceMatch: computeAttendanceMatch({ ...r, medicalAlert: null }) }));
     return { ...detail, roster };
   }));
 

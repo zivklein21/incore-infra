@@ -9,6 +9,7 @@ import { ddb, tableForBrand } from '../lib/dynamo';
 import { s3, BUCKET_NAME } from '../lib/s3';
 import type { MemberProfileItem } from '../lib/entities';
 import { allConsentStatuses } from '../lib/photoConsent/store';
+import { forcaRowLabel, legacyPlanLabel, loadForcaGroupNames, planLabelsFor, scanAllPlanItems } from '../lib/memberPlanLabel';
 
 const PHOTO_URL_EXPIRY_SECONDS = 900;
 
@@ -59,6 +60,16 @@ export async function handler(
     return null;
   });
 
+  // The row label (plan name for INCORE, group for FORCA), resolved here so
+  // the list needs no per-member calls — see lib/memberPlanLabel.ts.
+  const now = new Date();
+  // Best effort, like the consents above: without it rows fall back to ''.
+  const empty = (err: unknown) => { console.error('[getAllMembers] row label lookup failed', err); return new Map<string, string>(); };
+  const [planLabels, groupNames] = await Promise.all([
+    brand === 'incore' ? scanAllPlanItems().then((items) => planLabelsFor(items, now)).catch(empty) : Promise.resolve(new Map<string, string>()),
+    brand === 'forca' ? loadForcaGroupNames().catch(empty) : Promise.resolve(new Map<string, string>()),
+  ]);
+
   const members = await Promise.all(profiles
     .filter((p) => (p.identity?.role ?? p.role) !== 'admin')
     .map(async (p) => {
@@ -108,7 +119,15 @@ export async function handler(
         name: deriveName(p),
         email: p.identity?.email ?? p.email ?? '',
         phone: p.identity?.phone ?? p.phone ?? '',
-        subtitle: typeof p.membership?.plan === 'string' ? p.membership.plan : '',
+        // INCORE: the current plan ('' = really none; the app shows "No
+        // active plan"). FORCA: the trainee's group. The legacy
+        // profile.membership.plan is only a last resort for INCORE (an
+        // admin badge override, adminUpdateMemberMembershipBadge.ts).
+        subtitle: brand === 'forca'
+          ? forcaRowLabel({ role, accountType, groupId: p.identity?.groupId ?? null, groupIds: p.identity?.groupIds ?? [] }, groupNames)
+          : (planLabels.get(id) || legacyPlanLabel(p.membership, now)),
+        planName: brand === 'incore' ? (planLabels.get(id) || null) : null,
+        groupName: brand === 'forca' && p.identity?.groupId ? (groupNames.get(p.identity.groupId) ?? null) : null,
         membershipStatus: deriveStatus(p.membership?.status),
         membershipType: typeof p.membership?.type === 'string' ? p.membership.type : null,
         healthForm: forms.health_form === true,

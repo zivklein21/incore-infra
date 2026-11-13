@@ -1,8 +1,7 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
-import { QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
+import { FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
-import type { RunningReportItem } from '../lib/entities';
+import { runningReportHistory } from '../lib/runningReportHistory';
 
 // GET or POST /getMyRunningReports
 // Auth: Cognito JWT, any signed-in FORCA member — her own running-session
@@ -16,21 +15,7 @@ export async function handler(
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
 
-  const res = await ddb.send(new QueryCommand({
-    TableName: FORCA_TABLE_NAME,
-    IndexName: 'GSI1',
-    KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :skPrefix)',
-    ExpressionAttributeValues: { ':pk': `MEMBER#${callerUid}`, ':skPrefix': 'RUNNINGREPORT#' },
-  }));
-
-  const reports = ((res.Items ?? []) as RunningReportItem[])
-    .map((r) => ({
-      classId: r.classId,
-      perceivedExertion: r.perceivedExertion,
-      averagePace: r.averagePace,
-      loggedAt: r.loggedAt,
-    }))
-    .sort((a, b) => b.loggedAt.localeCompare(a.loggedAt));
-
-  return json(200, { reports });
+  const result = await runningReportHistory(FORCA_TABLE_NAME, callerUid, event.queryStringParameters ?? {});
+  if (!result.ok) return json(400, { error: result.error });
+  return json(200, result.body);
 }

@@ -64,6 +64,30 @@ export interface ClassItem {
   traineeNoteUpdatedAt?: string;
   traineeNoteUpdatedBy?: string;
   traineeEquipment?: string[];
+  /** Special activities only (Manage → Activities): how families get there / back, and special risks or safety notes. Shown on attached forms (formTemplates/activityFields.ts). */
+  transport?: string;
+  safetyNotes?: string;
+  isSpecialActivity?: boolean;
+  description?: string;
+  // Set once a push about this exact session has gone out to its trainees
+  // (see lib/sessionInfo/notifySession.ts) — one of the two things that make
+  // a later plan/equipment edit push an update (shouldNotifySessionUpdate()).
+  traineesNotifiedAt?: string;
+  // Per-session overrides, made from the coach/admin "edit this session"
+  // screen (lib/sessionEdit/). Both survive any change to the recurring
+  // template or to the library plan — see adminSaveRecurringSession.ts.
+  //
+  // planOverride: workoutPlanId points at this session's private plan copy
+  // (WorkoutPlanItem.sessionCopyOf), so logging/reports/equipment all follow
+  // it unchanged. basePlanId is where "Reset to original" returns to.
+  planOverride?: { basePlanId: string; basePlanName: string; editedAt: string; editedBy: SessionEditor };
+  // equipmentOverride: the session's complete, ordered pack list. Replaces
+  // the computed one (Training Type + plan + manualEquipment) outright, so an
+  // empty `items` is a real "nothing needed", distinct from no override.
+  equipmentOverride?: { items: { equipmentId: string; quantity: number }[]; editedAt: string; editedBy: SessionEditor };
+  // Who edited or reset this session's overrides and when, oldest first,
+  // capped at SESSION_EDIT_LOG_MAX entries.
+  sessionEditLog?: SessionEditLogEntry[];
   location?: string;
   // Denormalized at creation time (see createTrainingSession.ts /
   // getCoachOptions.ts) rather than resolved by id on read — a coach lives
@@ -116,6 +140,15 @@ export interface ClassItem {
   closedBy?: string;
   /** ISO 8601 — the session's scheduled end instant, denormalized from its RecurringSessionItem template's own endTime (see adminSaveRecurringSession.ts/lib/sessionInstance.ts) at the moment this instance was materialized. Purely informational (display/calendar-export), same as RecurringSessionItem.endTime — closeSession.ts's closedAt is still what actually marks a session done, regardless of whether the clock has passed this. */
   endDate?: string;
+}
+
+export interface SessionEditor { uid: string; name: string; role: 'admin' | 'coach' }
+
+export interface SessionEditLogEntry {
+  at: string;
+  by: SessionEditor;
+  action: 'edit' | 'reset';
+  parts: ('plan' | 'equipment')[];
 }
 
 // PK=RECURRINGSESSION#<id>  SK=METADATA
@@ -1002,12 +1035,12 @@ export interface WorkoutPlanItem {
   /** Superseded by the 6 fields above — kept only so any plan saved before this redesign still round-trips its old text instead of silently losing it. Not written or shown by the current builder UI. */
   description?: string;
   /**
-   * Set only on a private per-session copy (see assignSessionWorkoutPlan.ts's
-   * customizeForSession) — the plan it was copied from, and the one ClassItem
-   * it belongs to. Edited in the normal builder like any plan, so logging/
-   * equipment/reports work unchanged, but hidden from every plan list/picker
-   * (library, recurring-template picker, search) — the original plan is
-   * never touched by edits to its copy.
+   * Set only on a private per-session copy (see lib/sessionEdit/) — the plan
+   * it was copied from, and the one ClassItem it belongs to. A normal plan
+   * to every reader, so logging/equipment/reports work unchanged, but hidden
+   * from every plan list/picker (library, recurring-template picker, search)
+   * and closed to the plan builder: its sections can only be changed in
+   * place, through saveSessionOverride — the original is never touched.
    */
   sessionCopyOf?: string;
   sessionClassId?: string;
@@ -1145,6 +1178,9 @@ export interface SupportInquiryItem {
   lastMessageAt?: string;
   lastSender?: 'member' | 'admin';
   createdAt?: string;
+  // Read markers (app 1.5.2+, see lib/incoreChatRead.ts).
+  memberReadAt?: string;
+  adminReadAt?: string;
 }
 
 // PK=INQUIRY#<id>  SK=MESSAGE#<messageId>
@@ -1170,7 +1206,8 @@ export interface SupportInquiryMessageItem {
 // "order stays keyed to the child" convention as MerchOrderItem/
 // ForcaSubscriptionOrderItem — a parent sending on a linked daughter's
 // behalf still shows up in the daughter's own inbox.
-// GSI2PK='FORCAINQUIRY' GSI2SK=<createdAtIso>#<id> — global chronological
+// GSI2PK='FORCAINQUIRY' GSI2SK=<lastMessageAt>#<id> (was <createdAtIso>#<id>
+// before the chat rebuild; the migration re-keys it) — global chronological
 // listing for the admin inbox (getAllForcaInquiries.ts), which — unlike a
 // coach — sees every inquiry regardless of recipientRole.
 //
@@ -1207,15 +1244,45 @@ export interface ForcaSupportInquiryItem {
   childName?: string;
   payerUid?: string;
   payerName?: string;
+
+  // ── Chat rebuild (app 1.5.2+, see lib/forcaChat/access.ts) ──
+  // Each thread belongs to the account that started it: a parent's thread is
+  // hers, never her daughter's, and vice versa. Unset on threads from before
+  // the rebuild: ownerOf() falls back to payerUid, then userId.
+  // GSI1PK is MEMBER#<ownerUid> (the owner's inbox).
+  ownerUid?: string;
+  ownerRole?: 'trainee' | 'parent';
+  ownerName?: string;
+  // Parent threads: the child the thread is about (also in userId/childUid).
+  aboutChildUid?: string;
+  aboutChildName?: string;
+  // One recipient: the admin inbox, or one coach (recipientUid). A coach
+  // thread without recipientUid is a pre-rebuild group thread, visible to
+  // every coach currently assigned to groupId.
+  recipientUid?: string;
+  recipientName?: string;
+  // Read markers: the owner's side, and the recipient's side.
+  memberReadAt?: string;
+  recipientReadAt?: string;
+  // True when every message key is MESSAGE#<iso>#<uuid>, so messages can be
+  // paged by key. Older threads have MESSAGE#<uuid> keys and page in memory.
+  sortableMessages?: boolean;
+  // GSI2SK / GSI3SK = <lastMessageAt>#<id> (newest activity first).
+  // GSI3PK = FORCACHAT#admin | FORCACHAT#coach#<uid> | FORCACHAT#group#<groupId>.
+  GSI3PK?: string; GSI3SK?: string;
 }
 
-// PK=FORCAINQUIRY#<id>  SK=MESSAGE#<messageId>
+// PK=FORCAINQUIRY#<id>  SK=MESSAGE#<iso>#<uuid> (MESSAGE#<uuid> before the rebuild)
 export interface ForcaSupportInquiryMessageItem {
   PK: string; SK: string;
   sender: 'member' | 'admin' | 'coach' | 'system';
   text: string;
   messageKey?: string;
   createdAt: string;
+  senderUid?: string;
+  senderName?: string;
+  /** The admin's auto-reply (lib/forcaChat/settings.ts): no push, not an answer. */
+  isAutoReply?: boolean;
 }
 
 // ─── FORCA Weekly Tasks (Homework) ──────────────────────────────────────────
@@ -1253,9 +1320,14 @@ export interface WeeklyTaskItem {
   exerciseIds?: string[];
   /** Running task — instead of a plain "done" toggle, the trainee fills in a perceived-exertion + average-pace report to complete it, same shape as a running session's own post-workout report (see RunningSessionReportScreen.tsx / saveRunningReport.ts). Mutually exclusive with `measurable` above — a task is one type or the other, same one-type-per-task shape as a training session's own isRunningSession vs assigned Workout Plan. */
   running: boolean;
+  /** Set only when running === true — what kind of run this is; drives the badge on the trainee's task card and which row the pace calculator highlights (see runPace.ts in incore-app). Required on save for a running task; absent on running tasks saved before it existed. */
+  runType?: WeeklyTaskRunType;
   createdAt: string;
   createdBy: string;
 }
+
+export const WEEKLY_TASK_RUN_TYPES = ['volume', 'intervals', 'hills', 'fartlek'] as const;
+export type WeeklyTaskRunType = typeof WEEKLY_TASK_RUN_TYPES[number];
 
 // PK=WEEKLYTASK#<taskId>  SK=COMPLETION#<uid>
 // GSI1PK=MEMBER#<uid> GSI1SK=WEEKLYTASKCOMPLETION#<taskId> — a trainee's own
@@ -1335,6 +1407,15 @@ export interface CancellationItem {
 // GSI1PK="ROLE#admin" GSI1SK=MEMBER#<uid> — set only when role/identity.role is 'admin'.
 // GSI3PK=EMAIL#<email> GSI3SK=MEMBER#<uid> — set whenever email is known, for
 // pre-login lookups (e.g. the forgot-password OTP flow in otp.ts).
+export interface MedicalAlertLogEntry {
+  at: string;
+  by: { uid: string; name: string; role: 'admin' | 'coach' };
+  action: 'created' | 'changed' | 'turned_on' | 'turned_off';
+  /** The alert as it stood after this change. */
+  enabled: boolean;
+  text: string;
+}
+
 export interface MemberProfileItem {
   PK: string; SK: string;
   name?: string;
@@ -1363,9 +1444,16 @@ export interface MemberProfileItem {
   // shape/comments (testsGrading/equipment/workoutPlans/notifications were
   // added after this field first shipped — getCoachAccess()/
   // parseCoachPermissions() backfill those from DEFAULT_COACH_PERMISSIONS
-  // for any profile stored under an older shape). 'performance'/
-  // 'healthDeclarations' stay read-only concepts (no performance-editing UI
-  // exists; a coach never edits a trainee's health declaration).
+  // for any profile stored under an older shape). 'performance' stays a
+  // read-only concept (no performance-editing UI exists).
+  // FORCA quick dial: set by the trainee's parent or an admin (lib/quickDial.ts).
+  // A third party's details, so scrubForArchive() drops it on member deletion.
+  emergencyContact?: { name: string; phone: string };
+  // FORCA medical alert (lib/medicalAlert.ts): the only medical information
+  // coaches may see, and only through activeMedicalAlert(). The log stays
+  // admin-only, and both are kept on member deletion like the medical forms.
+  medicalAlert?: { enabled: boolean; text: string; updatedAt: string; updatedBy: { uid: string; name: string; role: 'admin' | 'coach' } };
+  medicalAlertLog?: MedicalAlertLogEntry[];
   identity?: {
     role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;
     email?: string; phone?: string; birthday?: string | number;
@@ -1375,7 +1463,6 @@ export interface MemberProfileItem {
     coachPermissions?: {
       attendance: 'none' | 'read' | 'write';
       performance: 'none' | 'read';
-      healthDeclarations: 'none' | 'read';
       testsGrading?: 'none' | 'read' | 'write';
       equipment?: 'none' | 'write';
       workoutPlans?: 'none' | 'read' | 'write';

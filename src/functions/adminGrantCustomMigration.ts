@@ -4,6 +4,7 @@ import { GetCommand, QueryCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { adminIdentity, auditEntry } from '../lib/membershipAudit';
 import { monthKey } from '../lib/entities';
 
 // POST /adminGrantCustomMigration
@@ -81,9 +82,8 @@ export async function handler(
   const membershipId = randomUUID();
   const nowIso = new Date().toISOString();
 
-  await ddb.send(new PutCommand({
-    TableName: TABLE_NAME,
-    Item: {
+  const by = await adminIdentity(adminUid);
+  const item = {
       PK: `MEMBER#${memberId}`,
       SK: `MEMBERSHIP#${targetMonth}#${membershipId}`,
       membershipId,
@@ -106,7 +106,10 @@ export async function handler(
       createdAt: nowIso,
       updatedAt: nowIso,
       createdByAdmin: adminUid,
-    },
+  };
+  await ddb.send(new PutCommand({
+    TableName: TABLE_NAME,
+    Item: { ...item, manualLog: [auditEntry(by, 'created', 'adminGrantCustomMigration', null, item, {}, nowIso)] },
   }));
 
   console.log(`[adminGrantCustomMigration] admin=${adminUid} member=${memberId} month=${targetMonth} membershipId=${membershipId} status=${status}`);

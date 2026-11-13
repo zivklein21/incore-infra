@@ -240,7 +240,7 @@ locals {
     getSessionWorkoutPlan                   = { method = "GET" } # FORCA Tracker feature: trainee's own measurable session workout
     getSupportSettings                      = { method = "ANY" }
     getTermsOfServiceContent                = { method = "ANY" }
-    getTraineeOrthopedicForm                = { method = "ANY" } # FORCA: coach/admin review of a trainee's Orthopedic Medical Form
+    getTraineeOrthopedicForm                = { method = "ANY" } # FORCA: admin review of a trainee's Orthopedic Medical Form
     getTrainingHistory                      = { method = "GET" } # FORCA Coach feature: admin or coach with attendance != 'none', scoped to her own sessions
     getTrainingTypes                        = { method = "GET" } # FORCA Coach feature
     getUploadUrl                            = { method = "POST" }
@@ -323,14 +323,16 @@ locals {
   # their own function anymore. All JWT-authenticated. GET/POST only (not
   # ANY), so none needs a dedicated OPTIONS preflight route either.
   incore_workout_routes = {
-    adminDeleteIncoreExercise = "POST" # admin: delete a catalog exercise
-    adminListIncoreExercises  = "GET"  # admin: catalog incl. drafts
-    adminSaveIncoreExercise   = "POST" # admin: create/edit (name, description, image, muscle group, metric combination)
-    adminSeedIncoreExercises  = "POST" # admin: import the starter library (idempotent)
-    deleteMyWorkoutLog        = "POST" # trainee: delete one of their own logs
-    getIncoreExercises        = "GET"  # trainee: active catalog exercises
-    getMyWorkoutJournal       = "GET"  # trainee: own logs + attended-but-unlogged classes
-    saveMyWorkoutLog          = "POST" # trainee: create/edit a free or class-linked workout log
+    adminDeleteIncoreExercise           = "POST" # admin: delete a catalog exercise
+    adminListIncoreExercises            = "GET"  # admin: catalog incl. drafts
+    adminSaveIncoreExercise             = "POST" # admin: create/edit (name, description, image, muscle group, metric combination)
+    adminSeedIncoreExercises            = "POST" # admin: import the starter library (idempotent)
+    deleteMyWorkoutLog                  = "POST" # trainee: delete one of their own logs
+    getIncoreExercises                  = "GET"  # trainee: active catalog exercises
+    getMyWorkoutJournal                 = "GET"  # trainee: own logs + attended-but-unlogged classes
+    saveMyWorkoutLog                    = "POST" # trainee: create/edit a free or class-linked workout log
+    getWorkoutLastWeights               = "GET"  # last working weight per exercise (self, or a member for admin/coach)
+    adminSaveWorkoutLogReminderSettings = "POST" # admin: workout-logging reminder on/off + delay
     # Manage → Forms → Form Templates (custom admin-built templates; same shared integration)
     adminListFormTemplates   = "GET"  # admin: list custom form templates for a brand
     adminSaveFormTemplate    = "POST" # admin: create/edit a custom form template (name + sections)
@@ -360,10 +362,36 @@ locals {
     adminSaveFormWording = "POST" # admin: save that wording (versioned)
     # FORCA per-session trainee info (same shared integration)
     saveSessionTraineeInfo = "POST" # admin / the session's coach: trainee note + equipment list; pushes trainees when the note changes
+    # FORCA per-session plan/equipment overrides (same shared integration)
+    getSessionPlan       = "GET"  # admin / the session's coach / its trainee / that trainee's parent: effective plan + equipment
+    saveSessionOverride  = "POST" # admin / the session's coach: edit one session's plan and equipment
+    resetSessionOverride = "POST" # admin / the session's coach: back to the template
+    # FORCA quick dial (same shared integration)
+    getSessionContacts   = "GET"  # admin / the session's coach: phone numbers for that session's roster
+    saveEmergencyContact = "POST" # admin / the trainee's linked parent: set or clear the emergency contact
+    # FORCA medical alert (same shared integration)
+    adminSetMedicalAlert = "POST" # admin: the short alert coaches see, with a log of who changed it and when
     # FORCA photo / publication consent (same shared integration)
     getPhotoConsent       = "GET"  # parent (childId) / trainee: where the consent stands + its signed history
     changePhotoConsent    = "POST" # parent (childId) / trainee: signed change; refusing withdraws at once
     getPhotoConsentPdfUrl = "GET"  # parent (childId) / trainee: one change's signed PDF
+    # INCORE profile Bookings tab (same shared integration)
+    getMemberBookings = "GET" # member (own) / admin (memberId): bookings newest first, paged by cursor
+    # INCORE admin subscription management (same shared integration)
+    adminListMemberSubscriptions  = "GET"  # admin: a member's subscriptions + payments and which subscription each is linked to
+    adminSaveMemberSubscription   = "POST" # admin: create / duplicate / edit a subscription (warns on overlap or a payment already linked)
+    adminCancelMemberSubscription = "POST" # admin: cancel a subscription (logged)
+    # FORCA chat (same shared integration)
+    getForcaChatContacts = "GET" # trainee / parent: who they can write to (admin, their group's coaches); admin: every coach
+    # Quick replies, both brands (same shared integration)
+    adminListQuickReplies = "GET"  # admin: a brand's quick replies (+ FORCA member quick messages) with usage counts; seeds defaults once
+    adminSaveQuickReplies = "POST" # admin: save / delete / duplicate / reorder
+    getQuickReplies       = "GET"  # chat: replies the admin / coach may use, or a FORCA member's quick messages
+    useQuickReply         = "POST" # chat: count one use of a reply
+    # FORCA activity periods (Manage → Payments → Activity Periods)
+    adminListForcaPeriods  = "GET"  # admin: periods + end-of-period notice settings
+    adminSaveForcaPeriods  = "POST" # admin: save (or dryRun: preview which upcoming charges move)
+    getForcaActivityStatus = "GET"  # any user: in a period today? next period start, "אין פעילות" label, current period end
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
@@ -384,6 +412,7 @@ locals {
     expireProducts                 = "cron(0 2 * * ? *)"       # 02:00 daily
     expireWalletCredits            = "cron(20 0 1 * ? *)"      # 00:20 on the 1st — credit lapses a month after the month it was earned
     activatePendingMemberships     = "cron(5 3 * * ? *)"       # 03:05 daily (see activatePendingMemberships.ts for why not 01:00)
+    expireMemberships              = "cron(5 * * * ? *)"       # hourly at :05 — INCORE membership status follows its dates (expire at the end of the last day, Israel time; activate PENDING)
     clearUsedPunchCards            = "cron(5 0 1 * ? *)"       # 00:05 on the 1st
     distributeBirthdayRewards      = "cron(10 0 1 * ? *)"      # 00:10 on the 1st
     weekendSessionsRoutine         = "cron(59 23 ? * THU *)"   # Thursday 23:59 — before the Fri/Sat no-class weekend
@@ -398,6 +427,8 @@ locals {
     chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
     checkPushReceipts              = "cron(0/30 * * * ? *)"    # every 30 minutes — Expo push receipts (see lib/push.ts)
+    forcaPeriodEndReminders        = "cron(0 10 * * ? *)"      # 10:00 daily — FORCA activity periods: "period ending, next one continues" notice to parents
+    workoutLogReminders            = "cron(0/15 * * * ? *)"    # every 15 minutes — INCORE "log your workout" push after a class (off until an admin enables it)
   }
 
   # DynamoDB Streams consumers — every one of these must filter internally
@@ -451,10 +482,13 @@ locals {
   charge_safety_mode = "enforce"
   charge_functions   = ["chargeForcaSubscriptions", "chargeHypBillingAgreements", "adminChargeHypAgreementNow", "adminRunHypBillingCycle"]
 
+  # Every Cognito trigger Lambda (built by cognito_trigger_fn, invokable by the
+  # pool). Despite the name, it also holds the Custom Email Sender.
   cognito_custom_auth_functions = [
     "cognitoDefineAuthChallenge",
     "cognitoCreateAuthChallenge",
     "cognitoVerifyAuthChallengeResponse",
+    "cognitoCustomEmailSender",
   ]
 
   all_function_names = distinct(concat(

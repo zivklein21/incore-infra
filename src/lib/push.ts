@@ -26,6 +26,8 @@ export interface ExpoPushMessage {
   body: string;
   sound?: 'default';
   data?: Record<string, unknown>;
+  /** iOS notification category (action buttons); the app registers it with setNotificationCategoryAsync. */
+  categoryId?: string;
 }
 
 export interface ExpoTicket {

@@ -5,8 +5,11 @@ import { ddb } from './dynamo';
 import { resolveMemberProfile } from './memberLookup';
 import { s3, BUCKET_NAME } from './s3';
 import { computeComplianceFlags, type ForcaBillingAgreementItem, type GroupItem, type MembershipItem } from './entities';
+import { pickCurrentMembership } from './membershipExpiry';
 import { applySignupFlow, loadSignupFlow } from './signupFlow/shared';
 import { signupGateFor } from './formTemplates/signupGate';
+import { parentContactOf } from './quickDial';
+import { effectiveNextChargeDateOf, loadPeriodsSafe } from './forcaPeriods/store';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -46,7 +49,8 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   }));
 
   const memberships = (membershipsRes.Items ?? []) as MembershipItem[];
-  const activeMembership = memberships[0] ?? null;
+  // The one covering today (next month's, bought early, is ACTIVE too).
+  const activeMembership = pickCurrentMembership(memberships, new Date());
 
   const role = profile.identity?.role ?? profile.role ?? 'member';
   const name = profile.identity?.name
@@ -83,7 +87,7 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   const brand = profile.identity?.brand ?? 'incore';
   const groupId = brand === 'forca' ? profile.identity?.groupId : undefined;
 
-  const [photoUrl, healthPdfUrl, doctorApprovalUrl, medicalClearanceUrl, groupRes, agreementRes] = await Promise.all([
+  const [photoUrl, healthPdfUrl, doctorApprovalUrl, medicalClearanceUrl, groupRes, agreementRes, parentContact] = await Promise.all([
     presign(profile.photoKey),
     presign(forms.health_declaration?.pdf_key),
     presign(forms.health_declaration?.doctor_approval_key),
@@ -103,6 +107,13 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
           ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'AGREEMENT#' },
         }))
       : Promise.resolve(null),
+    // Quick dial. Best effort: a failed lookup only hides the call button.
+    brand === 'forca' && profile.identity?.accountType !== 'parent_only'
+      ? parentContactOf(memberId).catch((err) => {
+          console.error('[profileResponse] parent contact lookup failed', err);
+          return null;
+        })
+      : Promise.resolve(null),
   ]);
   const group = groupRes?.Item as GroupItem | undefined;
   const groupName = group?.name ?? null;
@@ -115,6 +126,10 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   const subscriptionStatus = latestAgreement?.status ?? null;
   const subscriptionAmountPerCharge = latestAgreement?.amountPerCharge ?? null;
   const subscriptionNextChargeDate = latestAgreement?.nextChargeDate ?? null;
+  // When it will really be charged, after the activity periods (lib/forcaPeriods); 1.5.2+ shows this.
+  const subscriptionEffectiveNextChargeDate = latestAgreement?.status === 'active' && latestAgreement.nextChargeDate
+    ? effectiveNextChargeDateOf(await loadPeriodsSafe(), latestAgreement.nextChargeDate)
+    : null;
 
   const medicalClearance = {
     requested: forms.medical_clearance_requested === true,
@@ -153,6 +168,9 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     email: profile.identity?.email ?? profile.email ?? '',
     name,
     phone: profile.identity?.phone ?? profile.phone ?? '',
+    // FORCA quick dial (lib/quickDial.ts).
+    parentContact,
+    emergencyContact: profile.emergencyContact ?? null,
     birthday,
     age,
     photoUrl,
@@ -176,6 +194,7 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     subscriptionStatus,
     subscriptionAmountPerCharge,
     subscriptionNextChargeDate,
+    subscriptionEffectiveNextChargeDate,
     membershipStart: typeof profile.membership?.start === 'string' ? profile.membership.start : null,
     membershipEnd: typeof profile.membership?.end === 'string' ? profile.membership.end : null,
     medicalClearance,

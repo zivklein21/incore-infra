@@ -12,6 +12,7 @@ import {
   AssignmentTarget, FormAssignmentItem, formsTable, getTemplateHead, getTemplateVersion, listFormPeople, loadRosters, parentOf, getProfile, targetIncludes,
 } from './submissions';
 import { participatingRoles, rolesOnDevice } from './familyForms';
+import { activityFieldMap, activityValues, type ActivityKey } from './activityFields';
 
 // POST /adminAssignFormTemplate
 // Body (assign):  { templateId, target: { kind: 'all' } | { kind: 'new_members' } | { kind: 'group', groupId, groupName? }
@@ -75,20 +76,6 @@ export type AssignResult =
   | { ok: true; assignmentId: string; trainees: number; notified: number }
   | { ok: false; status: number; body: Record<string, unknown> };
 
-/** Admin-field values an activity provides (prefill 'activity.*'): name, date (YYYY-MM-DD), time (HH:mm, Israel), location, description. */
-export function activityPrefill(cls: Record<string, unknown>): Record<string, string> {
-  const date = typeof cls.date === 'string' ? new Date(cls.date) : null;
-  const ok = date && !Number.isNaN(date.getTime());
-  const time = ok ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(date!) : '';
-  return Object.fromEntries(Object.entries({
-    'activity.name': typeof cls.className === 'string' ? cls.className : '',
-    'activity.date': ok ? date!.toLocaleDateString('en-CA', { timeZone: 'Asia/Jerusalem' }) : '',
-    'activity.time': time,
-    'activity.location': typeof cls.location === 'string' ? cls.location : '',
-    'activity.description': typeof cls.description === 'string' ? cls.description : '',
-  }).filter(([, v]) => v));
-}
-
 /** Assigns a published template — shared by adminAssignFormTemplate (Assign & track) and adminCreateActivity (forms attached to a new activity). */
 export async function assignForm(input: {
   brand: 'incore' | 'forca'; templateId: string; target: unknown; adminAnswers?: unknown; notify?: boolean; uid: string;
@@ -100,7 +87,7 @@ export async function assignForm(input: {
   const t = await getTemplateVersion(brand, templateId, head.publishedVersion);
   if (!t) return { ok: false, status: 404, body: { error: 'not_found' } };
 
-  let activityValues: Record<string, string> = {};
+  let fromActivityItem: Partial<Record<ActivityKey, string>> | null = null;
   const raw = (input.target ?? {}) as Record<string, unknown>;
   let target: AssignmentTarget;
   if (raw.kind === 'all') target = { kind: 'all' };
@@ -111,7 +98,7 @@ export async function assignForm(input: {
     const cls = (await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: { PK: `CLASS#${raw.classId}`, SK: 'METADATA' } }))).Item;
     if (!cls) return { ok: false, status: 400, body: { error: 'activity_not_found' } };
     target = { kind: 'activity', classId: raw.classId, className: typeof cls.className === 'string' ? cls.className : '', date: String(cls.date ?? '') };
-    activityValues = activityPrefill(cls);
+    fromActivityItem = activityValues(cls);
   }
   else if (brand === 'forca' && raw.kind === 'group' && typeof raw.groupId === 'string' && raw.groupId) {
     target = { kind: 'group', groupId: raw.groupId, ...(typeof raw.groupName === 'string' ? { groupName: raw.groupName } : {}) };
@@ -123,18 +110,24 @@ export async function assignForm(input: {
   const incoming = (input.adminAnswers && typeof input.adminAnswers === 'object' ? input.adminAnswers : {}) as Record<string, FieldAnswer>;
   const adminFields = t.sections.flatMap(s => s.fields).filter(f => f.filledBy === 'admin' && !DISPLAY_ONLY.has(f.type));
   const adminAnswers: Answers = {};
+  // Event details come from the activity itself (activityFields.ts): a linked
+  // field takes the activity's value — families keep seeing its CURRENT value
+  // until they sign. A typed value only stands in where the activity has no
+  // such detail. Stored here too, as the fallback if the activity is deleted.
+  const linked = fromActivityItem ? activityFieldMap(t.sections) : new Map<string, ActivityKey>();
   for (const f of adminFields) {
-    // Event details come from the activity itself when the field is set to (activity.*); an explicit value still wins.
-    const fromActivity = f.prefill?.startsWith('activity.') ? activityValues[f.prefill] : undefined;
-    const value = incoming[f.id] ?? fromActivity;
+    const key = linked.get(f.id);
+    const fromActivity = key ? fromActivityItem?.[key] : undefined;
+    const value = (fromActivity && !answerFormatError(f, fromActivity) ? fromActivity : undefined) ?? incoming[f.id];
     if (value === undefined || value === null || value === '') continue;
     const error = answerFormatError(f, value);
     if (error) return { ok: false, status: 400, body: { error: 'invalid_answer', fieldId: f.id, reason: error } };
     adminAnswers[f.id] = value;
   }
   // A required admin field only has to be filled if it can be visible at all — conditions on admin answers resolve now.
+  // A linked field the activity doesn't have (yet) never blocks: it fills itself once the activity has it.
   const visible = visibleIds(t.sections, adminAnswers);
-  const missing = adminFields.filter(f => f.required && visible.has(f.id) && !f.showIf && !isAnswered(f, adminAnswers[f.id]));
+  const missing = adminFields.filter(f => f.required && !linked.has(f.id) && visible.has(f.id) && !f.showIf && !isAnswered(f, adminAnswers[f.id]));
   if (missing.length) return { ok: false, status: 400, body: { error: 'missing_required', fieldIds: missing.map(f => f.id) } };
 
   const assignedAt = new Date().toISOString();

@@ -6,6 +6,7 @@ import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import { israelDateStr, validatePrivateFields } from '../lib/entities';
 import type { ClassItem, RegistrationItem } from '../lib/entities';
+import { syncRegistrationsAfterMove } from '../lib/sessionMove';
 
 // POST /saveClassSeries
 // Auth: Cognito JWT, caller must be admin
@@ -113,6 +114,9 @@ export async function handler(
     ExpressionAttributeValues: values,
   }));
 
+  // Registrations follow each moved class to its new date (lib/sessionMove.ts).
+  if (dateChanged) await syncRegistrationsAfterMove(TABLE_NAME, classId, originalDate, newDate);
+
   // ── Shift + update future series siblings ────────────────────────────────
   let futureUpdatedCount = 0;
   if (seriesId) {
@@ -143,6 +147,7 @@ export async function handler(
           ...Object.fromEntries(Object.entries(propUpdate).map(([k, v]) => [`:${k}`, v])),
         },
       }));
+      await syncRegistrationsAfterMove(TABLE_NAME, siblingId, ownDate, shifted);
       futureUpdatedCount++;
     }
   }

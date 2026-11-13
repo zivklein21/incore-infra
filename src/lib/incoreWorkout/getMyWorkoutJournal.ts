@@ -2,6 +2,7 @@ import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructured
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from '../dynamo';
 import { getUid, json } from '../http';
+import { isCoachOrAdmin } from '../auth';
 import { israelDateStr, type ClassItem, type IncoreWorkoutLogItem, type RegistrationItem } from '../entities';
 import { toWorkoutLogDto } from '../incoreExercises';
 
@@ -20,8 +21,11 @@ async function queryAll(input: ConstructorParameters<typeof QueryCommand>[0]): P
   return items;
 }
 
-// GET /getMyWorkoutJournal
-// Auth: Cognito JWT, any signed-in INCORE member — the caller's own data only.
+// GET /getMyWorkoutJournal[?memberId=<uid>]
+// Auth: Cognito JWT. Without memberId (or with the caller's own uid): the
+// caller's own journal, as before. Another memberId needs admin or coach
+// (Backoffice member profile → Weight tab, read-only). Optional param, so
+// app builds already in the stores are unaffected.
 // Returns:
 //   logs              — every IncoreWorkoutLogItem the caller saved (newest first)
 //   unloggedSessions  — past classes the caller was booked into (status REGISTERED,
@@ -33,12 +37,15 @@ export async function handler(
   event: APIGatewayProxyEventV2WithJWTAuthorizer,
 ): Promise<APIGatewayProxyStructuredResultV2> {
   const callerUid = getUid(event);
+  const requested = event.queryStringParameters?.memberId;
+  const memberId = requested && requested !== callerUid ? requested : callerUid;
+  if (memberId !== callerUid && !(await isCoachOrAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
   const [logItems, regItems] = await Promise.all([
     queryAll({
       TableName: TABLE_NAME,
       KeyConditionExpression: 'PK = :pk AND begins_with(SK, :prefix)',
-      ExpressionAttributeValues: { ':pk': `MEMBER#${callerUid}`, ':prefix': 'WORKOUTLOG#' },
+      ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'WORKOUTLOG#' },
     }),
     queryAll({
       TableName: TABLE_NAME,
@@ -46,7 +53,7 @@ export async function handler(
       KeyConditionExpression: 'GSI1PK = :pk AND begins_with(GSI1SK, :prefix)',
       FilterExpression: '#status = :registered',
       ExpressionAttributeNames: { '#status': 'status' },
-      ExpressionAttributeValues: { ':pk': `MEMBER#${callerUid}`, ':prefix': 'REG#', ':registered': 'REGISTERED' },
+      ExpressionAttributeValues: { ':pk': `MEMBER#${memberId}`, ':prefix': 'REG#', ':registered': 'REGISTERED' },
     }),
   ]);
 

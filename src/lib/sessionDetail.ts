@@ -6,6 +6,7 @@
 import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { CoachAccess } from './coachAccess';
+import { activeMedicalAlert } from './medicalAlert';
 import { resolveWorkoutPlanEquipmentQuantitiesBatch } from './workoutPlanEquipment';
 import { getAllMemberProfiles } from './memberScan';
 import {
@@ -18,10 +19,16 @@ import {
   type TrainingTypeItem,
 } from './entities';
 
+export interface EquipmentCatalogEntry { name: string; availableQuantity: number }
+
+export interface RequiredEquipmentEntry { id: string; name: string; neededQuantity: number; availableQuantity: number }
+
+export interface SessionOverrideSummary { plan: boolean; equipment: boolean; editedAt: string; editedByName: string }
+
 export interface SessionLookups {
   trainingTypesById: Map<string, TrainingTypeItem>;
   groupNameById: Map<string, string>;
-  equipmentById: Map<string, { name: string; availableQuantity: number }>;
+  equipmentById: Map<string, EquipmentCatalogEntry>;
   /** Each referenced Workout Plan's own required equipment quantities — see resolveWorkoutPlanEquipmentQuantities(). */
   planEquipmentByPlanId: Map<string, Map<string, number>>;
   /** Every FORCA member's profile, keyed by uid — see fetchSessionLookups()'s comment on why this is one Scan, not a GetCommand per roster entry. */
@@ -73,29 +80,120 @@ export async function fetchSessionLookups(sessionItems: ClassItem[]): Promise<Se
   }
   for (const quantities of planEquipmentByPlanId.values()) for (const id of quantities.keys()) equipmentIdsNeeded.add(id);
   for (const session of sessionItems) (session.manualEquipment ?? []).forEach((m) => equipmentIdsNeeded.add(m.equipmentId));
-  const equipmentById = new Map<string, { name: string; availableQuantity: number }>();
-  if (equipmentIdsNeeded.size > 0) {
-    // Paginated — a Scan reads at most 1MB per page BEFORE the filter is
-    // applied, so a single page silently misses equipment on a big table.
-    let lastKey: Record<string, unknown> | undefined;
-    do {
-      const equipmentRes = await ddb.send(new ScanCommand({
-        TableName: FORCA_TABLE_NAME,
-        FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
-        ExpressionAttributeValues: { ':prefix': 'EQUIPMENT#', ':metadata': 'METADATA' },
-        ExclusiveStartKey: lastKey,
-      }));
-      for (const e of (equipmentRes.Items ?? []) as EquipmentItem[]) {
-        equipmentById.set(e.PK.replace('EQUIPMENT#', ''), {
-          name: e.name ?? '',
-          availableQuantity: (e.quantity ?? 0) - (e.outCount ?? 0),
-        });
-      }
-      lastKey = equipmentRes.LastEvaluatedKey;
-    } while (lastKey);
-  }
+  for (const session of sessionItems) (session.equipmentOverride?.items ?? []).forEach((m) => equipmentIdsNeeded.add(m.equipmentId));
+  const equipmentById = equipmentIdsNeeded.size > 0 ? await scanEquipmentCatalog() : new Map<string, EquipmentCatalogEntry>();
 
   return { trainingTypesById, groupNameById, equipmentById, planEquipmentByPlanId, profileById };
+}
+
+export async function scanEquipmentCatalog(): Promise<Map<string, EquipmentCatalogEntry>> {
+  const equipmentById = new Map<string, EquipmentCatalogEntry>();
+  // Paginated — a Scan reads at most 1MB per page BEFORE the filter is
+  // applied, so a single page silently misses equipment on a big table.
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const equipmentRes = await ddb.send(new ScanCommand({
+      TableName: FORCA_TABLE_NAME,
+      FilterExpression: 'begins_with(PK, :prefix) AND SK = :metadata',
+      ExpressionAttributeValues: { ':prefix': 'EQUIPMENT#', ':metadata': 'METADATA' },
+      ExclusiveStartKey: lastKey,
+    }));
+    for (const e of (equipmentRes.Items ?? []) as EquipmentItem[]) {
+      equipmentById.set(e.PK.replace('EQUIPMENT#', ''), {
+        name: e.name ?? '',
+        availableQuantity: (e.quantity ?? 0) - (e.outCount ?? 0),
+      });
+    }
+    lastKey = equipmentRes.LastEvaluatedKey;
+  } while (lastKey);
+  return equipmentById;
+}
+
+export interface SessionEquipmentInputs {
+  trainingType: TrainingTypeItem | undefined;
+  /** The session's plan's own quantities — undefined leaves plan gear out (a coach with no workoutPlans access). */
+  planQuantities: Map<string, number> | undefined;
+  equipmentById: Map<string, EquipmentCatalogEntry>;
+  rosterCount: number;
+}
+
+/**
+ * A session's effective pack list, in display order. equipmentOverride is the
+ * whole answer when present; otherwise Training Type + Workout Plan with the
+ * session's manualEquipment on top. The one place this is computed, so the
+ * coach's checklist, "took everything", and the trainee view can't disagree.
+ */
+export function computeSessionEquipment(
+  session: Pick<ClassItem, 'manualEquipment' | 'equipmentOverride'>,
+  { trainingType, planQuantities, equipmentById, rosterCount }: SessionEquipmentInputs,
+): RequiredEquipmentEntry[] {
+  // An equipmentId with no EQUIPMENT# item (deleted from the catalog but
+  // still referenced by a Training Type / Workout Plan / override) is
+  // skipped everywhere below — otherwise it renders as a nameless
+  // "Missing — only 0 available" row that can never be satisfied.
+  const entry = (id: string, neededQuantity: number): RequiredEquipmentEntry | null => {
+    const equipment = equipmentById.get(id);
+    return equipment ? { id, name: equipment.name, neededQuantity, availableQuantity: equipment.availableQuantity } : null;
+  };
+
+  if (session.equipmentOverride) {
+    return session.equipmentOverride.items
+      .map((i) => entry(i.equipmentId, i.quantity))
+      .filter((e): e is RequiredEquipmentEntry => !!e);
+  }
+
+  const requiredEquipment: RequiredEquipmentEntry[] = [];
+  for (const r of trainingType?.equipmentRequirements ?? []) {
+    const item = entry(r.equipmentId, r.mode === 'custom' ? (r.customQuantity ?? 0) : rosterCount);
+    if (item) requiredEquipment.push(item);
+  }
+
+  // The assigned Workout Plan's own required equipment, on top of whatever
+  // the Training Type already lists — same checkout-tracked pack list, not
+  // a separate one (see toggleSessionEquipment.ts). Quantity is the sum of
+  // each exercise's own ExerciseEquipmentRequirement across the plan's
+  // stations (see resolveWorkoutPlanEquipmentQuantities()) — there's no
+  // custom/per_member "mode" for a plan-derived item the way a Training
+  // Type requirement has, so this is the closest real equivalent. Never
+  // duplicated for an equipmentId the Training Type already covers.
+  const existingIds = new Set(requiredEquipment.map((e) => e.id));
+  for (const [equipmentId, neededQuantity] of planQuantities ?? []) {
+    if (existingIds.has(equipmentId)) continue;
+    const item = entry(equipmentId, neededQuantity);
+    if (item) requiredEquipment.push(item);
+  }
+
+  // This session's own per-equipment-id overrides (see
+  // adminUpdateSessionInstance.ts) — an id the Training Type/Workout Plan
+  // already imply has its neededQuantity REPLACED by the override (every
+  // other implied item keeps its normal computed quantity); an id neither
+  // implies is pushed as a new extra item at the override's quantity, same
+  // "extra add, on top" idea as a Workout Plan section's own
+  // manualEquipmentIds.
+  const requiredById = new Map(requiredEquipment.map((e) => [e.id, e]));
+  for (const { equipmentId, quantity } of session.manualEquipment ?? []) {
+    const existing = requiredById.get(equipmentId);
+    if (existing) {
+      existing.neededQuantity = quantity;
+      continue;
+    }
+    const added = entry(equipmentId, quantity);
+    if (added) {
+      requiredEquipment.push(added);
+      requiredById.set(equipmentId, added);
+    }
+  }
+  return requiredEquipment;
+}
+
+/** What a coach-facing session read says about this session's overrides. Null when it has none. */
+export function sessionOverrideSummary(session: Pick<ClassItem, 'planOverride' | 'equipmentOverride'>): SessionOverrideSummary | null {
+  const { planOverride, equipmentOverride } = session;
+  if (!planOverride && !equipmentOverride) return null;
+  const latest = [planOverride, equipmentOverride]
+    .filter((o): o is NonNullable<typeof o> => !!o)
+    .sort((a, b) => b.editedAt.localeCompare(a.editedAt))[0];
+  return { plan: !!planOverride, equipment: !!equipmentOverride, editedAt: latest.editedAt, editedByName: latest.editedBy.name };
 }
 
 export interface RosterEntryDetail {
@@ -106,7 +204,10 @@ export interface RosterEntryDetail {
   actualAttendance: 'present' | 'absent' | null;
   /** Who last recorded/corrected actualAttendance — see RegistrationItem.actualAttendanceBy. Null on any entry predating this field, or with no actualAttendance recorded yet. */
   actualAttendanceBy: { uid: string; name: string; role: 'admin' | 'coach' } | null;
+  /** Derived from health declaration answers, so admin-only: always false for a coach. */
   medicalFlag: boolean;
+  /** The admin-written alert text while it's on — the only medical data a coach gets (lib/medicalAlert.ts). */
+  medicalAlert: string | null;
 }
 
 export interface SessionDetail {
@@ -122,7 +223,9 @@ export interface SessionDetail {
   location: string | null;
   coachId: string | null;
   coachName: string | null;
-  requiredEquipment: { id: string; name: string; neededQuantity: number; availableQuantity: number }[];
+  requiredEquipment: RequiredEquipmentEntry[];
+  /** Set when this session has been edited on its own (plan and/or equipment) — drives the "edited for this session" badge. */
+  sessionOverride: SessionOverrideSummary | null;
   /** This session's own equipment overrides (see adminUpdateSessionInstance.ts) — distinct from requiredEquipment, which is the full computed pack list (Training Type + Workout Plan + these applied on top). Only ever populated for an admin edit-session-instance sheet; not itself a checklist. */
   manualEquipment: { equipmentId: string; quantity: number }[];
   equipmentTaken: string[];
@@ -171,81 +274,21 @@ export async function resolveSessionDetail(
       declineReason: r.declineReason || null,
       actualAttendance: r.actualAttendance ?? null,
       actualAttendanceBy: r.actualAttendanceBy ?? null,
-      medicalFlag: access.permissions.healthDeclarations === 'none'
-        ? false
-        : Object.values(healthAnswers).some((v) => v === 'yes'),
+      medicalFlag: access.isAdmin && Object.values(healthAnswers).some((v) => v === 'yes'),
+      medicalAlert: activeMedicalAlert(profile),
     };
   });
   roster.sort((a, b) => a.name.localeCompare(b.name));
 
-  const trainingType = session.trainingTypeId ? lookups.trainingTypesById.get(session.trainingTypeId) : undefined;
-  // An equipmentId with no EQUIPMENT# item (deleted from the catalog but
-  // still referenced by a Training Type / Workout Plan / override) is
-  // skipped everywhere below — otherwise it renders as a nameless
-  // "Missing — only 0 available" row that can never be satisfied.
-  const requiredEquipment: SessionDetail['requiredEquipment'] = [];
-  for (const r of trainingType?.equipmentRequirements ?? []) {
-    const equipment = lookups.equipmentById.get(r.equipmentId);
-    if (!equipment) continue;
-    requiredEquipment.push({
-      id: r.equipmentId,
-      name: equipment.name,
-      neededQuantity: r.mode === 'custom' ? (r.customQuantity ?? 0) : roster.length,
-      availableQuantity: equipment.availableQuantity,
-    });
-  }
-
-  // The assigned Workout Plan's own required equipment, on top of whatever
-  // the Training Type already lists — same checkout-tracked pack list, not
-  // a separate one (see toggleSessionEquipment.ts). Quantity is the sum of
-  // each exercise's own ExerciseEquipmentRequirement across the plan's
-  // stations (see resolveWorkoutPlanEquipmentQuantities()) — there's no
-  // custom/per_member "mode" for a plan-derived item the way a Training
-  // Type requirement has, so this is the closest real equivalent. Skipped
-  // entirely for a coach with no workoutPlans access at all, and never
-  // duplicated for an equipmentId the Training Type already covers.
-  if (session.workoutPlanId && access.permissions.workoutPlans !== 'none') {
-    const existingIds = new Set(requiredEquipment.map((e) => e.id));
-    for (const [equipmentId, neededQuantity] of lookups.planEquipmentByPlanId.get(session.workoutPlanId) ?? []) {
-      if (existingIds.has(equipmentId)) continue;
-      const equipment = lookups.equipmentById.get(equipmentId);
-      if (!equipment) continue;
-      requiredEquipment.push({
-        id: equipmentId,
-        name: equipment.name,
-        neededQuantity,
-        availableQuantity: equipment.availableQuantity,
-      });
-    }
-  }
-
-  // This session's own per-equipment-id overrides (see
-  // adminUpdateSessionInstance.ts) — an id the Training Type/Workout Plan
-  // already imply has its neededQuantity REPLACED by the override (every
-  // other implied item keeps its normal computed quantity); an id neither
-  // implies is pushed as a new extra item at the override's quantity, same
-  // "extra add, on top" idea as a Workout Plan section's own
-  // manualEquipmentIds.
-  if (session.manualEquipment && session.manualEquipment.length > 0) {
-    const requiredById = new Map(requiredEquipment.map((e) => [e.id, e]));
-    for (const { equipmentId, quantity } of session.manualEquipment) {
-      const existing = requiredById.get(equipmentId);
-      if (existing) {
-        existing.neededQuantity = quantity;
-        continue;
-      }
-      const equipment = lookups.equipmentById.get(equipmentId);
-      if (!equipment) continue;
-      const added = {
-        id: equipmentId,
-        name: equipment.name,
-        neededQuantity: quantity,
-        availableQuantity: equipment.availableQuantity,
-      };
-      requiredEquipment.push(added);
-      requiredById.set(equipmentId, added);
-    }
-  }
+  const requiredEquipment = computeSessionEquipment(session, {
+    trainingType: session.trainingTypeId ? lookups.trainingTypesById.get(session.trainingTypeId) : undefined,
+    // Skipped entirely for a coach with no workoutPlans access at all.
+    planQuantities: session.workoutPlanId && access.permissions.workoutPlans !== 'none'
+      ? lookups.planEquipmentByPlanId.get(session.workoutPlanId)
+      : undefined,
+    equipmentById: lookups.equipmentById,
+    rosterCount: roster.length,
+  });
 
   return {
     classId,
@@ -258,13 +301,13 @@ export async function resolveSessionDetail(
     coachId: session.coachId ?? null,
     coachName: session.coachName ?? null,
     requiredEquipment,
+    sessionOverride: sessionOverrideSummary(session),
     manualEquipment: session.manualEquipment ?? [],
     equipmentTaken: (session.equipmentTaken ?? []).map((t) => t.equipmentId),
     equipmentReturnedAt: session.equipmentReturnedAt ?? null,
     closedAt: session.closedAt ?? null,
-    // Stripped for a coach with no workoutPlans access at all, same
-    // "hide rather than 403 the whole session" convention medicalFlag above
-    // uses for healthDeclarations:'none'.
+    // Stripped for a coach with no workoutPlans access at all — hidden
+    // rather than a 403 on the whole session.
     workoutPlanId: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanId ?? null),
     workoutPlanName: access.permissions.workoutPlans === 'none' ? null : (session.workoutPlanName ?? null),
     // Stripped the same way for a coach with no testsGrading access at all —

@@ -2,8 +2,9 @@ import { randomUUID } from 'crypto';
 import { GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
 import type { MemberProfileItem, ProductItem, HypOrderItem, HypProductType, HypPaymentMethod } from './entities';
-import { monthKey, endOfMonth, firstOfNextMonth, israelDayStart } from './entities';
+import { monthKey, endOfMonth, israelDayStart } from './entities';
 import { queryAllActiveMemberships } from './membershipQueries';
+import { isActiveAt, subscriptionPurchaseWindow } from './membershipExpiry';
 import { normalizeIsraeliId } from './israeliId';
 
 // HYP's `UserId` param doubles as the cardholder's Israeli ID number when the
@@ -179,19 +180,15 @@ export async function buildOrderFromProduct(
     // month — it's a stopgap, not a membership the member is already paying
     // for this month. handlePaymentSuccess supersedes/expires it once this
     // purchase's membership is actually created.
-    const hasActiveMembership = activeMemberships.some((m) => m.type !== 'CUSTOM_MIGRATION');
-
-    let start: Date;
-    if (hasActiveMembership) {
-      start = firstOfNextMonth(new Date());
-    } else {
-      start = israelDayStart(new Date());
-    }
-
-    const end = endOfMonth(start);
-    targetMonth = monthKey(start);
-    startDate = start.toISOString();
-    endDate = end.toISOString();
+    // By its dates, not just its status: last month's membership can still
+    // read ACTIVE after it ended (no renewal, or before the hourly
+    // expireMemberships run), and that pushed a purchase into next month.
+    const now = new Date();
+    const hasActiveMembership = activeMemberships.some((m) => m.type !== 'CUSTOM_MIGRATION' && isActiveAt(m, now));
+    const window = subscriptionPurchaseWindow(now, hasActiveMembership);
+    targetMonth = window.targetMonth;
+    startDate = window.start.toISOString();
+    endDate = window.end.toISOString();
   } else if (productType === 'mid_month') {
     const now = new Date();
     const start = israelDayStart(now);

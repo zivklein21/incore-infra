@@ -5,7 +5,7 @@ import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { type ClassItem, type MembershipItem, type WalletItem, type PunchCardItem, monthKey, computeWeekKey, israelDateStr, getEffectiveMonthlyLimit, weeklyUsedAcrossMemberships } from '../lib/entities';
 import { chooseCredit, spendFromBucketItem, CREDITS_EXPIRED_MESSAGE } from '../lib/creditSpend';
-import { membershipForClass } from '../lib/registrationMembership';
+import { bookingMembership } from '../lib/registrationMembership';
 
 // ─── Entity key design (DynamoDB single-table) ─────────────────────────────
 //
@@ -107,21 +107,9 @@ export async function handler(
     ExpressionAttributeValues: { ':pk': `MEMBER#${uid}`, ':prefix': 'MEMBERSHIP#' },
   }));
   const allMemberships = (membershipsRes.Items ?? []) as MembershipItem[];
-  // Filed under the class's month — or an earlier bridge that covers it.
-  const membership = membershipForClass(allMemberships, classDate, queryMonth, !isFutureBooking);
-
-  // A membership whose real endDate already reaches the class date isn't
-  // actually "future" from the member's own plan's point of view — it's
-  // the same membership they're on today, just being booked ahead of time.
-  // This is the normal case for a CUSTOM_MIGRATION bridge, whose endDate
-  // commonly extends past the calendar month it's filed under (see
-  // adminGrantCustomMigration.ts) — those are never isAutoRenew, so without
-  // this check every bridge member would be blocked from booking into any
-  // month past the one their record started in, even while still well
-  // inside their granted window. Route this case through the normal
-  // per-membership consumption below instead of the future-only path.
-  const membershipCoversClassDate = !!membership?.endDate && classDate <= new Date(membership.endDate);
-  const treatAsFuture = isFutureBooking && !membershipCoversClassDate;
+  // Which membership pays, and whether it's a FUTURE_SUBSCRIPTION booking
+  // (lib/registrationMembership.ts bookingMembership).
+  const { membership, treatAsFuture } = bookingMembership(allMemberships, classDate, now);
 
   let consumedFrom: ConsumedFrom;
   let membershipId = '';

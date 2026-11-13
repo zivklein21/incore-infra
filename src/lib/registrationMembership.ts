@@ -1,6 +1,7 @@
 import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, TABLE_NAME } from './dynamo';
-import { isMembershipUsableForClass, type MembershipItem, type RegistrationItem } from './entities';
+import { isMembershipUsableForClass, monthKey, type MembershipItem, type RegistrationItem } from './entities';
+import { coversClassDate } from './membershipExpiry';
 
 // Finds the membership record a registration's usage was actually counted
 // against, for cancellation refunds. The registration only stores
@@ -51,11 +52,41 @@ export function membershipForClass(
   month: string,
   allowEarlier: boolean,
 ): MembershipItem | null {
-  return all.filter((m) => m.targetMonth === month).find((m) => isMembershipUsableForClass(m, classDate))
+  // A booking for this month (allowEarlier) also needs the class to fall
+  // before the membership's end — status alone stayed ACTIVE after it ended.
+  // A future booking (allowEarlier false) checks the current month's
+  // membership, which by design ends before the class.
+  return all.filter((m) => m.targetMonth === month)
+    .find((m) => isMembershipUsableForClass(m, classDate) && (!allowEarlier || coversClassDate(m, classDate)))
     ?? (allowEarlier ? all
       .filter((m) => m.status === 'ACTIVE' && m.targetMonth < month
         && !!m.endDate && classDate <= new Date(m.endDate)
         && (!m.startDate || classDate >= new Date(m.startDate)))
       .sort((a, b) => b.targetMonth.localeCompare(a.targetMonth))[0] : undefined)
     ?? null;
+}
+
+/**
+ * bookClass: the membership a member's booking is charged to, and whether
+ * it's a FUTURE_SUBSCRIPTION booking.
+ * - This month's class: the membership filed under this month, if the class
+ *   is before its last day (membershipForClass).
+ * - A future month's class already covered by a membership's dates (next
+ *   month bought early, or a CUSTOM_MIGRATION bridge running past its month):
+ *   charged to that membership directly.
+ * - Otherwise a future booking goes through this month's membership as
+ *   FUTURE_SUBSCRIPTION (bookClass requires it to auto-renew); the renewal
+ *   moves it onto next month's membership (handlePaymentSuccess).
+ */
+export function bookingMembership(all: MembershipItem[], classDate: Date, now: Date): { membership: MembershipItem | null; treatAsFuture: boolean; isFutureBooking: boolean } {
+  const classMonth = monthKey(classDate);
+  const currentMonth = monthKey(now);
+  const isFutureBooking = classMonth > currentMonth;
+  const coveringFuture = isFutureBooking ? membershipForClass(all, classDate, classMonth, true) : null;
+  const membership = coveringFuture ?? membershipForClass(all, classDate, isFutureBooking ? currentMonth : classMonth, !isFutureBooking);
+  // A membership whose real endDate already reaches the class date isn't
+  // "future" from the member's own plan's point of view (a bridge whose
+  // endDate runs past the month it's filed under, never isAutoRenew).
+  const covers = !!membership?.endDate && classDate <= new Date(membership.endDate);
+  return { membership, treatAsFuture: isFutureBooking && !covers, isFutureBooking };
 }

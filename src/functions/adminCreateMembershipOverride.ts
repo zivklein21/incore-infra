@@ -5,6 +5,7 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { ddb, TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
+import { adminIdentity, auditEntry } from '../lib/membershipAudit';
 import { monthKey, type MembershipItem } from '../lib/entities';
 
 // DynamoDB caps a transaction at 100 items — 1 Put for the new membership
@@ -117,44 +118,50 @@ export async function handler(
   const status = startDate.getTime() > Date.now() ? 'PENDING' : 'ACTIVE';
   const membershipId = randomUUID();
   const nowIso = new Date().toISOString();
+  const by = await adminIdentity(adminUid);
+  const newItem = {
+    PK: `MEMBER#${memberId}`,
+    SK: `MEMBERSHIP#${targetMonth}#${membershipId}`,
+    membershipId,
+    ...(productId ? { productId } : {}),
+    productName: planName,
+    status,
+    targetMonth,
+    startDate: startDate.toISOString(),
+    endDate: endDate.toISOString(),
+    isAutoRenew,
+    monthlyLimit,
+    weeklyLimit,
+    allowedLegalCancellationsPerMonth: allowedLegal,
+    usage: { totalMonthlyUsed: 0, legalCancellationsUsed: 0, lateCancellationsUsed: 0 },
+    weeklyUsage: {},
+    isManuallyCreated: true,
+    createdByAdmin: adminUid,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
 
   const transactItems: NonNullable<TransactWriteCommandInput['TransactItems']> = [
     ...toSupersede.map((old) => ({
       Update: {
         TableName: TABLE_NAME,
         Key: { PK: old.PK, SK: old.SK },
-        UpdateExpression: 'SET #status = :expired, supersededBy = :newId, updatedAt = :now',
+        UpdateExpression: 'SET #status = :expired, supersededBy = :newId, updatedAt = :now, manualLog = list_append(if_not_exists(manualLog, :none), :entry)',
         // Guard against a concurrent write (renewal, cron) changing it
         // between our read and this transaction — fail rather than clobber.
         ConditionExpression: '#status = :prev',
         ExpressionAttributeNames: { '#status': 'status' },
-        ExpressionAttributeValues: { ':expired': 'EXPIRED', ':newId': membershipId, ':now': nowIso, ':prev': old.status },
+        ExpressionAttributeValues: {
+          ':expired': 'EXPIRED', ':newId': membershipId, ':now': nowIso, ':prev': old.status, ':none': [],
+          ':entry': [auditEntry(by, 'edited', 'adminCreateMembershipOverride', old as unknown as Record<string, unknown>,
+            { status: 'EXPIRED', supersededBy: membershipId }, { reason: `Replaced by override ${planName} (${targetMonth})` }, nowIso)],
+        },
       },
     })),
     {
       Put: {
         TableName: TABLE_NAME,
-        Item: {
-          PK: `MEMBER#${memberId}`,
-          SK: `MEMBERSHIP#${targetMonth}#${membershipId}`,
-          membershipId,
-          ...(productId ? { productId } : {}),
-          productName: planName,
-          status,
-          targetMonth,
-          startDate: startDate.toISOString(),
-          endDate: endDate.toISOString(),
-          isAutoRenew,
-          monthlyLimit,
-          weeklyLimit,
-          allowedLegalCancellationsPerMonth: allowedLegal,
-          usage: { totalMonthlyUsed: 0, legalCancellationsUsed: 0, lateCancellationsUsed: 0 },
-          weeklyUsage: {},
-          isManuallyCreated: true,
-          createdByAdmin: adminUid,
-          createdAt: nowIso,
-          updatedAt: nowIso,
-        },
+        Item: { ...newItem, manualLog: [auditEntry(by, 'created', 'adminCreateMembershipOverride', null, newItem, {}, nowIso)] },
         ConditionExpression: 'attribute_not_exists(PK)',
       },
     },

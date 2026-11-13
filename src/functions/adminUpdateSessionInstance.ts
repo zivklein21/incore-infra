@@ -4,9 +4,18 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ClassItem } from '../lib/entities';
+import { dayIndexKeys, syncRegistrationsAfterMove } from '../lib/sessionMove';
+import { ACTIVITY_TEXT_FIELDS, cleanActivityText, cleanEquipmentList } from '../lib/activityDetails';
+import { formsSignedOnOlderDetails } from '../lib/formTemplates/activityForms';
 
 // POST /adminUpdateSessionInstance
-// Body: { classId: string, date?: string, endDate?: string | null, coachId?: string | null, coachName?: string | null, location?: string | null, manualEquipment?: { equipmentId: string, quantity: number }[] | null }
+// Body: { classId: string, date?: string, endDate?: string | null, coachId?: string | null, coachName?: string | null, location?: string | null, manualEquipment?: { equipmentId: string, quantity: number }[] | null,
+//         special activities only: className?, description?, transport?, safetyNotes? (string | null), traineeEquipment?: string[] | null }
+// Returns { success, signedOnOlderDetails: [...] } — for an activity with forms
+// attached, the families who already signed details this edit changed (their
+// signed copies and PDFs keep what they signed; see formTemplates/activityFields.ts).
+// A new date moves the session's day index (GSI2PK/SK) and every
+// registration's classDate with it — see lib/sessionMove.ts.
 // Auth: Cognito JWT, admin-only — same gating as adminSaveRecurringSession.ts.
 // Rescheduling touches who's assigned/when, a scheduling-management action,
 // not a coach's own session-running action (compare sessionInAccess()'s
@@ -31,7 +40,10 @@ export async function handler(
   const callerUid = getUid(event);
   if (!(await isAdmin(callerUid))) return json(403, { error: 'forbidden' });
 
-  let body: { classId?: unknown; date?: unknown; endDate?: unknown; coachId?: unknown; coachName?: unknown; location?: unknown; manualEquipment?: unknown };
+  let body: {
+    classId?: unknown; date?: unknown; endDate?: unknown; coachId?: unknown; coachName?: unknown; location?: unknown; manualEquipment?: unknown;
+    className?: unknown; description?: unknown; transport?: unknown; safetyNotes?: unknown; traineeEquipment?: unknown;
+  };
   try {
     body = JSON.parse(event.body ?? '{}');
   } catch {
@@ -46,15 +58,22 @@ export async function handler(
   const session = classRes.Item as ClassItem | undefined;
   if (!session) return json(404, { error: 'session_not_found' });
 
+  let movedTo: Date | null = null;
   const sets: string[] = [];
   const removes: string[] = [];
   const names: Record<string, string> = {};
   const values: Record<string, unknown> = {};
 
   if (typeof body.date === 'string' && body.date) {
-    sets.push('#date = :date');
+    const next = new Date(body.date);
+    if (Number.isNaN(next.getTime())) return json(400, { error: 'invalid_date' });
+    sets.push('#date = :date', 'GSI2PK = :gsi2pk', 'GSI2SK = :gsi2sk');
     names['#date'] = 'date';
-    values[':date'] = body.date;
+    values[':date'] = next.toISOString();
+    const keys = dayIndexKeys(classId, next);
+    values[':gsi2pk'] = keys.GSI2PK;
+    values[':gsi2sk'] = keys.GSI2SK;
+    movedTo = next;
   }
   if (body.endDate === null) {
     removes.push('endDate');
@@ -95,6 +114,29 @@ export async function handler(
     else { removes.push('manualEquipment'); }
   }
 
+  // A special activity's own details (Manage → Activities). A training's name comes from its training type — not editable here.
+  const isActivity = (session as { isSpecialActivity?: boolean }).isSpecialActivity === true;
+  for (const field of ACTIVITY_TEXT_FIELDS) {
+    const value = cleanActivityText(body[field], field);
+    if (value === undefined) continue;
+    if (!isActivity) return json(400, { error: 'not_an_activity' });
+    if (field === 'className') {
+      if (!value) return json(400, { error: 'missing_name' });
+      sets.push('className = :className'); values[':className'] = value;
+    } else if (value) {
+      sets.push(`#${field} = :${field}`); names[`#${field}`] = field; values[`:${field}`] = value;
+    } else {
+      removes.push(`#${field}`); names[`#${field}`] = field;
+    }
+  }
+  if (body.traineeEquipment !== undefined) {
+    if (!isActivity) return json(400, { error: 'not_an_activity' });
+    const items = cleanEquipmentList(body.traineeEquipment);
+    if (!items) return json(400, { error: 'invalid_equipment' });
+    if (items.length) { sets.push('traineeEquipment = :traineeEquipment'); values[':traineeEquipment'] = items; }
+    else removes.push('traineeEquipment');
+  }
+
   if (sets.length === 0 && removes.length === 0) return json(400, { error: 'no_fields_to_update' });
 
   const expressionParts: string[] = [];
@@ -109,5 +151,15 @@ export async function handler(
     ...(Object.keys(values).length > 0 ? { ExpressionAttributeValues: values } : {}),
   }));
 
-  return json(200, { success: true });
+  // Registrations follow the session to its new date (sessionMove.ts).
+  if (movedTo) await syncRegistrationsAfterMove(FORCA_TABLE_NAME, classId, new Date(session.date), movedTo);
+
+  // Forms attached to this session (activities) whose signed details just went out of date.
+  let signedOnOlderDetails: Awaited<ReturnType<typeof formsSignedOnOlderDetails>> = [];
+  try {
+    signedOnOlderDetails = await formsSignedOnOlderDetails('forca', classId);
+  } catch (err) {
+    console.warn('[adminUpdateSessionInstance] signed-forms check failed', classId, err);
+  }
+  return json(200, { success: true, signedOnOlderDetails });
 }

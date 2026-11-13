@@ -3,6 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isStillUpcomingForTrainee } from '../lib/sessionVisibility';
+import { sessionFlagsResolver } from '../lib/sessionEdit/sessionFlags';
 import { verifyFamilyLink } from '../lib/familyLinks';
 import type { ClassItem, GroupItem, RegistrationItem } from '../lib/entities';
 
@@ -48,6 +49,8 @@ export async function handler(
     return name;
   }
 
+  const sessionFlags = sessionFlagsResolver(table);
+
   const sessions = await Promise.all(registrations.map(async (r) => {
     const classRes = await ddb.send(new GetCommand({ TableName: table, Key: { PK: `CLASS#${r.classId}`, SK: 'METADATA' } }));
     const session = classRes.Item as ClassItem | undefined;
@@ -60,6 +63,7 @@ export async function handler(
       location: session.location ?? null,
       traineeNote: session.traineeNote ?? null,
       traineeEquipment: session.traineeEquipment ?? [],
+      ...(await sessionFlags(session)),
       coachName: session.coachName ?? null,
       coachPhone: null,
       groupName: await resolveGroupName(session.groupId),

@@ -9,6 +9,7 @@ import {
 } from './shared';
 import type { SignerRole } from './schema';
 import type { Answers } from './logic';
+import type { TextVariableValues } from './activityFields';
 import type { AcknowledgmentRecord, SignatureRecord } from './pdf/renderFormPdf';
 
 // Forms (FORCA and INCORE): who a published form is assigned to, and each
@@ -61,12 +62,31 @@ export async function loadRosters(brand: Brand, assignments: { target: Assignmen
   return out;
 }
 
+export type ActivityItems = Map<string, Record<string, unknown> | null>;
+
+/** The current calendar item (CLASS#…/METADATA) of each activity the assignments point at — null when it's gone. See activityFields.ts. */
+export async function loadActivityItems(brand: Brand, assignments: { target: AssignmentTarget }[]): Promise<ActivityItems> {
+  const out: ActivityItems = new Map();
+  const classIds = [...new Set(assignments.flatMap(a => (a.target.kind === 'activity' ? [a.target.classId] : [])))];
+  await Promise.all(classIds.map(async classId => {
+    const res = await ddb.send(new GetCommand({ TableName: formsTable(brand), Key: { PK: `CLASS#${classId}`, SK: 'METADATA' } }));
+    out.set(classId, (res.Item as Record<string, unknown> | undefined) ?? null);
+  }));
+  return out;
+}
+
+export const activityItemOf = (items: ActivityItems, target: AssignmentTarget) =>
+  (target.kind === 'activity' ? items.get(target.classId) ?? null : null);
+
 export interface FormAssignmentItem {
   PK: string; SK: string;
   assignmentId: string;
   templateId: string;
   target: AssignmentTarget;
-  /** Answers to the version's admin-filled fields (event name, date, …) — read-only for families. */
+  /**
+   * Answers to the version's admin-filled fields (event name, date, …) — read-only for families.
+   * Activity-linked fields hold the activity's details at assignment time; families see the live ones (activityFields.ts).
+   */
   adminAnswers: Answers;
   /** Version the admin answers were filled against. */
   version: number;
@@ -100,6 +120,8 @@ export interface FormSubmissionItem {
   pdfS3Key?: string;
   pdfSha256?: string;
   pdfGeneratedAt?: string;
+  /** Values of the {activity.*} variables in the form's text, frozen at the first signature (activityFields.ts). */
+  activityVars?: TextVariableValues;
 }
 
 export function computeSubmissionStatus(input: {
