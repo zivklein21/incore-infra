@@ -3,6 +3,7 @@ import { GetCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { verifyFamilyLink } from '../lib/familyLinks';
+import { effectiveNextChargeDateOf, loadPeriodsSafe } from '../lib/forcaPeriods/store';
 import type { ForcaBillingAgreementItem, MemberProfileItem } from '../lib/entities';
 
 // GET or POST /getMyForcaChildSubscription?childUid=<uid>
@@ -56,6 +57,8 @@ export async function handler(
     productName: agreement.productName,
     groupName: agreement.groupName,
     nextChargeDate: agreement.nextChargeDate ?? null,
+    // When it will really be charged, after the activity periods (lib/forcaPeriods) — 1.5.2+ shows this.
+    effectiveNextChargeDate: agreement.status === 'active' ? effectiveNextChargeDateOf(await loadPeriodsSafe(), agreement.nextChargeDate) : null,
     hasToken,
     declined,
     membershipEnd: membership?.end ?? null,

@@ -9,6 +9,7 @@ import { pickCurrentMembership } from './membershipExpiry';
 import { applySignupFlow, loadSignupFlow } from './signupFlow/shared';
 import { signupGateFor } from './formTemplates/signupGate';
 import { parentContactOf } from './quickDial';
+import { effectiveNextChargeDateOf, loadPeriodsSafe } from './forcaPeriods/store';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
 
@@ -125,6 +126,10 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
   const subscriptionStatus = latestAgreement?.status ?? null;
   const subscriptionAmountPerCharge = latestAgreement?.amountPerCharge ?? null;
   const subscriptionNextChargeDate = latestAgreement?.nextChargeDate ?? null;
+  // When it will really be charged, after the activity periods (lib/forcaPeriods); 1.5.2+ shows this.
+  const subscriptionEffectiveNextChargeDate = latestAgreement?.status === 'active' && latestAgreement.nextChargeDate
+    ? effectiveNextChargeDateOf(await loadPeriodsSafe(), latestAgreement.nextChargeDate)
+    : null;
 
   const medicalClearance = {
     requested: forms.medical_clearance_requested === true,
@@ -189,6 +194,7 @@ export async function buildProfileResponse(memberId: string): Promise<Record<str
     subscriptionStatus,
     subscriptionAmountPerCharge,
     subscriptionNextChargeDate,
+    subscriptionEffectiveNextChargeDate,
     membershipStart: typeof profile.membership?.start === 'string' ? profile.membership.start : null,
     membershipEnd: typeof profile.membership?.end === 'string' ? profile.membership.end : null,
     medicalClearance,

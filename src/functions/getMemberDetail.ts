@@ -7,6 +7,7 @@ import { s3, BUCKET_NAME } from '../lib/s3';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ForcaBillingAgreementItem, GroupItem, MemberProfileItem } from '../lib/entities';
+import { effectiveNextChargeDateOf, loadPeriodsSafe } from '../lib/forcaPeriods/store';
 import { forcaRowLabel, legacyPlanLabel, planLabelsFor, queryPlanItems } from '../lib/memberPlanLabel';
 
 const FILE_URL_EXPIRY_SECONDS = 900;
@@ -177,6 +178,9 @@ export async function handler(
     subscriptionProductName: latestAgreement?.productName ?? null,
     subscriptionAmountPerCharge: latestAgreement?.amountPerCharge ?? null,
     subscriptionNextChargeDate: latestAgreement?.nextChargeDate ?? null,
+    subscriptionEffectiveNextChargeDate: brand === 'forca' && latestAgreement?.status === 'active' && latestAgreement.nextChargeDate
+      ? effectiveNextChargeDateOf(await loadPeriodsSafe(), latestAgreement.nextChargeDate)
+      : null,
     age, birthday,
     photoUrl: await presign(p.photoKey),
     phone: p.identity?.phone ?? p.phone ?? '',

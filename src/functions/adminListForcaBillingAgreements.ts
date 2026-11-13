@@ -4,6 +4,7 @@ import { ddb, FORCA_TABLE_NAME } from '../lib/dynamo';
 import { getUid, json } from '../lib/http';
 import { isAdmin } from '../lib/auth';
 import type { ForcaBillingAgreementItem, MemberProfileItem } from '../lib/entities';
+import { effectiveNextChargeDateOf, loadPeriodsSafe } from '../lib/forcaPeriods/store';
 
 // GET/POST /adminListForcaBillingAgreements
 // Auth: Cognito JWT, caller must be admin
@@ -53,6 +54,7 @@ export async function handler(
     return true;
   });
 
+  const periods = await loadPeriodsSafe();
   const agreements = await Promise.all(latestPerMember.map(async (a) => {
     const memberRes = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${a.userId}`, SK: 'PROFILE' } }));
     const member = memberRes.Item as MemberProfileItem | undefined;
@@ -70,6 +72,7 @@ export async function handler(
       amountPerCharge: a.amountPerCharge,
       consecutiveFailures: a.consecutiveFailures,
       nextChargeDate: a.nextChargeDate ?? null,
+      effectiveNextChargeDate: a.status === 'active' ? effectiveNextChargeDateOf(periods, a.nextChargeDate) : null,
       lastChargeResult: a.lastChargeResult ?? null,
     };
   }));

@@ -14,7 +14,10 @@ import { getExpoPushToken, sendExpoPush } from './push';
 // identity, so admin payment-failure alerts reuse this INCORE-table helper
 // as-is rather than a FORCA-table copy, unlike every other piece of this
 // feature.
-import { notifyAdminsPaymentFailed } from './adminNotify';
+import { notifyAdmins, notifyAdminsPaymentFailed } from './adminNotify';
+import { israelDateStrOf } from './israelTime';
+import { isChargeDay } from './forcaPeriods/rules';
+import { loadPeriodSettings } from './forcaPeriods/store';
 
 // FORCA's own recurring-billing engine — a direct simplification of
 // hypBillingAgreements.ts's chargeOneAgreement/runHypBillingCycle for
@@ -303,8 +306,45 @@ export async function setForcaAgreementStatus(
   }
 }
 
-export async function runForcaBillingCycle(): Promise<{ processed: number; succeeded: number; failed: number }> {
-  const nowIso = new Date().toISOString();
+export type ForcaCycleResult = { processed: number; succeeded: number; failed: number; skipped?: 'outside_period' | 'no_periods' | 'periods_unreadable' };
+
+/**
+ * Whether today may charge at all: only on a day inside an activity period
+ * (Manage → Activity Periods, lib/forcaPeriods). Outside every period nothing
+ * is charged and due agreements simply stay due — the first day of the next
+ * period charges each one once, for that month. Every failure leans to not
+ * charging: the next run picks up where this one left off.
+ */
+export async function forcaChargeGate(now: Date): Promise<ForcaCycleResult['skipped'] | null> {
+  let periods;
+  try {
+    periods = (await loadPeriodSettings()).periods;
+  } catch (err) {
+    console.error('[chargeForcaSubscriptions] could not read activity periods — not charging today:', err);
+    return 'periods_unreadable';
+  }
+  if (periods.length === 0) return 'no_periods';
+  return isChargeDay(periods, israelDateStrOf(now)) ? null : 'outside_period';
+}
+
+export async function runForcaBillingCycle(now: Date = new Date()): Promise<ForcaCycleResult> {
+  const skipped = await forcaChargeGate(now);
+  if (skipped) {
+    console.log(`[chargeForcaSubscriptions] no charges today (${israelDateStrOf(now)}): ${skipped}`);
+    if (skipped !== 'outside_period') {
+      await notifyAdmins({
+        type: 'forca_billing_skipped',
+        priority: 'HIGH',
+        brand: 'forca',
+        pushTitle: 'FORCA: no subscription charges today',
+        message: skipped === 'no_periods'
+          ? 'No activity periods are set up, so no FORCA subscription was charged today. Add them in Manage → Payments → Activity Periods.'
+          : 'The activity periods could not be read, so no FORCA subscription was charged today. It will try again tomorrow.',
+      }).catch((err) => console.error('[chargeForcaSubscriptions] admin alert failed:', err));
+    }
+    return { processed: 0, succeeded: 0, failed: 0, skipped };
+  }
+  const nowIso = now.toISOString();
   const dueRes = await ddb.send(new QueryCommand({
     TableName: FORCA_TABLE_NAME,
     IndexName: 'GSI3',

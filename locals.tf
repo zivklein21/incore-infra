@@ -388,6 +388,10 @@ locals {
     adminSaveQuickReplies = "POST" # admin: save / delete / duplicate / reorder
     getQuickReplies       = "GET"  # chat: replies the admin / coach may use, or a FORCA member's quick messages
     useQuickReply         = "POST" # chat: count one use of a reply
+    # FORCA activity periods (Manage → Payments → Activity Periods)
+    adminListForcaPeriods  = "GET"  # admin: periods + end-of-period notice settings
+    adminSaveForcaPeriods  = "POST" # admin: save (or dryRun: preview which upcoming charges move)
+    getForcaActivityStatus = "GET"  # any user: in a period today? next period start, "אין פעילות" label, current period end
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
@@ -423,6 +427,7 @@ locals {
     chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
     checkPushReceipts              = "cron(0/30 * * * ? *)"    # every 30 minutes — Expo push receipts (see lib/push.ts)
+    forcaPeriodEndReminders        = "cron(0 10 * * ? *)"      # 10:00 daily — FORCA activity periods: "period ending, next one continues" notice to parents
     workoutLogReminders            = "cron(0/15 * * * ? *)"    # every 15 minutes — INCORE "log your workout" push after a class (off until an admin enables it)
   }
 
