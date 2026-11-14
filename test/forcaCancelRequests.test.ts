@@ -33,6 +33,9 @@ const rules = require('../src/lib/forcaCancelRequests/rules');
 const {
   adminForcaCancelRequest, adminForcaCancelRequests, getMyForcaCancelRequests, submitForcaCancelRequest,
 } = require('../src/lib/forcaCancelRequests/handlers');
+const { adminForcaRefund } = require('../src/lib/forcaRefunds/handlers');
+const { handler: parentCancel } = require('../src/functions/cancelForcaSubscription');
+const { handler: parentFreeze } = require('../src/functions/setForcaSubscriptionFreeze');
 
 const realSend = ddb.send;
 const realFetch = globalThis.fetch;
@@ -349,4 +352,30 @@ test('admin routes are admin only', async () => {
     assert.equal((await call(adminForcaCancelRequests, uid, {})).status, 403);
     assert.equal((await call(adminForcaCancelRequest, uid, { action: 'setStatus', requestId: 'x', status: 'done' })).status, 403);
   }
+});
+
+test('a refund given from the request is kept on the refund and written in the request\'s log', async () => {
+  setNow('2027-01-12T08:15:00.000Z');
+  const db = makeDb(seed());
+  const id = (await call(submitForcaCancelRequest, 'mom', { childUid: 'kid1' })).body.request.requestId;
+  // No earlier charge: recorded as a manual refund (no HYP call needed for this test).
+  const r = await call(adminForcaRefund, 'or', { action: 'create', traineeId: 'kid1', amount: 125, note: 'החזר לפי בקשה', parentRequestId: id });
+  assert.equal(r.status, 200);
+  const refund = [...db.items.values()].find((i) => String(i.PK).startsWith('FORCAREFUND#'));
+  assert.deepEqual(refund.details, { parentRequestId: id });
+  const last = logOf(db, id).at(-1);
+  assert.equal(last.action, 'refund');
+  assert.deepEqual(last.details, { refundId: refund.refundId, amount: 125, status: 'manual_pending', manualReason: 'no_charge' });
+  const detail = await call(adminForcaCancelRequests, 'or', { requestId: id });
+  assert.deepEqual(detail.body.refunds.map((x: any) => x.refundId), [refund.refundId]);
+});
+
+test('rule 3: a parent can no longer cancel or freeze a subscription herself', async () => {
+  const db = makeDb(seed());
+  for (const fn of [parentCancel, parentFreeze]) {
+    const r = await call(fn, 'mom', { agreementId: 'ag1', freeze: true });
+    assert.equal(r.status, 403);
+    assert.equal(r.body.error, 'use_cancellation_request');
+  }
+  assert.deepEqual(agreementOf(db), AGREEMENT);
 });

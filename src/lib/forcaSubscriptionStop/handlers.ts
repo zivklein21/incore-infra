@@ -10,6 +10,7 @@ import { previewStop, validateStopDetails, type StopPreview } from './rules';
 import {
   listStopLog, loadAgreement, membershipEndDay, removeScheduledStop, runStop, saveScheduledStop, savedCardFate, type SavedCardFate,
 } from './store';
+import { isLinkError, loadLinkedRequest, markEndDateFromStop, markStopRemoved, requestPreviewExtras, type LinkedRequest } from '../forcaCancelRequests/link';
 
 // FORCA admin cancel — two routes on the shared integration (incoreWorkoutApi.ts):
 //   POST adminForcaSubscriptionStopPreview  { agreementId, mode?, stopDay? }
@@ -18,6 +19,10 @@ import {
 //   POST adminForcaSubscriptionStop         { agreementId, action: 'apply', mode, stopDay?, reason, parentRequestId?, expectedStopDay? }
 //                                           { agreementId, action: 'remove', expectedStopDay? }
 //        apply + now → runs at once; apply + period_end/date → schedules (or edits) the stop
+// With parentRequestId (opened from a parent's cancellation request): the
+// preview adds section 5.8's date and warns when the end is later; applying
+// sets the request to "מועד סיום שנקבע" and removing the stop puts it back to
+// "בטיפול" (lib/forcaCancelRequests/link.ts).
 // Admin only (Or). New routes: nothing an existing build calls changes.
 
 type Event = APIGatewayProxyEventV2WithJWTAuthorizer;
@@ -60,6 +65,7 @@ async function load(body: Record<string, unknown>): Promise<Loaded | Result> {
 }
 
 const isResult = (v: Loaded | Result): v is Result => 'statusCode' in v;
+const isLinkResult = (v: LinkedRequest | null | Result): v is Result => !!v && 'statusCode' in v;
 
 function compute(l: Loaded, mode: unknown, stopDay: unknown) {
   const due = l.agreement.nextChargeDate ? new Date(l.agreement.nextChargeDate) : null;
@@ -92,11 +98,21 @@ export async function adminForcaSubscriptionStopPreview(event: Event): Promise<R
 
   const periodEnd = currentPeriodEnd(l.periods, l.today);
   const card = await savedCardFate(l.agreement);
+  const link = await requestLink(body, l.agreement);
+  if (isLinkResult(link)) return link;
   let preview: StopPreview | null = null;
+  let request: ReturnType<typeof requestPreviewExtras>['request'] | null = link ? requestPreviewExtras(link, null, null).request : null;
   if (body.mode !== undefined) {
     const res = compute(l, body.mode, body.stopDay);
     if (!res.ok) return json(400, { error: res.error });
     preview = await withCardWarning(res.value, card);
+    if (link) {
+      const extras = requestPreviewExtras(link, preview.lastActiveDay, preview.mode === 'now' ? null : preview.stopDay);
+      request = extras.request;
+      // On section 5.8's own date, "the month isn't charged" is the point, not a warning.
+      const warnings = preview.warnings.filter((w) => !(extras.request.isSuggested && w.code === 'stop_month_not_charged'));
+      preview = { ...preview, warnings: extras.warning ? [extras.warning, ...warnings] : warnings };
+    }
   }
   return json(200, {
     agreementId: l.agreement.agreementId,
@@ -110,8 +126,33 @@ export async function adminForcaSubscriptionStopPreview(event: Event): Promise<R
     scheduledStop: l.agreement.scheduledStop ?? null,
     cancellation: l.agreement.cancellation ?? null,
     preview,
+    ...(request ? { request } : {}),
     log: await listStopLog(l.agreement.agreementId),
   });
+}
+
+/** The parent request this sheet was opened from, if any (must be for this subscription's child). */
+async function requestLink(body: Record<string, unknown>, agreement: ForcaBillingAgreementItem): Promise<LinkedRequest | null | Result> {
+  const id = typeof body.parentRequestId === 'string' ? body.parentRequestId.trim() : '';
+  if (!id) return null;
+  const link = await loadLinkedRequest(id, agreement.userId);
+  if (isLinkError(link)) return json(link.error === 'request_not_found' ? 404 : 400, { error: link.error });
+  return link;
+}
+
+/** Sets the request's end date after a stop; a failure here never undoes the stop. */
+async function recordOnRequest(requestId: string | undefined, by: { uid: string; name: string }, agreement: ForcaBillingAgreementItem, preview: StopPreview): Promise<boolean> {
+  if (!requestId) return false;
+  try {
+    await markEndDateFromStop(requestId, by, {
+      endDate: preview.lastActiveDay ?? addDays(preview.stopDay, -1),
+      agreementId: agreement.agreementId, productName: agreement.productName, mode: preview.mode, stopDay: preview.stopDay,
+    });
+    return true;
+  } catch (err) {
+    console.error(`[adminForcaSubscriptionStop] stop applied but request ${requestId} not updated:`, err);
+    return false;
+  }
 }
 
 export async function adminForcaSubscriptionStop(event: Event): Promise<Result> {
@@ -133,15 +174,22 @@ export async function adminForcaSubscriptionStop(event: Event): Promise<Result> 
   const nowIso = new Date().toISOString();
 
   if (action === 'remove') {
+    const removed = agreement.scheduledStop;
     const res = await removeScheduledStop(agreement, uid, name);
     if (res === 'none') return json(404, { error: 'no_scheduled_stop' });
     if (res === 'conflict') return json(409, { error: 'conflict' });
+    if (removed?.parentRequestId) {
+      await markStopRemoved(removed.parentRequestId, { uid, name }, removed.stopDay)
+        .catch((err) => console.error(`[adminForcaSubscriptionStop] stop removed but request ${removed.parentRequestId} not updated:`, err));
+    }
     console.log(`[adminForcaSubscriptionStop] agreement=${agreement.agreementId} stop removed by ${uid}`);
     return json(200, { success: true, scheduledStop: null });
   }
 
   const details = validateStopDetails(body);
   if (!details.ok) return json(400, { error: details.error });
+  const link = await requestLink(body, agreement);
+  if (isLinkResult(link)) return link;
   const res = compute(l, body.mode, body.stopDay);
   if (!res.ok) return json(400, { error: res.error });
   const preview = res.value;
@@ -152,7 +200,8 @@ export async function adminForcaSubscriptionStop(event: Event): Promise<Result> 
       requestedBy: uid, requestedByName: name, requestedAt: nowIso,
     }, uid, name);
     if (!run.stopped) return json(409, { error: 'already_cancelled' });
-    return json(200, { success: true, cancellation: run.cancellation, preview });
+    const requestUpdated = await recordOnRequest(details.parentRequestId, { uid, name }, agreement, preview);
+    return json(200, { success: true, cancellation: run.cancellation, preview, ...(details.parentRequestId ? { requestUpdated } : {}) });
   }
 
   const stop: ForcaScheduledStop = {
@@ -168,5 +217,6 @@ export async function adminForcaSubscriptionStop(event: Event): Promise<Result> 
   const saved = await saveScheduledStop(agreement, stop, { uid, name });
   if (saved === 'conflict') return json(409, { error: 'conflict' });
   console.log(`[adminForcaSubscriptionStop] agreement=${agreement.agreementId} stop ${agreement.scheduledStop ? 'edited' : 'scheduled'} for ${stop.stopDay} (${stop.mode}) by ${uid}`);
-  return json(200, { success: true, scheduledStop: stop, preview });
+  const requestUpdated = await recordOnRequest(details.parentRequestId, { uid, name }, agreement, preview);
+  return json(200, { success: true, scheduledStop: stop, preview, ...(details.parentRequestId ? { requestUpdated } : {}) });
 }

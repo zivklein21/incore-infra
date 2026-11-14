@@ -6,6 +6,7 @@ import { isAdmin } from '../auth';
 import { deriveMemberName, type ForcaBillingAgreementItem, type MemberProfileItem } from '../entities';
 import { resolveMemberProfile } from '../memberLookup';
 import { validatePricePerSession, validateRefundInput } from './rules';
+import { logRefundOnRequest } from '../forcaCancelRequests/link';
 import {
   RefundConflictError, buildSuggestion, chargeSummary, issueForcaRefund, latestSubscriptionCharge, listAllRefunds,
   listTraineeRefunds, markManualRefundDone, savePricePerSession, type ForcaRefundItem, type RefundBy,
@@ -14,7 +15,7 @@ import {
 // FORCA refunds (זיכוי חלקי) — two routes on the shared integration (incoreWorkoutApi.ts):
 //   POST adminForcaRefunds  {}                                → { refunds } every refund, newest first (the list screen)
 //                           { traineeId, agreementId? }       → { refunds, lastCharge, suggestion } for the sheet
-//   POST adminForcaRefund   { action: 'create', traineeId, agreementId?, amount, note }
+//   POST adminForcaRefund   { action: 'create', traineeId, agreementId?, amount, note, parentRequestId? }
 //                           { action: 'markManualDone', refundId }
 //                           { action: 'setPrice', pricePerSession }
 // Admin only (Or). New routes: nothing an existing build calls changes.
@@ -127,8 +128,18 @@ export async function adminForcaRefund(event: Event): Promise<Result> {
     const input = validateRefundInput({ amount: body.amount, note: body.note, type: 'partial' });
     if ('error' in input) return json(400, { error: input.error });
     const agreementId = str(body.agreementId) || undefined;
+    // Given from a parent's cancellation request: kept on the refund and logged on the request.
+    const parentRequestId = str(body.parentRequestId) || undefined;
     try {
-      const refund = await issueForcaRefund({ traineeId, agreementId, amount: input.amount, note: input.note, type: input.type, by });
+      const refund = await issueForcaRefund({
+        traineeId, agreementId, amount: input.amount, note: input.note, type: input.type, by,
+        ...(parentRequestId ? { details: { parentRequestId } } : {}),
+      });
+      if (parentRequestId) {
+        await logRefundOnRequest(parentRequestId, by, {
+          refundId: refund.refundId, amount: refund.amount, status: refund.status, ...(refund.manualReason ? { manualReason: refund.manualReason } : {}),
+        });
+      }
       return json(200, {
         refund: publicRefund(refund),
         outcome: refund.status === 'refunded' ? 'refunded' : 'manual',

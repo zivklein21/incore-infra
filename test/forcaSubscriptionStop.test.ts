@@ -76,6 +76,7 @@ function checkCondition(item: any, cond: string | undefined, names: any = {}, va
     case 'scheduledStop.stopDay = :prev': return item?.scheduledStop?.stopDay === values[':prev'];
     case 'scheduledStop.stopDay = :d': return item?.scheduledStop?.stopDay === values[':d'];
     case 'payment.hypToken = :card': return item?.payment?.hypToken === values[':card'];
+    case 'version = :v': return !!item && item.version === values[':v'];
     default: throw new Error(`test db: unknown condition ${cond}`);
   }
 }
@@ -306,7 +307,11 @@ test('preview saves nothing and shows the exit point', async () => {
 test('option 1 (now): cancelled, token deleted from the subscription and the saved card, recorded; never charged', async () => {
   const db = makeDb(seed());
   setNow(noon('2026-11-14'));
-  const res = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'now', reason: 'ההורה ביקשה', parentRequestId: 'inq-7' }));
+  // A request id has to be a real request for this child (linked requests: forcaCancelRequests.test.ts).
+  const unknown = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'now', reason: 'ההורה ביקשה', parentRequestId: 'inq-7' }));
+  assert.equal(unknown.statusCode, 404);
+  assert.equal(agreementOf(db).status, 'active');
+  const res = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'now', reason: 'ההורה ביקשה' }));
   assert.equal(res.statusCode, 200);
   const a = agreementOf(db);
   assert.equal(a.status, 'cancelled');
@@ -315,7 +320,7 @@ test('option 1 (now): cancelled, token deleted from the subscription and the sav
   assert.equal(a.nextChargeDate, undefined);
   assert.equal(a.cancellation.mode, 'now');
   assert.equal(a.cancellation.reason, 'ההורה ביקשה');
-  assert.equal(a.cancellation.parentRequestId, 'inq-7');
+  assert.equal(a.cancellation.parentRequestId, undefined);
   assert.equal(a.cancellation.requestedBy, 'admin1');
   assert.equal(a.cancellation.requestedByName, 'Or Saraf');
   assert.equal(a.cancellation.savedCardDeleted, true);
@@ -522,4 +527,88 @@ test('agreements list: shows the scheduled stop and the cancellation record', as
   const list = body(await listAgreements(ev('admin1', {})));
   assert.equal(list.agreements[0].scheduledStop.stopDay, '2027-03-20');
   assert.equal(list.agreements[0].cancellation, null);
+});
+
+// ── Opened from a parent's cancellation request ─────────────────────────────
+
+// Received Thu Nov 12 2026, 10:00 Israel: section 5.8 → active until Nov 30, stop day Dec 1.
+function withRequest(extra: Record<string, any> = {}, child = 'kid1') {
+  const receivedAt = '2026-11-12T08:00:00.000Z';
+  return seed({
+    'forca|FORCACANCELREQ#req1|RECEIPT': {
+      PK: 'FORCACANCELREQ#req1', SK: 'RECEIPT', requestId: 'req1', requestNumber: 'REQ1', receivedAt, source: { channel: 'app' },
+      parent: { uid: 'parent1', name: 'דנה כהן' }, child: { uid: child, name: 'נועה כהן' }, subscription: null,
+      content: { requestText: 'בקשה', note: '' }, contentHash: 'h',
+    },
+    'forca|FORCACANCELREQ#req1|STATE': {
+      PK: 'FORCACANCELREQ#req1', SK: 'STATE', requestId: 'req1', requestNumber: 'REQ1', receivedAt, channel: 'app',
+      parentUid: 'parent1', parentName: 'דנה כהן', childUid: child, childName: 'נועה כהן', agreementId: null, productName: null,
+      status: 'received', endDate: null, seenAt: null, parentNotifiedAt: null, version: 1, updatedAt: receivedAt,
+      GSI2PK: 'FORCACANCELREQ#open', GSI2SK: `${receivedAt}#req1`,
+    },
+    ...extra,
+  });
+}
+const requestState = (db: Db) => db.items.get('forca|FORCACANCELREQ#req1|STATE');
+const requestLog = (db: Db) => [...db.items.values()].filter((i) => i.PK === 'FORCACANCELREQ#req1' && String(i.SK).startsWith('LOG#')).sort((x, y) => x.SK.localeCompare(y.SK));
+
+test('from a request: the summary shows section 5.8\'s date and warns when the end is later', async () => {
+  makeDb(withRequest());
+  setNow(noon('2026-11-14'));
+  const info = body(await adminForcaSubscriptionStopPreview(ev('admin1', { agreementId: 'ag1', parentRequestId: 'req1' })));
+  assert.deepEqual(
+    { stop: info.request.suggestedStopDay, last: info.request.suggestedLastActiveDay, label: info.request.label },
+    { stop: '2026-12-01', last: '2026-11-30', label: 'מועד מוצע לפי סעיף 5.8' },
+  );
+  const on58 = body(await adminForcaSubscriptionStopPreview(ev('admin1', { agreementId: 'ag1', parentRequestId: 'req1', mode: 'date', stopDay: '2026-12-01' })));
+  assert.equal(on58.preview.lastActiveDay, '2026-11-30');
+  assert.equal(on58.request.isSuggested, true);
+  assert.deepEqual(on58.preview.warnings.map((w: any) => w.code), [], 'no "month not charged" noise on the 5.8 date');
+  const later = body(await adminForcaSubscriptionStopPreview(ev('admin1', { agreementId: 'ag1', parentRequestId: 'req1', mode: 'date', stopDay: '2027-01-01' })));
+  assert.equal(later.preview.lastActiveDay, '2026-12-31');
+  assert.equal(later.preview.warnings[0].code, 'later_than_5_8');
+  assert.equal(later.preview.warnings[0].message, 'מאוחר מהמועד לפי סעיף 5.8 – לוודא שההורה ביקש זאת');
+  // Later is allowed (the parent may have asked for the end of the period).
+  const applied = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'date', stopDay: '2027-01-01', reason: 'ההורה ביקשה סוף תקופה', parentRequestId: 'req1' }));
+  assert.equal(applied.statusCode, 200);
+});
+
+test('from a request: applying the stop sets the parent\'s end date; removing it goes back to "בטיפול"', async () => {
+  const db = makeDb(withRequest());
+  setNow(noon('2026-11-14'));
+  const res = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'date', stopDay: '2026-12-01', reason: 'בקשת הורה', parentRequestId: 'req1' }));
+  assert.equal(res.statusCode, 200);
+  assert.equal(body(res).requestUpdated, true);
+  assert.equal(agreementOf(db).scheduledStop.parentRequestId, 'req1');
+  let st = requestState(db);
+  assert.deepEqual({ status: st.status, endDate: st.endDate, agreementId: st.agreementId, version: st.version }, { status: 'end_date_set', endDate: '2026-11-30', agreementId: 'ag1', version: 2 });
+  assert.equal(requestLog(db)[0].action, 'end_date_from_stop');
+  assert.deepEqual(requestLog(db)[0].details, { mode: 'date', stopDay: '2026-12-01' });
+
+  mock.timers.tick(60_000);
+  const removed = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'remove', expectedStopDay: '2026-12-01' }));
+  assert.equal(removed.statusCode, 200);
+  st = requestState(db);
+  assert.deepEqual({ status: st.status, endDate: st.endDate }, { status: 'in_progress', endDate: null });
+  assert.deepEqual(requestLog(db).map((l) => l.action), ['end_date_from_stop', 'stop_removed']);
+});
+
+test('from a request: "now" sets the end date to the last active day', async () => {
+  const db = makeDb(withRequest());
+  setNow(noon('2026-11-14'));
+  const res = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'now', reason: 'בקשת הורה', parentRequestId: 'req1' }));
+  assert.equal(res.statusCode, 200);
+  assert.equal(agreementOf(db).status, 'cancelled');
+  assert.equal(agreementOf(db).cancellation.parentRequestId, 'req1');
+  assert.deepEqual({ s: requestState(db).status, d: requestState(db).endDate }, { s: 'end_date_set', d: '2026-11-30' });
+});
+
+test('from a request: a request for another child is refused and nothing changes', async () => {
+  const db = makeDb(withRequest({}, 'kid2'));
+  setNow(noon('2026-11-14'));
+  const res = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'now', reason: 'בקשת הורה', parentRequestId: 'req1' }));
+  assert.equal(res.statusCode, 400);
+  assert.equal(body(res).error, 'request_other_child');
+  assert.equal(agreementOf(db).status, 'active');
+  assert.equal(requestState(db).version, 1);
 });
