@@ -2,12 +2,17 @@ import {
   DeleteObjectsCommand, GetObjectTaggingCommand, ListObjectsV2Command, ListObjectVersionsCommand, S3Client,
 } from '@aws-sdk/client-s3';
 import { DeleteCommand, GetCommand, QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
-import { ddb, tableForBrand } from '../lib/dynamo';
+import { ddb, FORCA_TABLE_NAME, tableForBrand } from '../lib/dynamo';
 import { ARCHIVE_TABLE, logArchiveEvent, META_KEY } from '../lib/memberArchive';
+import { RETENTION_TAG } from '../lib/forcaMedicalFreeze/rules';
+import { certificateDeleteAfter } from '../lib/forcaMedicalFreeze/retention';
 
 // The only code that can delete a signed file, running as the only role the
 // signed-forms bucket lets delete (incore-retention-job, signed_forms.tf).
-//   - monthly: files archived 7+ years ago, re-checking the archived=true tag.
+//   - monthly: files archived 7+ years ago, re-checking the archived=true tag;
+//     and FORCA medical-freeze certificates past their date (the same rule:
+//     the later of received + 7 years and the 18th birthday + 7 years),
+//     re-checking the retention tag and the birthday.
 //   - DynamoDB stream: logs each row the archive table's TTL removed.
 //   - purge_member: one test member's files and rows, with a dry run.
 
@@ -80,6 +85,64 @@ async function expireArchivedFiles(): Promise<void> {
   console.log(`[memberRetentionJob] expired ${due.length} file(s)`);
 }
 
+const CERT_RETENTION_PK = 'FORCA_CERT_RETENTION';
+type CertRow = { PK: string; SK: string; requestId: string; key: string; childUid: string; receivedAt: string; deleteAfter: string };
+
+/** Certificates whose date came. Each is checked again before it goes, and logged like every automatic deletion. */
+export async function expireFreezeCertificates(now: Date = new Date()): Promise<{ due: number; deleted: number; skipped: number }> {
+  const out = { due: 0, deleted: 0, skipped: 0 };
+  let lastKey: Record<string, unknown> | undefined;
+  const rows: CertRow[] = [];
+  do {
+    const res = await ddb.send(new QueryCommand({
+      TableName: FORCA_TABLE_NAME,
+      KeyConditionExpression: 'PK = :pk AND SK <= :upTo',
+      ExpressionAttributeValues: { ':pk': CERT_RETENTION_PK, ':upTo': `${now.toISOString()}#~` },
+      ExclusiveStartKey: lastKey,
+    }));
+    rows.push(...((res.Items ?? []) as CertRow[]));
+    lastKey = res.LastEvaluatedKey;
+  } while (lastKey);
+  out.due = rows.length;
+
+  for (const row of rows) {
+    // A birthday added since the upload can only make the date later.
+    const profile = (await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${row.childUid}`, SK: 'PROFILE' } }))).Item;
+    const recomputed = certificateDeleteAfter(row.receivedAt, profile?.identity?.birthday ?? profile?.birthday);
+    if (recomputed > now.toISOString() && recomputed > row.deleteAfter) {
+      console.log(`[memberRetentionJob] certificate ${row.requestId} kept until ${recomputed} (birthday on file)`);
+      out.skipped++;
+      continue;
+    }
+    let tagged = false;
+    let missing = false;
+    try {
+      const { TagSet } = await s3.send(new GetObjectTaggingCommand({ Bucket: UPLOADS_BUCKET, Key: row.key }));
+      tagged = !!TagSet?.some((t) => t.Key === RETENTION_TAG.Key && t.Value === RETENTION_TAG.Value);
+    } catch (err: any) {
+      missing = err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404;
+      if (!missing) throw err;
+    }
+    if (!missing && !tagged) {
+      console.error(`[memberRetentionJob] skipped untagged certificate ${UPLOADS_BUCKET}/${row.key}`);
+      out.skipped++;
+      continue;
+    }
+    if (!missing) {
+      const versions = (await listVersions(UPLOADS_BUCKET, row.key)).filter((v) => v.Key === row.key);
+      await deleteObjects(UPLOADS_BUCKET, versions);
+    }
+    await logArchiveEvent({
+      event: 'auto_deleted', memberId: row.childUid, kind: 'medical_freeze_certificate',
+      detail: `file ${row.requestId}${missing ? ' (already gone)' : ''}`,
+    });
+    await ddb.send(new DeleteCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: row.PK, SK: row.SK } }));
+    out.deleted++;
+  }
+  console.log(`[memberRetentionJob] certificates: ${JSON.stringify(out)}`);
+  return out;
+}
+
 async function logExpiredRows(event: StreamEvent): Promise<void> {
   for (const record of event.Records) {
     const image = record.dynamodb?.OldImage;
@@ -117,6 +180,13 @@ async function purgeMember({ memberId, brand, dryRun }: PurgeJob) {
     ExpressionAttributeValues: { ':id': memberId },
     ProjectionExpression: 'PK, SK',
   })).filter((r) => r.SK !== 'PROFILE');
+  // Her medical-freeze certificates are stored under the request id, not her uid.
+  if (brand === 'forca') {
+    for (const r of rows.filter((x) => x.PK === CERT_RETENTION_PK)) {
+      const cert = (await ddb.send(new GetCommand({ TableName: table, Key: { PK: r.PK, SK: r.SK } }))).Item as CertRow | undefined;
+      if (cert?.key) uploads.push({ Key: cert.key });
+    }
+  }
   const archived = (await ddb.send(new QueryCommand({
     TableName: ARCHIVE_TABLE,
     KeyConditionExpression: 'memberId = :id',
@@ -145,5 +215,8 @@ async function purgeMember({ memberId, brand, dryRun }: PurgeJob) {
 export async function handler(event: StreamEvent | PurgeJob | Record<string, unknown>) {
   if ('Records' in event) return logExpiredRows(event as StreamEvent);
   if ((event as PurgeJob).job === 'purge_member') return purgeMember(event as PurgeJob);
-  return expireArchivedFiles();
+  // Monthly: one failing never stops the other.
+  const results = await Promise.allSettled([expireArchivedFiles(), expireFreezeCertificates()]);
+  const failed = results.find((r): r is PromiseRejectedResult => r.status === 'rejected');
+  if (failed) throw failed.reason;
 }

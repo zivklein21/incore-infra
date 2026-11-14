@@ -1483,6 +1483,8 @@ export interface MemberProfileItem {
   // coaches may see, and only through activeMedicalAlert(). The log stays
   // admin-only, and both are kept on member deletion like the medical forms.
   medicalAlert?: { enabled: boolean; text: string; updatedAt: string; updatedBy: { uid: string; name: string; role: 'admin' | 'coach' } };
+  /** FORCA medical freezes Or approved (lib/forcaMedicalFreeze): dates only, so coaches can show "בהקפאה". No medical detail. */
+  medicalFreezes?: { from: string; to: string; requestId: string }[];
   medicalAlertLog?: MedicalAlertLogEntry[];
   identity?: {
     role?: string; name?: string; full_name?: string; first_name?: string; last_name?: string;

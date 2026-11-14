@@ -18,6 +18,10 @@ import { israelDateStrOf, ISRAEL_TZ } from '../israelTime';
 // day is the 1st of the next month. Or may choose later (with a warning).
 
 export const REQUEST_STATUSES = ['received', 'in_progress', 'end_date_set', 'done'] as const;
+/** cancellation (task 4) or medical_freeze (section 8, lib/forcaMedicalFreeze). Older records have no type: cancellation. */
+export const REQUEST_TYPES = ['cancellation', 'medical_freeze'] as const;
+export type RequestType = typeof REQUEST_TYPES[number];
+export const REQUEST_TYPE_LABEL: Record<RequestType, string> = { cancellation: 'ביטול השתתפות', medical_freeze: 'הקפאה רפואית' };
 export type RequestStatus = typeof REQUEST_STATUSES[number];
 
 export const CHANNELS = ['app', 'whatsapp', 'phone', 'email', 'mail', 'other'] as const;
@@ -160,6 +164,9 @@ export interface RequestSettings {
   requestText: string;
   /** Sent to the parent on receipt. {{childName}}, {{receivedAt}}, {{requestNumber}}. */
   confirmationText: string;
+  /** The same two for a medical freeze notice. */
+  medicalRequestText: string;
+  medicalConfirmationText: string;
 }
 
 export const DEFAULT_SETTINGS: RequestSettings = {
@@ -167,14 +174,25 @@ export const DEFAULT_SETTINGS: RequestSettings = {
   confirmationText:
     'בקשתך לביטול ההשתתפות של {{childName}} התקבלה ב-{{receivedAt}} (מספר בקשה {{requestNumber}}).\n'
     + 'הבקשה אינה מבטלת את המנוי באופן מיידי: מועד סיום ההשתתפות ייקבע לפי תנאי השימוש, ועדכון יופיע באפליקציה.',
+  medicalRequestText: 'הודעה על הקפאה רפואית של {{childName}}. מצורף אישור רפואי.',
+  medicalConfirmationText:
+    'הודעתך על הקפאה רפואית של {{childName}} התקבלה ב-{{receivedAt}} יחד עם האישור הרפואי (מספר בקשה {{requestNumber}}).\n'
+    + 'מועדי ההקפאה וההחזר ייקבעו לפי סעיף 8 בתנאי השימוש, ועדכון יופיע באפליקציה. החיוב החודשי לא משתנה; החזר, אם מגיע, מבוצע בנפרד.',
 };
 
-export function validateSettings(body: Record<string, unknown>): { ok: true; value: RequestSettings } | { ok: false; error: string } {
-  const requestText = typeof body.requestText === 'string' ? body.requestText.trim() : '';
-  const confirmationText = typeof body.confirmationText === 'string' ? body.confirmationText.trim() : '';
-  if (requestText.length < 5 || confirmationText.length < 5) return { ok: false, error: 'text_required' };
-  if (requestText.length > MAX_TEMPLATE || confirmationText.length > MAX_TEMPLATE) return { ok: false, error: 'text_too_long' };
-  return { ok: true, value: { requestText, confirmationText } };
+/** The texts Or saves. The medical two are optional: a save without them keeps what's stored (`current`). */
+export function validateSettings(body: Record<string, unknown>, current: RequestSettings): { ok: true; value: RequestSettings } | { ok: false; error: string } {
+  const text = (k: keyof RequestSettings) => (typeof body[k] === 'string' ? (body[k] as string).trim() : current[k]);
+  const value: RequestSettings = {
+    requestText: typeof body.requestText === 'string' ? body.requestText.trim() : '',
+    confirmationText: typeof body.confirmationText === 'string' ? body.confirmationText.trim() : '',
+    medicalRequestText: text('medicalRequestText'),
+    medicalConfirmationText: text('medicalConfirmationText'),
+  };
+  const all = Object.values(value);
+  if (all.some((t) => t.length < 5)) return { ok: false, error: 'text_required' };
+  if (all.some((t) => t.length > MAX_TEMPLATE)) return { ok: false, error: 'text_too_long' };
+  return { ok: true, value };
 }
 
 export function fillTemplate(template: string, vars: Record<string, string>): string {

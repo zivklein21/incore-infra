@@ -91,6 +91,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "incore_uploads" {
       storage_class = "GLACIER_IR"
     }
   }
+
+  # FORCA medical freeze: a certificate uploaded but never submitted. A
+  # submitted one is moved out of staging at once (lib/forcaMedicalFreeze).
+  rule {
+    id     = "expire-freeze-certificate-staging"
+    status = "Enabled"
+    filter {
+      prefix = "forca-medical-freeze/staging/"
+    }
+    expiration {
+      days = 1
+    }
+  }
 }
 
 output "uploads_bucket_name" {

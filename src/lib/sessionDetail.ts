@@ -7,6 +7,8 @@ import { QueryCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from './dynamo';
 import type { CoachAccess } from './coachAccess';
 import { activeMedicalAlert } from './medicalAlert';
+import { freezeOn } from './forcaMedicalFreeze/rules';
+import { israelDateStrOf } from './israelTime';
 import { resolveWorkoutPlanEquipmentQuantitiesBatch } from './workoutPlanEquipment';
 import { getAllMemberProfiles } from './memberScan';
 import {
@@ -208,6 +210,8 @@ export interface RosterEntryDetail {
   medicalFlag: boolean;
   /** The admin-written alert text while it's on — the only medical data a coach gets (lib/medicalAlert.ts). */
   medicalAlert: string | null;
+  /** "בהקפאה": a medical freeze Or approved covers this session's day. Dates only, never why. */
+  frozen: { from: string; to: string } | null;
 }
 
 export interface SessionDetail {
@@ -263,6 +267,7 @@ export async function resolveSessionDetail(
     ExpressionAttributeValues: { ':pk': `CLASS#${classId}`, ':prefix': 'REG#' },
   }));
   const registrations = (regsRes.Items ?? []) as RegistrationItem[];
+  const sessionDay = israelDateStrOf(new Date(session.date));
 
   const roster: RosterEntryDetail[] = registrations.map((r) => {
     const profile = lookups.profileById.get(r.userId);
@@ -276,6 +281,7 @@ export async function resolveSessionDetail(
       actualAttendanceBy: r.actualAttendanceBy ?? null,
       medicalFlag: access.isAdmin && Object.values(healthAnswers).some((v) => v === 'yes'),
       medicalAlert: activeMedicalAlert(profile),
+      frozen: freezeOn(profile, sessionDay),
     };
   });
   roster.sort((a, b) => a.name.localeCompare(b.name));

@@ -6,6 +6,10 @@ import { getEmailBrandTokens } from '../emailBranding';
 import { sendEmail } from '../mailer';
 import { getExpoPushToken, sendExpoPushBatch } from '../push';
 import { CHANNEL_LABEL, fillTemplate, formatIsraelDateTime } from './rules';
+
+/** "בקשתך לביטול השתתפות התקבלה" or, for a medical freeze, "הודעתך על הקפאה רפואית התקבלה". */
+export const confirmationTitle = (r: Pick<RequestReceipt, 'type'>) =>
+  (r.type === 'medical_freeze' ? 'הודעתך על הקפאה רפואית התקבלה' : 'בקשתך לביטול השתתפות התקבלה');
 import type { RequestReceipt } from './store';
 
 // Who hears about a request:
@@ -35,6 +39,8 @@ export function buildConfirmationEmail(text: string, r: RequestReceipt): { subje
     ...(r.subscription ? [['מנוי', `${r.subscription.productName}${r.subscription.groupName ? ` · ${r.subscription.groupName}` : ''}`] as [string, string]] : []),
     ['תוכן הבקשה', r.content.requestText],
     ...(r.content.note ? [['הערה', r.content.note] as [string, string]] : []),
+    // The file itself never leaves the system: only that one was received.
+    ...(r.attachment ? [['אישור רפואי', `התקבל (${r.attachment.fileName})`] as [string, string]] : []),
   ];
   const html = `<!DOCTYPE html>
 <html lang="he" dir="rtl">
@@ -45,7 +51,7 @@ export function buildConfirmationEmail(text: string, r: RequestReceipt): { subje
       <img src="${t.logoUrl}" alt="${t.senderName}" height="${t.logoHeight}" style="height:${t.logoHeight}px;width:auto;max-width:220px;border:0;">
     </div>
     <div style="padding:32px 28px;color:#333333;line-height:1.6;text-align:right;">
-      <h2 style="color:#2c3e50;margin-top:0;">בקשתך לביטול השתתפות התקבלה</h2>
+      <h2 style="color:#2c3e50;margin-top:0;">${confirmationTitle(r)}</h2>
       <p style="white-space:pre-line;">${escapeHtml(text)}</p>
       <table style="width:100%;border-collapse:collapse;margin-top:20px;background-color:${t.accentBgLight};border-radius:8px;">
         ${rows.map(([k, v]) => `<tr><td style="padding:8px 12px;font-weight:bold;color:${t.accentColor};white-space:nowrap;vertical-align:top;">${escapeHtml(k)}</td><td style="padding:8px 12px;white-space:pre-line;">${escapeHtml(v)}</td></tr>`).join('')}
@@ -56,7 +62,7 @@ export function buildConfirmationEmail(text: string, r: RequestReceipt): { subje
   </div>
 </body>
 </html>`;
-  return { subject: `${t.senderName}: בקשתך לביטול השתתפות התקבלה (${r.requestNumber})`, html, senderName: t.senderName };
+  return { subject: `${t.senderName}: ${confirmationTitle(r)} (${r.requestNumber})`, html, senderName: t.senderName };
 }
 
 /** Push + in-app message + email to the parent. Returns which of them went out. */
@@ -65,7 +71,7 @@ export async function sendParentConfirmation(
 ): Promise<{ push: boolean; message: boolean; email: boolean }> {
   const sent = { push: false, message: false, email: false };
   const text = confirmationText(template, r);
-  const title = 'בקשתך לביטול השתתפות התקבלה';
+  const title = confirmationTitle(r);
 
   try {
     await ddb.send(new PutCommand({
@@ -116,8 +122,10 @@ export async function notifyOrNewRequest(r: RequestReceipt): Promise<void> {
       type: 'FORCA_CANCEL_REQUEST',
       priority: 'HIGH',
       brand: 'forca',
-      pushTitle: 'FORCA: בקשה לביטול השתתפות',
-      message: `${r.parent.name} ביקש/ה לבטל את ההשתתפות של ${r.child.name} (${formatIsraelDateTime(r.receivedAt)}). מספר בקשה ${r.requestNumber}.`,
+      pushTitle: r.type === 'medical_freeze' ? 'FORCA: הודעה על הקפאה רפואית' : 'FORCA: בקשה לביטול השתתפות',
+      message: r.type === 'medical_freeze'
+        ? `${r.parent.name} שלח/ה הודעה על הקפאה רפואית של ${r.child.name} עם אישור רפואי (${formatIsraelDateTime(r.receivedAt)}). מספר בקשה ${r.requestNumber}.`
+        : `${r.parent.name} ביקש/ה לבטל את ההשתתפות של ${r.child.name} (${formatIsraelDateTime(r.receivedAt)}). מספר בקשה ${r.requestNumber}.`,
       extra: { requestId: r.requestId, memberId: r.child.uid },
       pushData: { type: 'FORCA_CANCEL_REQUEST', requestId: r.requestId },
     });

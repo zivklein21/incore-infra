@@ -4,8 +4,9 @@ import { ddb, FORCA_TABLE_NAME } from '../dynamo';
 import { deriveMemberName, type ForcaBillingAgreementItem, type MemberProfileItem } from '../entities';
 import {
   DEFAULT_SETTINGS, fillTemplate, listPartition, receiptHash, requestNumberOf,
-  type Channel, type RequestSettings, type RequestStatus,
+  type Channel, type RequestSettings, type RequestStatus, type RequestType,
 } from './rules';
+import type { FreezeDecision } from '../forcaMedicalFreeze/types';
 
 // FORCA parent cancellation requests: storage. Three kinds of item per request
 // (FORCA table):
@@ -29,9 +30,25 @@ export const SETTINGS_KEY = { PK: 'APPCONFIG', SK: 'FORCA_CANCEL_REQUEST_SETTING
 
 export type Actor = { uid: string; name: string } | { system: string };
 
+/** A medical certificate, stored privately (lib/forcaMedicalFreeze). Only Or gets a link to it. */
+export interface RequestAttachment {
+  key: string;
+  fileName: string;
+  contentType: string;
+  size: number;
+  etag: string;
+  /** Deleted by the retention job after this (the archive's rule). */
+  deleteAfter: string;
+}
+
 export interface RequestReceipt {
   PK: string; SK: 'RECEIPT';
   requestId: string;
+  /** Absent on requests from before medical freezes: cancellation. */
+  type?: RequestType;
+  /** Top level for lookups (test purge); the same as child.uid. */
+  childUid?: string;
+  attachment?: RequestAttachment;
   requestNumber: string;
   /** When the request was received: server time on submit, or the original time Or entered. */
   receivedAt: string;
@@ -49,8 +66,12 @@ export interface RequestState {
   GSI2PK: string; GSI2SK: string;
   requestId: string;
   requestNumber: string;
+  type?: RequestType;
   receivedAt: string;
   channel: Channel;
+  hasAttachment?: boolean;
+  /** A medical freeze: Or's decision, the dates and the refund per month. */
+  freeze?: FreezeDecision | null;
   parentUid: string; parentName: string;
   childUid: string; childName: string;
   agreementId: string | null;
@@ -68,7 +89,8 @@ export interface RequestLogEntry {
   version: number;
   at: string;
   by: Actor;
-  action: 'received' | 'entered_manually' | 'seen' | 'status' | 'end_date_from_stop' | 'stop_removed' | 'refund' | 'parent_notified';
+  action: 'received' | 'entered_manually' | 'seen' | 'status' | 'end_date_from_stop' | 'stop_removed' | 'refund' | 'parent_notified'
+    | 'freeze_approved' | 'freeze_rejected' | 'freeze_refund';
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   details?: Record<string, unknown>;
@@ -151,6 +173,8 @@ export async function loadSettings(): Promise<StoredSettings> {
   return {
     requestText: item?.requestText || DEFAULT_SETTINGS.requestText,
     confirmationText: item?.confirmationText || DEFAULT_SETTINGS.confirmationText,
+    medicalRequestText: item?.medicalRequestText || DEFAULT_SETTINGS.medicalRequestText,
+    medicalConfirmationText: item?.medicalConfirmationText || DEFAULT_SETTINGS.medicalConfirmationText,
     version: typeof item?.version === 'number' ? item.version : 0,
     ...(item?.updatedAt ? { updatedAt: item.updatedAt } : {}),
     ...(item?.updatedBy ? { updatedBy: item.updatedBy } : {}),
@@ -197,17 +221,24 @@ export type CreateParams = {
   note: string;
   by: Actor;
   enteredBy?: { uid: string; name: string };
+  /** Set ahead when a file has to be stored under the request's id first. */
+  requestId?: string;
+  type?: RequestType;
+  attachment?: RequestAttachment;
 };
 
 /** Writes the receipt, the first state and the first log entry together. */
 export async function createRequest(p: CreateParams): Promise<{ receipt: RequestReceipt; state: RequestState }> {
-  const requestId = randomUUID();
+  const requestId = p.requestId ?? randomUUID();
+  const type: RequestType = p.type ?? 'cancellation';
   const nowIso = new Date().toISOString();
   const parentName = profileName(p.parent, p.agreement?.payerUid === p.parentUid ? p.agreement.payerName || 'הורה' : 'הורה');
   const childName = profileName(p.child, 'מתאמנת');
   const body = {
     requestId,
     requestNumber: requestNumberOf(requestId),
+    type,
+    childUid: p.childUid,
     receivedAt: p.receivedAt,
     source: { channel: p.channel, ...(p.enteredBy ? { enteredBy: p.enteredBy, enteredAt: nowIso } : {}) },
     parent: {
@@ -221,13 +252,15 @@ export async function createRequest(p: CreateParams): Promise<{ receipt: Request
       status: p.agreement.status, amountPerCharge: p.agreement.amountPerCharge,
     } : null,
     content: { requestText: p.requestText, note: p.note },
+    ...(p.attachment ? { attachment: p.attachment } : {}),
   };
   const receipt: RequestReceipt = { PK: reqPK(requestId), SK: 'RECEIPT', ...body, contentHash: receiptHash(body) };
   const state: RequestState = {
     PK: reqPK(requestId), SK: 'STATE',
     GSI1PK: `MEMBER#${p.parentUid}`, GSI1SK: `FORCACANCELREQ#${p.receivedAt}#${requestId}`,
     GSI2PK: listPartition('received'), GSI2SK: `${p.receivedAt}#${requestId}`,
-    requestId, requestNumber: body.requestNumber, receivedAt: p.receivedAt, channel: p.channel,
+    requestId, requestNumber: body.requestNumber, type, receivedAt: p.receivedAt, channel: p.channel,
+    hasAttachment: !!p.attachment, freeze: null,
     parentUid: p.parentUid, parentName, childUid: p.childUid, childName,
     agreementId: p.agreement?.agreementId ?? null, productName: p.agreement?.productName ?? null,
     status: 'received', endDate: null, seenAt: null, parentNotifiedAt: null,
@@ -236,7 +269,7 @@ export async function createRequest(p: CreateParams): Promise<{ receipt: Request
   const log: RequestLogEntry = {
     PK: reqPK(requestId), SK: logSK(1), version: 1, at: nowIso, by: p.by,
     action: p.enteredBy ? 'entered_manually' : 'received',
-    after: { status: 'received', receivedAt: p.receivedAt, channel: p.channel },
+    after: { status: 'received', type, receivedAt: p.receivedAt, channel: p.channel, ...(p.attachment ? { attachment: p.attachment.fileName } : {}) },
   };
   await ddb.send(new TransactWriteCommand({
     TransactItems: [receipt, state, log].map((Item) => ({
@@ -322,7 +355,7 @@ export class StateConflictError extends Error {
 
 type Change = {
   /** Fields to change on the state, or null for nothing to do. */
-  patch: Partial<Pick<RequestState, 'status' | 'endDate' | 'seenAt' | 'parentNotifiedAt' | 'agreementId' | 'productName'>> | null;
+  patch: Partial<Pick<RequestState, 'status' | 'endDate' | 'seenAt' | 'parentNotifiedAt' | 'agreementId' | 'productName' | 'freeze'>> | null;
   action: RequestLogEntry['action'];
   details?: Record<string, unknown>;
 };

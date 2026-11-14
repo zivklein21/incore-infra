@@ -1,3 +1,5 @@
+import { currentOrNextFreeze } from '../lib/forcaMedicalFreeze/rules';
+import { israelDateStrOf } from '../lib/israelTime';
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
 import { ScanCommand } from '@aws-sdk/lib-dynamodb';
 import { getUid, json } from '../lib/http';
@@ -47,6 +49,7 @@ export async function handler(
   if (!access || access.permissions.performance === 'none') return json(403, { error: 'forbidden' });
 
   const allAges = event.queryStringParameters?.scope === 'all';
+  const today = israelDateStrOf(new Date());
 
   const [profiles, groupsRes] = await Promise.all([
     getAllMemberProfiles(FORCA_TABLE_NAME),
@@ -83,6 +86,8 @@ export async function handler(
       groupName: groupNameById.get(p.identity?.groupId ?? '') ?? null,
       age: allAges ? computeAge(p.identity?.birthday ?? p.birthday ?? undefined) : null,
       photoConsent: consents && p.identity?.accountType !== 'parent_only' ? (consents.get(p.PK.replace('MEMBER#', '')) ?? 'not_approved') : null,
+      // "בהקפאה": a medical freeze now or coming up. Dates only, never the reason.
+      freeze: currentOrNextFreeze(p, today),
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 

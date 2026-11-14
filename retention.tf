@@ -38,8 +38,9 @@ resource "aws_iam_role_policy" "retention_job" {
         Resource = ["${aws_dynamodb_table.member_archive.arn}/stream/*"]
       },
       {
-        Effect   = "Allow"
-        Action   = ["dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:Scan"]
+        Effect = "Allow"
+        # Query: FORCA medical-freeze certificates due for deletion (PK FORCA_CERT_RETENTION).
+        Action   = ["dynamodb:GetItem", "dynamodb:DeleteItem", "dynamodb:Scan", "dynamodb:Query"]
         Resource = [aws_dynamodb_table.incore_table.arn, aws_dynamodb_table.forca_table.arn]
       },
       {

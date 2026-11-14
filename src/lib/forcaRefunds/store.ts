@@ -107,6 +107,13 @@ export async function latestSubscriptionCharge(traineeId: string): Promise<Forca
   return orders.find((o) => o.status === 'completed' && typeof o.amount === 'number' && o.amount > 0) ?? null;
 }
 
+/** One specific charge of the trainee's (e.g. the month a medical freeze refunds), or null. */
+export async function subscriptionChargeById(traineeId: string, orderId: string): Promise<ForcaSubscriptionOrderItem & { refundedTotal?: number } | null> {
+  const res = await ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `FORCASUBORDER#${orderId}`, SK: 'METADATA' }, ConsistentRead: true }));
+  const o = res.Item as (ForcaSubscriptionOrderItem & { refundedTotal?: number }) | undefined;
+  return o && o.userId === traineeId && o.status === 'completed' && o.amount > 0 ? o : null;
+}
+
 export function chargeSummary(order: (ForcaSubscriptionOrderItem & { refundedTotal?: number }) | null) {
   if (!order) return null;
   return {
@@ -187,6 +194,8 @@ export type IssueRefundParams = {
   by: RefundBy;
   agreementId?: string;
   details?: Record<string, unknown>;
+  /** Refund this charge instead of the most recent one (the medical freeze refunds each month's own charge). */
+  orderId?: string;
 };
 
 /**
@@ -200,7 +209,7 @@ export type IssueRefundParams = {
  * is sent then; try again).
  */
 export async function issueForcaRefund(p: IssueRefundParams): Promise<ForcaRefundItem> {
-  const order = await latestSubscriptionCharge(p.traineeId);
+  const order = p.orderId ? await subscriptionChargeById(p.traineeId, p.orderId) : await latestSubscriptionCharge(p.traineeId);
   const refundable = refundableOf(order);
   const decision = decideRefund(p.amount, order);
 

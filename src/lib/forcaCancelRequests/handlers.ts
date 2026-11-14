@@ -1,4 +1,5 @@
 import type { APIGatewayProxyEventV2WithJWTAuthorizer, APIGatewayProxyStructuredResultV2 } from 'aws-lambda';
+import { randomUUID } from 'crypto';
 import { getUid, json } from '../http';
 import { isAdmin } from '../auth';
 import { deriveMemberName } from '../entities';
@@ -6,8 +7,8 @@ import { resolveMemberProfile } from '../memberLookup';
 import { listTraineeRefunds } from '../forcaRefunds/store';
 import { publicRefund } from '../forcaRefunds/handlers';
 import {
-  CHANNEL_LABEL, MAY_NEED_REFUND, SUGGESTION_LABEL, chargesAfterReceipt, cleanNote, formatIsraelDateTime, parentStatusLabel,
-  suggestedEnd, validateManual, validateSettings, validateStatusChange,
+  CHANNEL_LABEL, MAY_NEED_REFUND, REQUEST_TYPE_LABEL, SUGGESTION_LABEL, chargesAfterReceipt, cleanNote, formatIsraelDateTime, parentStatusLabel,
+  suggestedEnd, validateManual, validateSettings, validateStatusChange, type RequestType,
 } from './rules';
 import {
   StateConflictError, changeRequest, childCharges, createRequest, currentAgreementOf, linkedChildren, linkedParents, listParentRequests,
@@ -15,19 +16,25 @@ import {
   type RequestReceipt, type RequestState,
 } from './store';
 import { notifyOrNewRequest, sendParentConfirmation } from './notify';
+import { CertificateError, attachCertificate, certificateReadUrl } from '../forcaMedicalFreeze/store';
+import { adminFreezeAction } from '../forcaMedicalFreeze/handlers';
+import { freezeRangeLabel } from '../forcaMedicalFreeze/rules';
+import type { RequestAttachment } from './store';
 
 // FORCA parent cancellation requests. Four routes on the shared integration (incoreWorkoutApi.ts):
 //
 // Parent (a linked parent, or the payer on the child's subscription):
 //   POST getMyForcaCancelRequests  {}                  → { children: [{ uid, name, requestText, subscription }], requests }
-//   POST submitForcaCancelRequest  { childUid, note? } → { request }   received now; cancels and stops nothing
+//   POST submitForcaCancelRequest  { childUid, note?, type?, uploadId? } → { request }   received now; cancels and stops nothing
+//        type 'medical_freeze' (section 8) needs the certificate: uploadId from getForcaFreezeUploadUrl
 // Admin (Or):
 //   POST adminForcaCancelRequests  { filter?: open|handled|all } → { requests, unseenCount, settings }
 //                                  { requestId }                 → { receipt, state, log, charges, suggestion, refunds }
 //                                  { parentsOf: childUid }       → { parents } for the manual entry
 //   POST adminForcaCancelRequest   { action: 'setStatus', requestId, status, endDate? }
 //                                  { action: 'markSeen', requestId }
-//                                  { action: 'addManual', parentUid, childUid, channel, originalAt, content, notifyParent? }
+//                                  { action: 'addManual', parentUid, childUid, channel, originalAt, content, notifyParent?, type?, uploadId? }
+//                                  medical freeze actions: lib/forcaMedicalFreeze/handlers.ts
 //                                  { action: 'saveSettings', requestText, confirmationText, basedOn }
 // New routes: nothing an existing build calls changes.
 
@@ -70,19 +77,29 @@ function forParent(s: RequestState) {
     status: s.status,
     endDate: s.endDate,
     statusLabel: parentStatusLabel(s.status, s.endDate),
+    type: s.type ?? 'cancellation',
+    typeLabel: REQUEST_TYPE_LABEL[s.type ?? 'cancellation'],
+    hasAttachment: !!s.hasAttachment,
+    // Dates only: never the reason, the sessions or the certificate.
+    freezeLabel: s.freeze?.decision === 'approved' && s.freeze.from && s.freeze.to ? `הקפאה רפואית: ${freezeRangeLabel(s.freeze.from, s.freeze.to)}` : null,
   };
 }
 
 /** Or's list row. */
 function forList(s: RequestState) {
   const { PK: _pk, SK: _sk, GSI1PK: _a, GSI1SK: _b, GSI2PK: _c, GSI2SK: _d, ...rest } = s;
-  return { ...rest, receivedAtLabel: formatIsraelDateTime(s.receivedAt), channelLabel: CHANNEL_LABEL[s.channel], parentStatusLabel: parentStatusLabel(s.status, s.endDate) };
+  return {
+    ...rest, type: s.type ?? 'cancellation', receivedAtLabel: formatIsraelDateTime(s.receivedAt), channelLabel: CHANNEL_LABEL[s.channel],
+    parentStatusLabel: parentStatusLabel(s.status, s.endDate),
+  };
 }
 
 function publicReceipt(r: RequestReceipt) {
   const { PK: _pk, SK: _sk, ...rest } = r;
-  return rest;
+  return { ...rest, type: r.type ?? 'cancellation' };
 }
+
+const requestTypeOf = (v: unknown): RequestType | null => (v === undefined || v === 'cancellation' ? 'cancellation' : v === 'medical_freeze' ? 'medical_freeze' : null);
 
 // ─── Parent ─────────────────────────────────────────────────────────────────
 
@@ -96,6 +113,7 @@ export async function getMyForcaCancelRequests(event: Event): Promise<Result> {
       uid: c.uid,
       name,
       requestText: renderRequestText(settings.requestText, name),
+      medicalRequestText: renderRequestText(settings.medicalRequestText, name),
       subscription: agreement ? { productName: agreement.productName, groupName: agreement.groupName, status: agreement.status } : null,
     };
   }));
@@ -112,21 +130,35 @@ export async function submitForcaCancelRequest(event: Event): Promise<Result> {
   if (!childUid) return json(400, { error: 'missing_child' });
   const note = cleanNote(body.note);
   if (!note.ok) return json(400, { error: note.error });
+  const type = requestTypeOf(body.type);
+  if (!type) return json(400, { error: 'invalid_type' });
+  const uploadId = str(body.uploadId);
+  if (type === 'medical_freeze' && !uploadId) return json(400, { error: 'certificate_required' });
 
   const agreement = await currentAgreementOf(childUid);
   if (!(await maySubmitFor(uid, childUid, agreement))) return json(403, { error: 'not_your_child' });
   const [parent, child, settings] = await Promise.all([loadForcaProfile(uid), loadForcaProfile(childUid), loadSettings()]);
   const childName = profileName(child, 'מתאמנת');
 
+  const requestId = randomUUID();
+  let attachment: RequestAttachment | undefined;
+  if (type === 'medical_freeze') {
+    try {
+      attachment = await attachCertificate(uploadId, uid, childUid, requestId, receivedAt, child);
+    } catch (err) {
+      if (err instanceof CertificateError) return json(400, { error: err.code });
+      throw err;
+    }
+  }
   const { receipt, state } = await createRequest({
-    parent, parentUid: uid, child, childUid, agreement, receivedAt, channel: 'app',
-    requestText: renderRequestText(settings.requestText, childName), note: note.note,
+    parent, parentUid: uid, child, childUid, agreement, receivedAt, channel: 'app', requestId, type, attachment,
+    requestText: renderRequestText(type === 'medical_freeze' ? settings.medicalRequestText : settings.requestText, childName), note: note.note,
     by: { uid, name: profileName(parent, 'הורה') },
   });
   console.log(`[submitForcaCancelRequest] ${receipt.requestId} parent=${uid} child=${childUid} received ${receivedAt}`);
 
   // After the request is saved: it's received whatever happens to the notifications.
-  const sent = await sendParentConfirmation(parent, settings.confirmationText, receipt);
+  const sent = await sendParentConfirmation(parent, type === 'medical_freeze' ? settings.medicalConfirmationText : settings.confirmationText, receipt);
   const notified = await changeRequest(receipt.requestId, { system: 'confirmation' }, () => ({
     patch: { parentNotifiedAt: new Date().toISOString() }, action: 'parent_notified', details: sent,
   })).catch((err) => { console.error(`[submitForcaCancelRequest] ${receipt.requestId} logging the confirmation failed:`, err); return null; });
@@ -156,8 +188,11 @@ export async function adminForcaCancelRequests(event: Event): Promise<Result> {
     if (!receipt || !state) return json(404, { error: 'request_not_found' });
     const [charges, refunds] = await Promise.all([childCharges(receipt.child.uid), listTraineeRefunds(receipt.child.uid)]);
     const s = suggestedEnd(receipt.receivedAt);
+    // The certificate: a 15-minute link for Or only (this route is admin-only); null once retention deleted it.
+    const attachmentUrl = receipt.attachment ? await certificateReadUrl(receipt.attachment) : null;
     return json(200, {
       receipt: publicReceipt(receipt),
+      ...(receipt.attachment ? { attachmentUrl, attachmentDeleted: !attachmentUrl } : {}),
       receivedAtLabel: formatIsraelDateTime(receipt.receivedAt),
       channelLabel: CHANNEL_LABEL[receipt.source.channel],
       state: forList(state),
@@ -184,6 +219,9 @@ export async function adminForcaCancelRequest(event: Event): Promise<Result> {
   const body = parseBody(event);
   if (!body) return json(400, { error: 'invalid_json' });
   const by = await adminActor(uid);
+
+  const freezeResult = await adminFreezeAction(body, by);
+  if (freezeResult) return freezeResult;
 
   try {
     if (body.action === 'markSeen') {
@@ -212,18 +250,32 @@ export async function adminForcaCancelRequest(event: Event): Promise<Result> {
       const v = validateManual(body, new Date());
       if (!v.ok) return json(400, { error: v.error });
       const m = v.value;
+      const type = requestTypeOf(body.type);
+      if (!type) return json(400, { error: 'invalid_type' });
       const agreement = await currentAgreementOf(m.childUid);
       if (!(await maySubmitFor(m.parentUid, m.childUid, agreement))) return json(400, { error: 'not_linked' });
       const [parent, child, settings] = await Promise.all([loadForcaProfile(m.parentUid), loadForcaProfile(m.childUid), loadSettings()]);
+      const requestId = randomUUID();
+      // A certificate Or received elsewhere is optional here: she may have it on paper.
+      const uploadId = str(body.uploadId);
+      let attachment: RequestAttachment | undefined;
+      if (type === 'medical_freeze' && uploadId) {
+        try {
+          attachment = await attachCertificate(uploadId, uid, m.childUid, requestId, m.originalAt, child);
+        } catch (err) {
+          if (err instanceof CertificateError) return json(400, { error: err.code });
+          throw err;
+        }
+      }
       const { receipt, state } = await createRequest({
         parent, parentUid: m.parentUid, child, childUid: m.childUid, agreement,
         receivedAt: m.originalAt, channel: m.channel, requestText: m.content, note: '',
-        by, enteredBy: by,
+        by, enteredBy: by, requestId, type, attachment,
       });
       // Or entered it herself: she's seen it.
       let latest = await changeRequest(receipt.requestId, by, () => ({ patch: { seenAt: new Date().toISOString() }, action: 'seen' })) ?? state;
       if (m.notifyParent) {
-        const sent = await sendParentConfirmation(parent, settings.confirmationText, receipt);
+        const sent = await sendParentConfirmation(parent, type === 'medical_freeze' ? settings.medicalConfirmationText : settings.confirmationText, receipt);
         latest = await changeRequest(receipt.requestId, { system: 'confirmation' }, () => ({
           patch: { parentNotifiedAt: new Date().toISOString() }, action: 'parent_notified', details: sent,
         })) ?? latest;
@@ -233,9 +285,10 @@ export async function adminForcaCancelRequest(event: Event): Promise<Result> {
     }
 
     if (body.action === 'saveSettings') {
-      const v = validateSettings(body);
+      const current = await loadSettings();
+      const v = validateSettings(body, current);
       if (!v.ok) return json(400, { error: v.error });
-      const basedOn = typeof body.basedOn === 'number' ? body.basedOn : (await loadSettings()).version;
+      const basedOn = typeof body.basedOn === 'number' ? body.basedOn : current.version;
       try {
         return json(200, { settings: await saveSettings(v.value, basedOn, by) });
       } catch (err: any) {

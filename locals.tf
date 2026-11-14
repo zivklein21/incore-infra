@@ -402,7 +402,8 @@ locals {
     getMyForcaCancelRequests = "POST" # parent: her children with the request text, and her requests with their status
     submitForcaCancelRequest = "POST" # parent: submit a request (received now; cancels and stops nothing)
     adminForcaCancelRequests = "POST" # admin: the list (open / handled / all), one request in full, or a child's parents
-    adminForcaCancelRequest  = "POST" # admin: set status, mark seen, enter a request received elsewhere, save the texts
+    adminForcaCancelRequest  = "POST" # admin: set status, mark seen, enter a request received elsewhere, save the texts; medical freeze: preview / approve / reject, certificate upload
+    getForcaFreezeUploadUrl  = "POST" # parent: 5-minute upload link for a medical certificate (staging, random id, expires after a day if not submitted)
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)
@@ -436,6 +437,7 @@ locals {
     processWaitlistTimeouts        = "cron(0/1 * * * ? *)"     # every minute
     chargeHypBillingAgreements     = "cron(0 3 * * ? *)"       # 03:00 daily
     chargeForcaSubscriptions       = "cron(30 3 * * ? *)"      # 03:30 daily — FORCA Subscription & Recurring Billing feature, staggered after the INCORE run above
+    forcaFreezeRefunds             = "cron(0 5 * * ? *)"       # 05:00 daily — FORCA medical freeze: refund each frozen month once its charge exists
     checkUnreturnedEquipmentAlerts = "cron(0 * * * ? *)"       # hourly — FORCA Coach feature
     checkPushReceipts              = "cron(0/30 * * * ? *)"    # every 30 minutes — Expo push receipts (see lib/push.ts)
     forcaPeriodEndReminders        = "cron(0 10 * * ? *)"      # 10:00 daily — FORCA activity periods: "period ending, next one continues" notice to parents

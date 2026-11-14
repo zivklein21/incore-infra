@@ -47,6 +47,7 @@ import { adminForcaRefund, adminForcaRefunds } from '../lib/forcaRefunds/handler
 import {
   adminForcaCancelRequest, adminForcaCancelRequests, getMyForcaCancelRequests, submitForcaCancelRequest,
 } from '../lib/forcaCancelRequests/handlers';
+import { getForcaFreezeUploadUrl } from '../lib/forcaMedicalFreeze/handlers';
 import { adminListQuickReplies, adminSaveQuickReplies, getQuickReplies, useQuickReply } from '../lib/quickReplies/handlers';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
@@ -136,6 +137,8 @@ const HANDLERS: Record<string, Handler> = {
   submitForcaCancelRequest,
   adminForcaCancelRequests,
   adminForcaCancelRequest,
+  // FORCA medical freeze: the certificate upload (the rest rides the request routes).
+  getForcaFreezeUploadUrl,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal
