@@ -404,6 +404,9 @@ test('editing a scheduled stop moves it; the old day does nothing; logged', asyn
   // The screen's stop no longer matches → conflict, nothing changes.
   const stale = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'date', stopDay: '2027-03-20', reason: 'שינוי', expectedStopDay: null }));
   assert.equal(stale.statusCode, 409);
+  // The edit comes a minute later, as it would for Or. With the clock frozen
+  // both log keys share a timestamp and only the random suffix ordered them.
+  mock.timers.tick(60_000);
   const res = await adminForcaSubscriptionStop(ev('admin1', { agreementId: 'ag1', action: 'apply', mode: 'date', stopDay: '2027-03-20', reason: 'ההורה ביקשה להמשיך עוד חודש', expectedStopDay: '2027-02-15' }));
   assert.equal(res.statusCode, 200);
   const s = agreementOf(db).scheduledStop;
