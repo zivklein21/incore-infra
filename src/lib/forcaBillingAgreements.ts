@@ -18,6 +18,8 @@ import { notifyAdmins, notifyAdminsPaymentFailed } from './adminNotify';
 import { israelDateStrOf } from './israelTime';
 import { isChargeDay } from './forcaPeriods/rules';
 import { loadPeriodSettings } from './forcaPeriods/store';
+import { stopIsDue } from './forcaSubscriptionStop/rules';
+import { runDueStops, runScheduledStop } from './forcaSubscriptionStop/store';
 
 // FORCA's own recurring-billing engine — a direct simplification of
 // hypBillingAgreements.ts's chargeOneAgreement/runHypBillingCycle for
@@ -26,7 +28,16 @@ import { loadPeriodSettings } from './forcaPeriods/store';
 // chargeHypToken — both brands use the same HYP merchant account, see
 // hypClient.ts's own credentials comment. Used by both the daily cron
 // (chargeForcaSubscriptions.ts) and any future admin "charge now" override.
-export async function chargeOneForcaAgreement(agreement: ForcaBillingAgreementItem): Promise<{ success: boolean; ccode: number }> {
+export async function chargeOneForcaAgreement(
+  agreement: ForcaBillingAgreementItem, now: Date = new Date(),
+): Promise<{ success: boolean; ccode: number; stopped?: boolean }> {
+  // Admin cancel: from the stop day on, nothing is charged — whatever path
+  // got here (the job, a retry, a stale index read). The stop runs instead.
+  if (stopIsDue(agreement.scheduledStop?.stopDay, israelDateStrOf(now))) {
+    console.log(`[chargeOneForcaAgreement] agreement=${agreement.agreementId} not charged: stop day ${agreement.scheduledStop?.stopDay} reached`);
+    await runScheduledStop(agreement, now);
+    return { success: false, ccode: -1, stopped: true };
+  }
   const [payerRes, traineeRes] = await Promise.all([
     ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${agreement.payerUid}`, SK: 'PROFILE' } })),
     ddb.send(new GetCommand({ TableName: FORCA_TABLE_NAME, Key: { PK: `MEMBER#${agreement.userId}`, SK: 'PROFILE' } })),
@@ -306,7 +317,12 @@ export async function setForcaAgreementStatus(
   }
 }
 
-export type ForcaCycleResult = { processed: number; succeeded: number; failed: number; skipped?: 'outside_period' | 'no_periods' | 'periods_unreadable' };
+export type ForcaCycleResult = {
+  processed: number; succeeded: number; failed: number;
+  skipped?: 'outside_period' | 'no_periods' | 'periods_unreadable';
+  /** Admin-cancel stops run today (present only when there were any). */
+  stops?: { due: number; stopped: number; failed: number };
+};
 
 /**
  * Whether today may charge at all: only on a day inside an activity period
@@ -328,6 +344,19 @@ export async function forcaChargeGate(now: Date): Promise<ForcaCycleResult['skip
 }
 
 export async function runForcaBillingCycle(now: Date = new Date()): Promise<ForcaCycleResult> {
+  // Admin-cancel stops first, every day (inside a period or not), before anything is charged.
+  let stopsResult: { due: number; stopped: string[]; failed: number } = { due: 0, stopped: [], failed: 0 };
+  try {
+    stopsResult = await runDueStops(now);
+  } catch (err) {
+    // chargeOneForcaAgreement still refuses every agreement whose stop day came.
+    console.error('[chargeForcaSubscriptions] running due stops failed:', err);
+  }
+  const stoppedToday = new Set(stopsResult.stopped);
+  const stops = stopsResult.due || stopsResult.failed
+    ? { stops: { due: stopsResult.due, stopped: stopsResult.stopped.length, failed: stopsResult.failed } }
+    : {};
+
   const skipped = await forcaChargeGate(now);
   if (skipped) {
     console.log(`[chargeForcaSubscriptions] no charges today (${israelDateStrOf(now)}): ${skipped}`);
@@ -342,7 +371,7 @@ export async function runForcaBillingCycle(now: Date = new Date()): Promise<Forc
           : 'The activity periods could not be read, so no FORCA subscription was charged today. It will try again tomorrow.',
       }).catch((err) => console.error('[chargeForcaSubscriptions] admin alert failed:', err));
     }
-    return { processed: 0, succeeded: 0, failed: 0, skipped };
+    return { processed: 0, succeeded: 0, failed: 0, skipped, ...stops };
   }
   const nowIso = now.toISOString();
   const dueRes = await ddb.send(new QueryCommand({
@@ -356,10 +385,13 @@ export async function runForcaBillingCycle(now: Date = new Date()): Promise<Forc
   let succeeded = 0;
   let failed = 0;
   for (const agreement of due) {
+    // The index can lag a write: an agreement stopped a moment ago may still be listed.
+    if (stoppedToday.has(agreement.agreementId)) continue;
     if (agreement.status !== 'active' && applyChargeSafety('forca', agreement.agreementId, agreement.userId, 'not_active')) continue;
     // One bad agreement must never abort the rest of the cycle.
     try {
-      const { success } = await chargeOneForcaAgreement(agreement);
+      const { success, stopped } = await chargeOneForcaAgreement(agreement, now);
+      if (stopped) continue;
       if (success) succeeded++; else failed++;
     } catch (err: any) {
       console.error(`[chargeForcaSubscriptions] agreement=${agreement.agreementId} user=${agreement.userId} threw:`, err);
@@ -368,5 +400,5 @@ export async function runForcaBillingCycle(now: Date = new Date()): Promise<Forc
   }
 
   console.log(`[chargeForcaSubscriptions] processed=${due.length} succeeded=${succeeded} failed=${failed}`);
-  return { processed: due.length, succeeded, failed };
+  return { processed: due.length, succeeded, failed, ...stops };
 }

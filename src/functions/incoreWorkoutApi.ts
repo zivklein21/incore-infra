@@ -42,6 +42,7 @@ import { getMemberBookings } from '../lib/memberBookings';
 import { adminCancelMemberSubscription, adminListMemberSubscriptions, adminSaveMemberSubscription } from '../lib/memberSubscriptions';
 import { getForcaChatContacts } from '../lib/forcaChat/contacts';
 import { adminListForcaPeriods, adminSaveForcaPeriods, getForcaActivityStatus } from '../lib/forcaPeriods/handlers';
+import { adminForcaSubscriptionStop, adminForcaSubscriptionStopPreview } from '../lib/forcaSubscriptionStop/handlers';
 import { adminListQuickReplies, adminSaveQuickReplies, getQuickReplies, useQuickReply } from '../lib/quickReplies/handlers';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
@@ -120,6 +121,9 @@ const HANDLERS: Record<string, Handler> = {
   adminListForcaPeriods,
   adminSaveForcaPeriods,
   getForcaActivityStatus,
+  // FORCA admin cancel: now / end of the current period / a picked date.
+  adminForcaSubscriptionStopPreview,
+  adminForcaSubscriptionStop,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal

@@ -25,17 +25,19 @@ export async function runPeriodEndReminders(now: Date = new Date()): Promise<{ p
   if (due.length === 0) return { periods: 0, sent: 0, alreadySent: 0, failed: 0 };
 
   const agreements = await listActiveAgreements();
-  const byPayer = new Map<string, string[]>(); // payerUid → trainee uids
-  for (const a of agreements) {
-    const payer = a.payerUid || a.userId;
-    const list = byPayer.get(payer) ?? [];
-    if (!list.includes(a.userId)) list.push(a.userId);
-    byPayer.set(payer, list);
-  }
-  const profiles = await loadForcaProfiles([...byPayer.keys(), ...agreements.map((a) => a.userId)]);
+  const profiles = await loadForcaProfiles([...agreements.map((a) => a.payerUid || a.userId), ...agreements.map((a) => a.userId)]);
 
   let sent = 0; let alreadySent = 0; let failed = 0;
   for (const { period, next } of due) {
+    // A subscription Or set to stop before the next period starts doesn't continue: no notice for it.
+    const byPayer = new Map<string, string[]>(); // payerUid → trainee uids
+    for (const a of agreements) {
+      if (a.scheduledStop && a.scheduledStop.stopDay <= next.start) continue;
+      const payer = a.payerUid || a.userId;
+      const list = byPayer.get(payer) ?? [];
+      if (!list.includes(a.userId)) list.push(a.userId);
+      byPayer.set(payer, list);
+    }
     for (const [payerUid, childUids] of byPayer) {
       const nowIso = now.toISOString();
       try {

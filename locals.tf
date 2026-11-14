@@ -392,6 +392,9 @@ locals {
     adminListForcaPeriods  = "GET"  # admin: periods + end-of-period notice settings
     adminSaveForcaPeriods  = "POST" # admin: save (or dryRun: preview which upcoming charges move)
     getForcaActivityStatus = "GET"  # any user: in a period today? next period start, "אין פעילות" label, current period end
+    # FORCA admin cancel (Backoffice → subscription → ביטול מנוי)
+    adminForcaSubscriptionStopPreview = "POST" # admin: summary for a choice (charges left, last active day, card deletion), scheduled stop, log
+    adminForcaSubscriptionStop        = "POST" # admin: apply (now / end of period / picked date) or remove a scheduled stop
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

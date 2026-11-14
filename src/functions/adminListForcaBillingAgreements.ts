@@ -74,6 +74,9 @@ export async function handler(
       nextChargeDate: a.nextChargeDate ?? null,
       effectiveNextChargeDate: a.status === 'active' ? effectiveNextChargeDateOf(periods, a.nextChargeDate) : null,
       lastChargeResult: a.lastChargeResult ?? null,
+      // Admin cancel (added fields; older builds ignore them).
+      scheduledStop: a.status === 'cancelled' ? null : a.scheduledStop ?? null,
+      cancellation: a.cancellation ?? null,
     };
   }));
 

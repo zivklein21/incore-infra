@@ -614,6 +614,36 @@ export interface ForcaBillingAgreementItem {
   sourceOrderId: string;
   createdAt: string;
   updatedAt: string;
+  // Admin cancel (lib/forcaSubscriptionStop): a stop Or scheduled for a
+  // later day, and, once a stop ran, the record of it. See that folder's rules.ts.
+  scheduledStop?: ForcaScheduledStop;
+  cancellation?: ForcaCancellationRecord;
+}
+
+export type ForcaStopMode = 'now' | 'period_end' | 'date';
+
+export interface ForcaScheduledStop {
+  mode: Exclude<ForcaStopMode, 'now'>;
+  stopDay: string; // "YYYY-MM-DD", Israel: the first day nothing is charged; the stop runs that day
+  reason: string;
+  parentRequestId?: string;
+  by: string;
+  byName: string;
+  at: string;
+  updatedAt?: string;
+}
+
+export interface ForcaCancellationRecord {
+  mode: ForcaStopMode;
+  stopDay: string;
+  reason: string;
+  parentRequestId?: string;
+  requestedBy: string;
+  requestedByName: string;
+  requestedAt: string;
+  executedAt: string;
+  executedBy: string; // the admin's uid, or 'scheduler'
+  savedCardDeleted: boolean;
 }
 
 // ─── FORCA Tracker (exercises + tests/quizzes) ─────────────────────────────

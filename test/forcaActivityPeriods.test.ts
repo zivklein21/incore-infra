@@ -180,7 +180,8 @@ test('charge job: July 1 — no charge at all, even with a card on file', async 
   assert.deepEqual(res, { processed: 0, succeeded: 0, failed: 0, skipped: 'outside_period' });
   assert.equal(s.hyp, 0);
   assert.equal(gsi3Queried(s), false, 'due agreements are not even read');
-  assert.equal(s.calls.filter((c) => c.name !== 'GetCommand').length, 0, 'nothing written');
+  // Reads only (the admin-cancel stop index is read every day, in a period or not).
+  assert.equal(s.calls.filter((c) => !['GetCommand', 'QueryCommand'].includes(c.name)).length, 0, 'nothing written');
 });
 
 test('charge job: August — no charge', async () => {
