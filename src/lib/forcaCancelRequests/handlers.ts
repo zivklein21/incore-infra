@@ -61,7 +61,9 @@ function forParent(s: RequestState) {
     requestId: s.requestId,
     requestNumber: s.requestNumber,
     receivedAt: s.receivedAt,
+    receivedAtLabel: formatIsraelDateTime(s.receivedAt),
     channel: s.channel,
+    channelLabel: CHANNEL_LABEL[s.channel],
     childUid: s.childUid,
     childName: s.childName,
     productName: s.productName,
@@ -74,7 +76,7 @@ function forParent(s: RequestState) {
 /** Or's list row. */
 function forList(s: RequestState) {
   const { PK: _pk, SK: _sk, GSI1PK: _a, GSI1SK: _b, GSI2PK: _c, GSI2SK: _d, ...rest } = s;
-  return { ...rest, parentStatusLabel: parentStatusLabel(s.status, s.endDate) };
+  return { ...rest, receivedAtLabel: formatIsraelDateTime(s.receivedAt), channelLabel: CHANNEL_LABEL[s.channel], parentStatusLabel: parentStatusLabel(s.status, s.endDate) };
 }
 
 function publicReceipt(r: RequestReceipt) {

@@ -170,6 +170,7 @@ test('submit: received at the server\'s time, recorded in full, confirmed to the
   assert.equal(r.status, 200);
   assert.equal(r.body.request.statusLabel, 'הבקשה התקבלה');
   assert.equal(r.body.request.receivedAt, '2027-01-12T08:15:00.000Z');
+  assert.equal(r.body.request.receivedAtLabel, '12/01/2027 10:15');
   const id = r.body.request.requestId;
 
   const rec = receiptOf(db, id);
