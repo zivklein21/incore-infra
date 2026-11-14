@@ -398,6 +398,11 @@ locals {
     # FORCA refunds (Backoffice → subscription → זיכוי חלקי)
     adminForcaRefunds = "POST" # admin: every refund, or one trainee's refunds + last charge + suggested amount
     adminForcaRefund  = "POST" # admin: refund now (HYP, or manual), mark a manual refund done, set the price per session
+    # FORCA parent cancellation requests (parent: Me / chat; admin: Chat → בקשות הורים)
+    getMyForcaCancelRequests = "POST" # parent: her children with the request text, and her requests with their status
+    submitForcaCancelRequest = "POST" # parent: submit a request (received now; cancels and stops nothing)
+    adminForcaCancelRequests = "POST" # admin: the list (open / handled / all), one request in full, or a child's parents
+    adminForcaCancelRequest  = "POST" # admin: set status, mark seen, enter a request received elsewhere, save the texts
   }
 
   all_http_functions = merge(local.http_authenticated_functions, local.http_public_functions)

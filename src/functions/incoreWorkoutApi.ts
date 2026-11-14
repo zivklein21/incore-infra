@@ -44,6 +44,9 @@ import { getForcaChatContacts } from '../lib/forcaChat/contacts';
 import { adminListForcaPeriods, adminSaveForcaPeriods, getForcaActivityStatus } from '../lib/forcaPeriods/handlers';
 import { adminForcaSubscriptionStop, adminForcaSubscriptionStopPreview } from '../lib/forcaSubscriptionStop/handlers';
 import { adminForcaRefund, adminForcaRefunds } from '../lib/forcaRefunds/handlers';
+import {
+  adminForcaCancelRequest, adminForcaCancelRequests, getMyForcaCancelRequests, submitForcaCancelRequest,
+} from '../lib/forcaCancelRequests/handlers';
 import { adminListQuickReplies, adminSaveQuickReplies, getQuickReplies, useQuickReply } from '../lib/quickReplies/handlers';
 
 type Handler = (event: APIGatewayProxyEventV2WithJWTAuthorizer) => Promise<APIGatewayProxyStructuredResultV2>;
@@ -128,6 +131,11 @@ const HANDLERS: Record<string, Handler> = {
   // FORCA refunds (זיכוי חלקי): every credit is an immediate HYP refund.
   adminForcaRefunds,
   adminForcaRefund,
+  // FORCA parent cancellation requests: received on submit, Or handles them.
+  getMyForcaCancelRequests,
+  submitForcaCancelRequest,
+  adminForcaCancelRequests,
+  adminForcaCancelRequest,
 };
 
 // Single Lambda behind every INCORE Exercise Catalog + Workout Journal
