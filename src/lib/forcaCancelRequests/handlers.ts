@@ -7,9 +7,13 @@ import { resolveMemberProfile } from '../memberLookup';
 import { listTraineeRefunds } from '../forcaRefunds/store';
 import { publicRefund } from '../forcaRefunds/handlers';
 import {
-  CHANNEL_LABEL, MAY_NEED_REFUND, REQUEST_TYPE_LABEL, SUGGESTION_LABEL, chargesAfterReceipt, cleanNote, formatIsraelDateTime, parentStatusLabel,
-  suggestedEnd, validateManual, validateSettings, validateStatusChange, type RequestType,
+  CHANNEL_LABEL, CHOICE_EXPLAIN, CHOICE_LABEL, EARLY_LEGAL_FLAG, MAY_NEED_REFUND, PARENT_CHOICES, REQUEST_TYPE_LABEL, SUGGESTION_LABEL,
+  chargesAfterReceipt, choiceConfirmationLine, choiceOf, choiceRequestLine, cleanNote, distanceSaleCheck, firstPaymentOf, formatIsraelDateTime,
+  parentStatusLabel, parseChoice, sortForOr, suggestedEnd, suggestionUseFor, validateManual, validateSettings, validateStatusChange,
+  type ChoiceSource, type DistanceSale, type ParentChoice, type RequestType,
 } from './rules';
+import { applyParentChoiceStop } from './autoStop';
+import { loadPeriodSettings } from '../forcaPeriods/store';
 import {
   StateConflictError, changeRequest, childCharges, createRequest, currentAgreementOf, linkedChildren, linkedParents, listParentRequests,
   listRequests, loadForcaProfile, loadLog, loadReceipt, loadSettings, loadState, maySubmitFor, profileName, renderRequestText, saveSettings,
@@ -25,7 +29,9 @@ import type { RequestAttachment } from './store';
 //
 // Parent (a linked parent, or the payer on the child's subscription):
 //   POST getMyForcaCancelRequests  {}                  → { children: [{ uid, name, requestText, subscription }], requests }
-//   POST submitForcaCancelRequest  { childUid, note?, type?, uploadId? } → { request }   received now; cancels and stops nothing
+//   POST submitForcaCancelRequest  { childUid, note?, type?, uploadId?, choice? } → { request }   received now; cancels nothing
+//        choice (cancellations, optional): end_of_paid_month | early_legal | unsure (default). end_of_paid_month
+//        schedules the stop for the 1st of next month by itself (autoStop.ts); nothing else stops anything
 //        type 'medical_freeze' (section 8) needs the certificate: uploadId from getForcaFreezeUploadUrl
 // Admin (Or):
 //   POST adminForcaCancelRequests  { filter?: open|handled|all } → { requests, unseenCount, settings }
@@ -33,7 +39,8 @@ import type { RequestAttachment } from './store';
 //                                  { parentsOf: childUid }       → { parents } for the manual entry
 //   POST adminForcaCancelRequest   { action: 'setStatus', requestId, status, endDate? }
 //                                  { action: 'markSeen', requestId }
-//                                  { action: 'addManual', parentUid, childUid, channel, originalAt, content, notifyParent?, type?, uploadId? }
+//                                  { action: 'addManual', parentUid, childUid, channel, originalAt, content, notifyParent?, type?, uploadId?, choice? }
+//                                  (a manual entry never schedules a stop by itself)
 //                                  medical freeze actions: lib/forcaMedicalFreeze/handlers.ts
 //                                  { action: 'saveSettings', requestText, confirmationText, basedOn }
 // New routes: nothing an existing build calls changes.
@@ -80,18 +87,40 @@ function forParent(s: RequestState) {
     type: s.type ?? 'cancellation',
     typeLabel: REQUEST_TYPE_LABEL[s.type ?? 'cancellation'],
     hasAttachment: !!s.hasAttachment,
+    choice: choiceOf(s),
+    choiceLabel: choiceOf(s) ? CHOICE_LABEL[choiceOf(s)!] : null,
     // Dates only: never the reason, the sessions or the certificate.
     freezeLabel: s.freeze?.decision === 'approved' && s.freeze.from && s.freeze.to ? `הקפאה רפואית: ${freezeRangeLabel(s.freeze.from, s.freeze.to)}` : null,
   };
 }
 
-/** Or's list row. */
+/** Or's list row. A request without a choice counts as ג. */
 function forList(s: RequestState) {
   const { PK: _pk, SK: _sk, GSI1PK: _a, GSI1SK: _b, GSI2PK: _c, GSI2SK: _d, ...rest } = s;
+  const choice = choiceOf(s);
+  const open = s.status !== 'done';
   return {
     ...rest, type: s.type ?? 'cancellation', receivedAtLabel: formatIsraelDateTime(s.receivedAt), channelLabel: CHANNEL_LABEL[s.channel],
     parentStatusLabel: parentStatusLabel(s.status, s.endDate),
+    choice,
+    choiceLabel: choice ? CHOICE_LABEL[choice] : null,
+    choiceSource: choice ? s.choiceSource ?? 'default' : null,
+    // Highlighted, and first in the list, while open.
+    flag: open && choice === 'early_legal' ? EARLY_LEGAL_FLAG : null,
+    distanceSaleWarning: s.distanceSale?.warn ? s.distanceSale.message : null,
+    autoStopNote: s.autoStop?.result === 'skipped' ? { message: s.autoStop.message, highlight: s.autoStop.highlight } : null,
   };
+}
+
+/** Sections 14ג/14ה, as of when the request was received. Never blocks a request. */
+async function distanceSaleFor(childUid: string, receivedAt: string, charges?: Awaited<ReturnType<typeof childCharges>>): Promise<DistanceSale | null> {
+  try {
+    const [all, periods] = await Promise.all([charges ?? childCharges(childUid), loadPeriodSettings().then((p) => p.periods)]);
+    return distanceSaleCheck(receivedAt, firstPaymentOf(all), periods);
+  } catch (err) {
+    console.error(`[forcaCancelRequest] distance-sale check failed child=${childUid}:`, err);
+    return null;
+  }
 }
 
 function publicReceipt(r: RequestReceipt) {
@@ -117,7 +146,10 @@ export async function getMyForcaCancelRequests(event: Event): Promise<Result> {
       subscription: agreement ? { productName: agreement.productName, groupName: agreement.groupName, status: agreement.status } : null,
     };
   }));
-  return json(200, { children: withSubs, requests: requests.map(forParent) });
+  return json(200, {
+    children: withSubs, requests: requests.map(forParent),
+    choices: PARENT_CHOICES.map((c) => ({ value: c, label: CHOICE_LABEL[c], explain: CHOICE_EXPLAIN[c] })),
+  });
 }
 
 export async function submitForcaCancelRequest(event: Event): Promise<Result> {
@@ -134,6 +166,9 @@ export async function submitForcaCancelRequest(event: Event): Promise<Result> {
   if (!type) return json(400, { error: 'invalid_type' });
   const uploadId = str(body.uploadId);
   if (type === 'medical_freeze' && !uploadId) return json(400, { error: 'certificate_required' });
+  // Optional: nothing picked (or an older app) is ג.
+  const choice = type === 'cancellation' ? parseChoice(body.choice) : null;
+  if (type === 'cancellation' && !choice) return json(400, { error: 'invalid_choice' });
 
   const agreement = await currentAgreementOf(childUid);
   if (!(await maySubmitFor(uid, childUid, agreement))) return json(403, { error: 'not_your_child' });
@@ -150,21 +185,35 @@ export async function submitForcaCancelRequest(event: Event): Promise<Result> {
       throw err;
     }
   }
+  const requestText = type === 'medical_freeze'
+    ? renderRequestText(settings.medicalRequestText, childName)
+    : `${renderRequestText(settings.requestText, childName)}\n${choiceRequestLine(choice!.choice)}`;
+  const distanceSale = type === 'cancellation' ? await distanceSaleFor(childUid, receivedAt) : undefined;
   const { receipt, state } = await createRequest({
     parent, parentUid: uid, child, childUid, agreement, receivedAt, channel: 'app', requestId, type, attachment,
-    requestText: renderRequestText(type === 'medical_freeze' ? settings.medicalRequestText : settings.requestText, childName), note: note.note,
-    by: { uid, name: profileName(parent, 'הורה') },
+    requestText, note: note.note, by: { uid, name: profileName(parent, 'הורה') },
+    ...(choice ? { choice } : {}), ...(distanceSale !== undefined ? { distanceSale } : {}),
   });
-  console.log(`[submitForcaCancelRequest] ${receipt.requestId} parent=${uid} child=${childUid} received ${receivedAt}`);
+  console.log(`[submitForcaCancelRequest] ${receipt.requestId} parent=${uid} child=${childUid} received ${receivedAt}${choice ? ` choice=${choice.choice}` : ''}`);
 
-  // After the request is saved: it's received whatever happens to the notifications.
-  const sent = await sendParentConfirmation(parent, type === 'medical_freeze' ? settings.medicalConfirmationText : settings.confirmationText, receipt);
+  // Everything below runs after the request is saved: it's received whatever happens next.
+  let latest: RequestState = state;
+  let lastActiveDay: string | null = null;
+  if (choice?.choice === 'end_of_paid_month') {
+    const auto = await applyParentChoiceStop({ requestId, receivedAt, agreementId: agreement?.agreementId ?? null });
+    if (auto.state) latest = auto.state;
+    if (auto.outcome.result === 'scheduled') lastActiveDay = auto.outcome.lastActiveDay;
+  }
+  const sent = await sendParentConfirmation(
+    parent, type === 'medical_freeze' ? settings.medicalConfirmationText : settings.confirmationText, receipt,
+    choice ? choiceConfirmationLine(choice.choice, lastActiveDay) : undefined,
+  );
   const notified = await changeRequest(receipt.requestId, { system: 'confirmation' }, () => ({
     patch: { parentNotifiedAt: new Date().toISOString() }, action: 'parent_notified', details: sent,
   })).catch((err) => { console.error(`[submitForcaCancelRequest] ${receipt.requestId} logging the confirmation failed:`, err); return null; });
   await notifyOrNewRequest(receipt);
 
-  return json(200, { request: forParent(notified ?? state) });
+  return json(200, { request: forParent(notified ?? latest) });
 }
 
 // ─── Admin ──────────────────────────────────────────────────────────────────
@@ -188,6 +237,8 @@ export async function adminForcaCancelRequests(event: Event): Promise<Result> {
     if (!receipt || !state) return json(404, { error: 'request_not_found' });
     const [charges, refunds] = await Promise.all([childCharges(receipt.child.uid), listTraineeRefunds(receipt.child.uid)]);
     const s = suggestedEnd(receipt.receivedAt);
+    const choice = choiceOf(receipt);
+    const distanceSale = (receipt.type ?? 'cancellation') === 'cancellation' ? await distanceSaleFor(receipt.child.uid, receipt.receivedAt, charges) : null;
     // The certificate: a 15-minute link for Or only (this route is admin-only); null once retention deleted it.
     const attachmentUrl = receipt.attachment ? await certificateReadUrl(receipt.attachment) : null;
     return json(200, {
@@ -197,7 +248,10 @@ export async function adminForcaCancelRequests(event: Event): Promise<Result> {
       channelLabel: CHANNEL_LABEL[receipt.source.channel],
       state: forList(state),
       log: log.map(({ PK: _pk, ...rest }) => rest),
-      suggestion: { ...s, label: SUGGESTION_LABEL },
+      suggestion: { ...s, label: SUGGESTION_LABEL, use: suggestionUseFor(choice) },
+      choice,
+      choiceLabel: choice ? CHOICE_LABEL[choice] : null,
+      distanceSale,
       chargesAfterReceipt: chargesAfterReceipt(charges, receipt.receivedAt).map((c) => ({ ...c, ...(c.mayNeedRefund ? { flag: MAY_NEED_REFUND } : {}) })),
       refunds: refunds.filter((r) => (r.details as { parentRequestId?: string } | undefined)?.parentRequestId === requestId).map(publicRefund),
     });
@@ -210,7 +264,10 @@ export async function adminForcaCancelRequests(event: Event): Promise<Result> {
     loadSettings(),
   ]);
   const unseenCount = (open ?? requests).filter((r) => r.status !== 'done' && !r.seenAt).length;
-  return json(200, { requests: requests.map(forList), unseenCount, settings });
+  return json(200, {
+    requests: sortForOr(requests).map(forList), unseenCount, settings,
+    choices: PARENT_CHOICES.map((c) => ({ value: c, label: CHOICE_LABEL[c] })),
+  });
 }
 
 export async function adminForcaCancelRequest(event: Event): Promise<Result> {
@@ -252,6 +309,10 @@ export async function adminForcaCancelRequest(event: Event): Promise<Result> {
       const m = v.value;
       const type = requestTypeOf(body.type);
       if (!type) return json(400, { error: 'invalid_type' });
+      // What the parent chose, as Or recorded it; nothing recorded = ג. Never schedules a stop.
+      const parsed = type === 'cancellation' ? parseChoice(body.choice) : null;
+      if (type === 'cancellation' && !parsed) return json(400, { error: 'invalid_choice' });
+      const choice: { choice: ParentChoice; source: ChoiceSource } | null = parsed ? { choice: parsed.choice, source: parsed.source === 'parent' ? 'admin' : 'default' } : null;
       const agreement = await currentAgreementOf(m.childUid);
       if (!(await maySubmitFor(m.parentUid, m.childUid, agreement))) return json(400, { error: 'not_linked' });
       const [parent, child, settings] = await Promise.all([loadForcaProfile(m.parentUid), loadForcaProfile(m.childUid), loadSettings()]);
@@ -271,11 +332,15 @@ export async function adminForcaCancelRequest(event: Event): Promise<Result> {
         parent, parentUid: m.parentUid, child, childUid: m.childUid, agreement,
         receivedAt: m.originalAt, channel: m.channel, requestText: m.content, note: '',
         by, enteredBy: by, requestId, type, attachment,
+        ...(choice ? { choice, distanceSale: await distanceSaleFor(m.childUid, m.originalAt) } : {}),
       });
       // Or entered it herself: she's seen it.
       let latest = await changeRequest(receipt.requestId, by, () => ({ patch: { seenAt: new Date().toISOString() }, action: 'seen' })) ?? state;
       if (m.notifyParent) {
-        const sent = await sendParentConfirmation(parent, type === 'medical_freeze' ? settings.medicalConfirmationText : settings.confirmationText, receipt);
+        const sent = await sendParentConfirmation(
+          parent, type === 'medical_freeze' ? settings.medicalConfirmationText : settings.confirmationText, receipt,
+          choice ? choiceConfirmationLine(choice.choice, null) : undefined,
+        );
         latest = await changeRequest(receipt.requestId, { system: 'confirmation' }, () => ({
           patch: { parentNotifiedAt: new Date().toISOString() }, action: 'parent_notified', details: sent,
         })) ?? latest;

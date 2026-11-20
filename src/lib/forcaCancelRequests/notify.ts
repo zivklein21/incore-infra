@@ -5,7 +5,7 @@ import { notifyAdmins } from '../adminNotify';
 import { getEmailBrandTokens } from '../emailBranding';
 import { sendEmail } from '../mailer';
 import { getExpoPushToken, sendExpoPushBatch } from '../push';
-import { CHANNEL_LABEL, fillTemplate, formatIsraelDateTime } from './rules';
+import { CHANNEL_LABEL, CHOICE_LABEL, EARLY_LEGAL_FLAG, fillTemplate, formatIsraelDateTime } from './rules';
 
 /** "בקשתך לביטול השתתפות התקבלה" or, for a medical freeze, "הודעתך על הקפאה רפואית התקבלה". */
 export const confirmationTitle = (r: Pick<RequestReceipt, 'type'>) =>
@@ -38,6 +38,7 @@ export function buildConfirmationEmail(text: string, r: RequestReceipt): { subje
     ['מתאמנת', r.child.name],
     ...(r.subscription ? [['מנוי', `${r.subscription.productName}${r.subscription.groupName ? ` · ${r.subscription.groupName}` : ''}`] as [string, string]] : []),
     ['תוכן הבקשה', r.content.requestText],
+    ...(r.choice ? [['בחירת ההורה', CHOICE_LABEL[r.choice]] as [string, string]] : []),
     ...(r.content.note ? [['הערה', r.content.note] as [string, string]] : []),
     // The file itself never leaves the system: only that one was received.
     ...(r.attachment ? [['אישור רפואי', `התקבל (${r.attachment.fileName})`] as [string, string]] : []),
@@ -65,12 +66,15 @@ export function buildConfirmationEmail(text: string, r: RequestReceipt): { subje
   return { subject: `${t.senderName}: ${confirmationTitle(r)} (${r.requestNumber})`, html, senderName: t.senderName };
 }
 
-/** Push + in-app message + email to the parent. Returns which of them went out. */
+/**
+ * Push + in-app message + email to the parent. Returns which of them went out.
+ * `choiceLine`: the fixed paragraph for the parent's choice (rules.choiceConfirmationLine).
+ */
 export async function sendParentConfirmation(
-  parent: MemberProfileItem | null, template: string, r: RequestReceipt,
+  parent: MemberProfileItem | null, template: string, r: RequestReceipt, choiceLine?: string,
 ): Promise<{ push: boolean; message: boolean; email: boolean }> {
   const sent = { push: false, message: false, email: false };
-  const text = confirmationText(template, r);
+  const text = choiceLine ? `${confirmationText(template, r)}\n${choiceLine}` : confirmationText(template, r);
   const title = confirmationTitle(r);
 
   try {
@@ -125,7 +129,8 @@ export async function notifyOrNewRequest(r: RequestReceipt): Promise<void> {
       pushTitle: r.type === 'medical_freeze' ? 'FORCA: הודעה על הקפאה רפואית' : 'FORCA: בקשה לביטול השתתפות',
       message: r.type === 'medical_freeze'
         ? `${r.parent.name} שלח/ה הודעה על הקפאה רפואית של ${r.child.name} עם אישור רפואי (${formatIsraelDateTime(r.receivedAt)}). מספר בקשה ${r.requestNumber}.`
-        : `${r.parent.name} ביקש/ה לבטל את ההשתתפות של ${r.child.name} (${formatIsraelDateTime(r.receivedAt)}). מספר בקשה ${r.requestNumber}.`,
+        : `${r.parent.name} ביקש/ה לבטל את ההשתתפות של ${r.child.name} (${formatIsraelDateTime(r.receivedAt)}). מספר בקשה ${r.requestNumber}.`
+          + (r.choice === 'early_legal' ? ` ${EARLY_LEGAL_FLAG}.` : r.choice ? ` בחירה: ${CHOICE_LABEL[r.choice]}.` : ''),
       extra: { requestId: r.requestId, memberId: r.child.uid },
       pushData: { type: 'FORCA_CANCEL_REQUEST', requestId: r.requestId },
     });

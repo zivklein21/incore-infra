@@ -179,7 +179,10 @@ test('submit: received at the server\'s time, recorded in full, confirmed to the
   assert.deepEqual(rec.parent, { uid: 'mom', name: 'דנה כהן', phone: '0501234567', email: 'dana@example.com' });
   assert.deepEqual(rec.child, { uid: 'kid1', name: 'נועה כהן' });
   assert.deepEqual(rec.subscription, { agreementId: 'ag1', productName: 'חודשי', groupName: 'בנות 10', status: 'active', amountPerCharge: 250 });
-  assert.equal(rec.content.requestText, 'אני מבקש/ת לבטל את השתתפותה של נועה כהן בפעילות FORCA.');
+  // No choice sent (an older app): ג, and the text says so.
+  assert.equal(rec.content.requestText, 'אני מבקש/ת לבטל את השתתפותה של נועה כהן בפעילות FORCA.\nבחירתי: לא בטוח/ה – אשמח לבירור.');
+  assert.equal(rec.choice, 'unsure');
+  assert.equal(rec.choiceSource, 'default');
   assert.equal(rec.content.note, 'עוברות דירה');
   const { PK: _p, SK: _s, contentHash, ...body } = rec;
   assert.equal(contentHash, rules.receiptHash(body));
@@ -325,7 +328,7 @@ test('Or: request detail flags charges after receipt that may need a refund', as
   const db = makeDb(seed({ ...order('jan', '2027-01-01T01:30:00.000Z'), ...order('feb', '2027-02-01T01:30:00.000Z') }));
   const id = (await call(submitForcaCancelRequest, 'mom', { childUid: 'kid1' })).body.request.requestId;
   const d = await call(adminForcaCancelRequests, 'or', { requestId: id });
-  assert.deepEqual(d.body.suggestion, { receivedDay: '2027-01-12', lastActiveDay: '2027-01-31', stopDay: '2027-02-01', label: 'מועד מוצע לפי סעיף 5.8' });
+  assert.deepEqual(d.body.suggestion, { receivedDay: '2027-01-12', lastActiveDay: '2027-01-31', stopDay: '2027-02-01', label: 'מועד מוצע לפי סעיף 5.8', use: 'hint' });
   assert.deepEqual(d.body.chargesAfterReceipt.map((c: any) => [c.orderId, c.flag]), [['feb', 'ייתכן שנדרש החזר']]);
   assert.equal(d.body.receipt.PK, undefined);
   assert.deepEqual(d.body.log.map((l: any) => l.action), ['received', 'parent_notified']);
@@ -343,8 +346,10 @@ test('Or: the texts are versioned, a stale save is refused, and new requests use
   assert.equal((await save(0, 'גרסה ישנה של הטקסט')).status, 409);
   assert.ok(db.items.get('forca|APPCONFIG|FORCA_CANCEL_REQUEST_SETTINGS#LOG#000001'));
   const id = (await call(submitForcaCancelRequest, 'mom', { childUid: 'kid1' })).body.request.requestId;
-  assert.equal(receiptOf(db, id).content.requestText, 'בקשה לסיום ההשתתפות של נועה כהן.');
-  assert.equal(db.items.get(`forca|MEMBER#mom|MESSAGE#forcacancelreq_${id}`).body, 'קיבלנו את הבקשה ב-12/01/2027 10:15.');
+  // Or's texts, then the fixed paragraph for the choice (not editable by Or).
+  assert.equal(receiptOf(db, id).content.requestText, 'בקשה לסיום ההשתתפות של נועה כהן.\nבחירתי: לא בטוח/ה – אשמח לבירור.');
+  assert.equal(db.items.get(`forca|MEMBER#mom|MESSAGE#forcacancelreq_${id}`).body,
+    'קיבלנו את הבקשה ב-12/01/2027 10:15.\nבחרת: לא בטוח/ה – אשמח לבירור. נחזור אלייך לבירור, ועדכון יופיע באפליקציה.');
 });
 
 test('admin routes are admin only', async () => {

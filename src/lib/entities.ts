@@ -631,7 +631,13 @@ export interface ForcaScheduledStop {
   byName: string;
   at: string;
   updatedAt?: string;
+  /** Set by itself from a parent's choice (option א, lib/forcaCancelRequests/autoStop.ts); by = 'system'. */
+  auto?: boolean;
+  /** Option ב: access ended at the legal day; previousEnd is the membership end before, restored if the stop is removed. */
+  accessCut?: ForcaAccessCut;
 }
+
+export interface ForcaAccessCut { legalDay: string; previousEnd: string | null; at: string; by: string }
 
 export interface ForcaCancellationRecord {
   mode: ForcaStopMode;
@@ -644,6 +650,8 @@ export interface ForcaCancellationRecord {
   executedAt: string;
   executedBy: string; // the admin's uid, or 'scheduler'
   savedCardDeleted: boolean;
+  auto?: boolean;
+  accessCut?: ForcaAccessCut;
 }
 
 // ─── FORCA Tracker (exercises + tests/quizzes) ─────────────────────────────

@@ -7,6 +7,8 @@ import { deriveMemberName, type ForcaBillingAgreementItem, type MemberProfileIte
 import { resolveMemberProfile } from '../memberLookup';
 import { validatePricePerSession, validateRefundInput } from './rules';
 import { logRefundOnRequest } from '../forcaCancelRequests/link';
+import { loadState as loadRequestState } from '../forcaCancelRequests/store';
+import { buildSuggestionAfter, suggestionAfterLabel } from './between';
 import {
   RefundConflictError, buildSuggestion, chargeSummary, issueForcaRefund, latestSubscriptionCharge, listAllRefunds,
   listTraineeRefunds, markManualRefundDone, savePricePerSession, type ForcaRefundItem, type RefundBy,
@@ -15,6 +17,8 @@ import {
 // FORCA refunds (זיכוי חלקי) — two routes on the shared integration (incoreWorkoutApi.ts):
 //   POST adminForcaRefunds  {}                                → { refunds } every refund, newest first (the list screen)
 //                           { traineeId, agreementId? }       → { refunds, lastCharge, suggestion } for the sheet
+//                           + parentRequestId? (a request with Or's legal date, option ב): the suggestion
+//                             counts the group's sessions after that date up to what was paid for
 //   POST adminForcaRefund   { action: 'create', traineeId, agreementId?, amount, note, parentRequestId? }
 //                           { action: 'markManualDone', refundId }
 //                           { action: 'setPrice', pricePerSession }
@@ -80,10 +84,15 @@ export async function adminForcaRefunds(event: Event): Promise<Result> {
   if (agreementId && (!agreement || agreement.userId !== traineeId)) return json(404, { error: 'agreement_not_found' });
 
   const group = await traineeGroup(traineeId, agreement);
+  const parentRequestId = str(body.parentRequestId);
+  const request = parentRequestId ? await loadRequestState(parentRequestId) : null;
+  const legal = request && request.childUid === traineeId ? request.legalEnd ?? null : null;
   const [refunds, charge, suggestion] = await Promise.all([
     listTraineeRefunds(traineeId),
     latestSubscriptionCharge(traineeId),
-    buildSuggestion(group.groupId, new Date()),
+    legal
+      ? buildSuggestionAfter(group.groupId, legal.legalDay, legal.paidThroughDay).then((s) => ({ ...s, basis: 'legal_end' as const, label: suggestionAfterLabel(s) }))
+      : buildSuggestion(group.groupId, new Date()),
   ]);
   return json(200, {
     refunds: refunds.map(publicRefund),

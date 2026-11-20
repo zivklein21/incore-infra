@@ -4,7 +4,7 @@ import { ddb, FORCA_TABLE_NAME } from '../dynamo';
 import { deriveMemberName, type ForcaBillingAgreementItem, type MemberProfileItem } from '../entities';
 import {
   DEFAULT_SETTINGS, fillTemplate, listPartition, receiptHash, requestNumberOf,
-  type Channel, type RequestSettings, type RequestStatus, type RequestType,
+  type AutoStopOutcome, type Channel, type ChoiceSource, type DistanceSale, type ParentChoice, type RequestSettings, type RequestStatus, type RequestType,
 } from './rules';
 import type { FreezeDecision } from '../forcaMedicalFreeze/types';
 
@@ -57,8 +57,14 @@ export interface RequestReceipt {
   child: { uid: string; name: string };
   subscription: { agreementId: string; productName: string; groupName: string; status: string; amountPerCharge: number } | null;
   content: { requestText: string; note: string };
+  /** The parent's choice (cancellations since 2026-11-20); absent = ג. Part of contentHash. */
+  choice?: ParentChoice;
+  choiceSource?: ChoiceSource;
   contentHash: string;
 }
+
+/** Option ב: the legal date Or set, and what the trainee had paid through before access was cut. */
+export type LegalEnd = { legalDay: string; paidThroughDay: string | null; setAt: string; setBy: { uid: string; name: string } };
 
 export interface RequestState {
   PK: string; SK: 'STATE';
@@ -78,6 +84,14 @@ export interface RequestState {
   productName: string | null;
   status: RequestStatus;
   endDate: string | null;
+  /** Copies of the receipt's choice, for lists. Absent on older requests (= ג). */
+  choice?: ParentChoice;
+  choiceSource?: ChoiceSource;
+  /** Checked when the request came in (sections 14ג, 14ה). */
+  distanceSale?: DistanceSale | null;
+  /** Option א: the automatic stop, or why it wasn't set. */
+  autoStop?: AutoStopOutcome | null;
+  legalEnd?: LegalEnd | null;
   seenAt: string | null;
   parentNotifiedAt: string | null;
   version: number;
@@ -90,7 +104,7 @@ export interface RequestLogEntry {
   at: string;
   by: Actor;
   action: 'received' | 'entered_manually' | 'seen' | 'status' | 'end_date_from_stop' | 'stop_removed' | 'refund' | 'parent_notified'
-    | 'freeze_approved' | 'freeze_rejected' | 'freeze_refund';
+    | 'freeze_approved' | 'freeze_rejected' | 'freeze_refund' | 'auto_stop_skipped' | 'legal_end_set';
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   details?: Record<string, unknown>;
@@ -225,6 +239,9 @@ export type CreateParams = {
   requestId?: string;
   type?: RequestType;
   attachment?: RequestAttachment;
+  /** Cancellations only. */
+  choice?: { choice: ParentChoice; source: ChoiceSource };
+  distanceSale?: DistanceSale | null;
 };
 
 /** Writes the receipt, the first state and the first log entry together. */
@@ -253,6 +270,7 @@ export async function createRequest(p: CreateParams): Promise<{ receipt: Request
     } : null,
     content: { requestText: p.requestText, note: p.note },
     ...(p.attachment ? { attachment: p.attachment } : {}),
+    ...(type === 'cancellation' && p.choice ? { choice: p.choice.choice, choiceSource: p.choice.source } : {}),
   };
   const receipt: RequestReceipt = { PK: reqPK(requestId), SK: 'RECEIPT', ...body, contentHash: receiptHash(body) };
   const state: RequestState = {
@@ -264,12 +282,18 @@ export async function createRequest(p: CreateParams): Promise<{ receipt: Request
     parentUid: p.parentUid, parentName, childUid: p.childUid, childName,
     agreementId: p.agreement?.agreementId ?? null, productName: p.agreement?.productName ?? null,
     status: 'received', endDate: null, seenAt: null, parentNotifiedAt: null,
+    ...(type === 'cancellation' && p.choice ? { choice: p.choice.choice, choiceSource: p.choice.source } : {}),
+    ...(p.distanceSale !== undefined ? { distanceSale: p.distanceSale } : {}),
     version: 1, updatedAt: nowIso,
   };
   const log: RequestLogEntry = {
     PK: reqPK(requestId), SK: logSK(1), version: 1, at: nowIso, by: p.by,
     action: p.enteredBy ? 'entered_manually' : 'received',
-    after: { status: 'received', type, receivedAt: p.receivedAt, channel: p.channel, ...(p.attachment ? { attachment: p.attachment.fileName } : {}) },
+    after: {
+      status: 'received', type, receivedAt: p.receivedAt, channel: p.channel, ...(p.attachment ? { attachment: p.attachment.fileName } : {}),
+      ...(body.choice ? { choice: body.choice, choiceSource: body.choiceSource } : {}),
+      ...(p.distanceSale?.warn ? { distanceSale: p.distanceSale.reasons } : {}),
+    },
   };
   await ddb.send(new TransactWriteCommand({
     TransactItems: [receipt, state, log].map((Item) => ({
@@ -355,7 +379,7 @@ export class StateConflictError extends Error {
 
 type Change = {
   /** Fields to change on the state, or null for nothing to do. */
-  patch: Partial<Pick<RequestState, 'status' | 'endDate' | 'seenAt' | 'parentNotifiedAt' | 'agreementId' | 'productName' | 'freeze'>> | null;
+  patch: Partial<Pick<RequestState, 'status' | 'endDate' | 'seenAt' | 'parentNotifiedAt' | 'agreementId' | 'productName' | 'freeze' | 'autoStop' | 'legalEnd'>> | null;
   action: RequestLogEntry['action'];
   details?: Record<string, unknown>;
 };

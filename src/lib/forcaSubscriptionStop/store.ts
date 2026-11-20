@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { DeleteCommand, GetCommand, PutCommand, QueryCommand, TransactWriteCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import { ddb, FORCA_TABLE_NAME } from '../dynamo';
-import type { ForcaBillingAgreementItem, ForcaCancellationRecord, ForcaScheduledStop, ForcaStopMode, MemberProfileItem } from '../entities';
+import type { ForcaAccessCut, ForcaBillingAgreementItem, ForcaCancellationRecord, ForcaScheduledStop, ForcaStopMode, MemberProfileItem } from '../entities';
 import { israelDateStrOf } from '../israelTime';
 import { stopIsDue } from './rules';
 
@@ -37,6 +37,8 @@ export type StopDetails = {
   requestedBy: string;
   requestedByName: string;
   requestedAt: string;
+  auto?: boolean;
+  accessCut?: ForcaAccessCut;
 };
 
 const isConditionFail = (err: unknown) => {
@@ -125,6 +127,8 @@ export async function runStop(
     executedAt: nowIso,
     executedBy,
     savedCardDeleted: card.willDelete,
+    ...(details.auto ? { auto: true } : {}),
+    ...(details.accessCut ? { accessCut: details.accessCut } : {}),
   };
   try {
     await ddb.send(new UpdateCommand({
@@ -179,6 +183,7 @@ export async function runScheduledStop(agreement: ForcaBillingAgreementItem, now
   return runStop(agreement, {
     mode: s.mode, stopDay: s.stopDay, reason: s.reason, parentRequestId: s.parentRequestId,
     requestedBy: s.by, requestedByName: s.byName, requestedAt: s.at,
+    ...(s.auto ? { auto: true } : {}), ...(s.accessCut ? { accessCut: s.accessCut } : {}),
   }, 'scheduler', 'scheduler', now);
 }
 

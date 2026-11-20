@@ -1,5 +1,6 @@
 import { createHash } from 'crypto';
 import { israelDateStrOf, ISRAEL_TZ } from '../israelTime';
+import { addDays, isDay, nextPeriodAfter, periodOn, type ActivityPeriod } from '../forcaPeriods/rules';
 
 // FORCA parent cancellation requests (בקשה לביטול השתתפות): the pure rules.
 //
@@ -171,9 +172,9 @@ export interface RequestSettings {
 
 export const DEFAULT_SETTINGS: RequestSettings = {
   requestText: 'אני מבקש/ת לבטל את השתתפותה של {{childName}} בפעילות FORCA.',
-  confirmationText:
-    'בקשתך לביטול ההשתתפות של {{childName}} התקבלה ב-{{receivedAt}} (מספר בקשה {{requestNumber}}).\n'
-    + 'הבקשה אינה מבטלת את המנוי באופן מיידי: מועד סיום ההשתתפות ייקבע לפי תנאי השימוש, ועדכון יופיע באפליקציה.',
+  // What happens next depends on the parent's choice: that paragraph is
+  // added after this text (choiceConfirmationLine), in fixed wording.
+  confirmationText: 'בקשתך לביטול ההשתתפות של {{childName}} התקבלה ב-{{receivedAt}} (מספר בקשה {{requestNumber}}).',
   medicalRequestText: 'הודעה על הקפאה רפואית של {{childName}}. מצורף אישור רפואי.',
   medicalConfirmationText:
     'הודעתך על הקפאה רפואית של {{childName}} התקבלה ב-{{receivedAt}} יחד עם האישור הרפואי (מספר בקשה {{requestNumber}}).\n'
@@ -216,3 +217,165 @@ function canonical(v: unknown): string {
 
 /** SHA-256 of the receipt's content, in a fixed key order, so any later change to it shows. */
 export const receiptHash = (receipt: Record<string, unknown>) => createHash('sha256').update(canonical(receipt)).digest('hex');
+
+// ─── The parent's choice (lawyer's update, 2026-11-20) ─────────────────────
+//
+// On a cancellation request the parent picks one of three, or nothing:
+//   end_of_paid_month  א. active until the end of the paid month, no refund
+//                      for it, no charge for the next. On submit the stop is
+//                      scheduled by itself for the 1st of next month (the
+//                      only thing that ever happens without Or).
+//   early_legal        ב. early cancellation by law: Or sets the legal date,
+//                      access ends that day, refund suggested for after it.
+//   unsure             ג. the default: Or reviews; section 5.8 only as a hint.
+// A request without a choice (older app, older records, nothing picked)
+// behaves as ג. The wording is fixed (the lawyer's), not one of Or's texts.
+
+export const PARENT_CHOICES = ['end_of_paid_month', 'early_legal', 'unsure'] as const;
+export type ParentChoice = typeof PARENT_CHOICES[number];
+/** 'parent' = she picked it; 'default' = nothing picked (ג); 'admin' = Or recorded it on a manual entry. */
+export type ChoiceSource = 'parent' | 'default' | 'admin';
+
+export const CHOICE_LABEL: Record<ParentChoice, string> = {
+  end_of_paid_month: 'סיום בתום החודש ששולם',
+  early_legal: 'בקשה לביטול מוקדם לפי דין',
+  unsure: 'לא בטוח/ה – אשמח לבירור',
+};
+
+/** The line under each option in the parent's sheet. */
+export const CHOICE_EXPLAIN: Record<ParentChoice, string> = {
+  end_of_paid_month: 'ההשתתפות נמשכת עד סוף החודש ששולם. אין החזר על חודש זה, ולא יבוצע חיוב לחודש הבא.',
+  early_legal: 'הבקשה נרשמת ומועברת לבדיקה: מועד הביטול לפי דין, הפסקת החיובים והחזר אם נדרש.',
+  unsure: 'הבקשה נרשמת, ונחזור אלייך לבירור.',
+};
+
+/** The choice in a request body: missing → ג by default; anything unknown → null (400). */
+export function parseChoice(raw: unknown): { choice: ParentChoice; source: ChoiceSource } | null {
+  if (raw === undefined || raw === null || raw === '') return { choice: 'unsure', source: 'default' };
+  return PARENT_CHOICES.includes(raw as ParentChoice) ? { choice: raw as ParentChoice, source: 'parent' } : null;
+}
+
+/** What a stored request counts as: no choice (older records) = ג. Medical freezes have none. */
+export const choiceOf = (r: { type?: RequestType; choice?: ParentChoice | null }): ParentChoice | null =>
+  ((r.type ?? 'cancellation') === 'cancellation' ? r.choice ?? 'unsure' : null);
+
+/** Added to the request text the parent submits. */
+export const choiceRequestLine = (choice: ParentChoice) => `בחירתי: ${CHOICE_LABEL[choice]}.`;
+
+/**
+ * Added to the confirmation. For א with the stop set: the last active day.
+ * Without it (the automatic stop couldn't be set) no date is promised.
+ */
+export function choiceConfirmationLine(choice: ParentChoice, lastActiveDay: string | null): string {
+  switch (choice) {
+    case 'end_of_paid_month':
+      return lastActiveDay
+        ? `בחרת: ${CHOICE_LABEL[choice]}. ההשתתפות פעילה עד ${formatDay(lastActiveDay)}, ולא יבוצע חיוב לחודש הבא. אין החזר על החודש הנוכחי.`
+        : `בחרת: ${CHOICE_LABEL[choice]}. מועד הסיום ייקבע ויופיע באפליקציה. אין החזר על החודש הנוכחי, ולא יבוצע חיוב לחודש הבא.`;
+    case 'early_legal':
+      return `בחרת: ${CHOICE_LABEL[choice]}. הבקשה הועברה לבדיקה: מועד הביטול לפי דין, הפסקת החיובים וההחזר (אם נדרש) ייקבעו לפי הדין, ועדכון יופיע באפליקציה.`;
+    default:
+      return `בחרת: ${CHOICE_LABEL[choice]}. נחזור אלייך לבירור, ועדכון יופיע באפליקציה.`;
+  }
+}
+
+export const EARLY_LEGAL_FLAG = 'ביטול מוקדם לפי דין – נדרשת בדיקה';
+export const AUTO_STOP_REASON = 'נקבע אוטומטית לפי בחירת ההורה (סעיף 5.8)';
+
+/** How the cancel sheet treats section 5.8's date for this request. */
+export type SuggestionUse = 'preselect' | 'hint' | 'none';
+export function suggestionUseFor(choice: ParentChoice | null): SuggestionUse {
+  if (choice === 'early_legal') return 'none';
+  if (choice === 'end_of_paid_month') return 'preselect';
+  return 'hint';
+}
+
+/** Open early-cancellation requests first, then newest received first. */
+export function sortForOr<T extends { status: RequestStatus; receivedAt: string; type?: RequestType; choice?: ParentChoice | null }>(rows: T[]): T[] {
+  const urgent = (r: T) => (r.status !== 'done' && choiceOf(r) === 'early_legal' ? 0 : 1);
+  return [...rows].sort((a, b) => urgent(a) - urgent(b) || b.receivedAt.localeCompare(a.receivedAt));
+}
+
+// ─── Option א: the automatic stop ──────────────────────────────────────────
+
+export type AutoStopSkipReason = 'no_subscription' | 'not_active' | 'existing_stop' | 'periods_unreadable' | 'stop_refused' | 'conflict' | 'error';
+
+/** What happened to the automatic stop, kept on the request for Or. */
+export type AutoStopOutcome =
+  | { result: 'scheduled'; stopDay: string; lastActiveDay: string; agreementId: string }
+  | { result: 'skipped'; reason: AutoStopSkipReason; message: string; highlight: boolean; existingStopDay?: string; detail?: string };
+
+const SKIP_MESSAGE: Record<Exclude<AutoStopSkipReason, 'existing_stop'>, string> = {
+  no_subscription: 'לא נקבעה עצירה אוטומטית: לא נמצא מנוי',
+  not_active: 'לא נקבעה עצירה אוטומטית: המנוי אינו פעיל',
+  periods_unreadable: 'לא נקבעה עצירה אוטומטית: לא ניתן לקרוא את תקופות הפעילות',
+  stop_refused: 'לא נקבעה עצירה אוטומטית: מועד העצירה נדחה',
+  conflict: 'לא נקבעה עצירה אוטומטית: המנוי השתנה באותו רגע',
+  error: 'לא נקבעה עצירה אוטומטית: תקלה',
+};
+
+export function autoStopSkipped(reason: Exclude<AutoStopSkipReason, 'existing_stop'>, detail?: string): AutoStopOutcome {
+  return { result: 'skipped', reason, message: SKIP_MESSAGE[reason], highlight: true, ...(detail ? { detail } : {}) };
+}
+
+const shortDayLabel = (day: string) => { const [, m, d] = day.split('-'); return `${d}/${m}`; };
+
+/**
+ * A stop already exists: nothing changes by itself. Later than the parent's
+ * end → highlighted for Or to check; earlier or the same → a note.
+ */
+export function existingStopOutcome(existingStopDay: string, parentStopDay: string, parentLastActiveDay: string): AutoStopOutcome {
+  const later = existingStopDay > parentStopDay;
+  return {
+    result: 'skipped', reason: 'existing_stop', existingStopDay, highlight: later,
+    message: later
+      ? `ההורה בחר/ה לסיים ב-${shortDayLabel(parentLastActiveDay)} – קיימת עצירה מאוחרת יותר, לבדוק`
+      : `קיימת כבר עצירה ב-${formatDay(existingStopDay)} (מוקדמת או זהה לבחירת ההורה) – לא נקבעה עצירה נוספת`,
+  };
+}
+
+// ─── Option ב: the legal effective date ────────────────────────────────────
+
+/**
+ * Or's legal date D → the stop. Charges stop and access ends at D:
+ * D today or earlier → stop now; D later → stop day D+1 (nothing charged from then).
+ */
+export function legalDateToStop(day: unknown, receivedDay: string, today: string):
+  { ok: true; legalDay: string; mode: 'now' | 'date'; stopDay: string } | { ok: false; error: string } {
+  if (!isDay(day)) return { ok: false, error: 'invalid_legal_day' };
+  if (day < receivedDay) return { ok: false, error: 'legal_day_before_receipt' };
+  if (day > addDays(today, 730)) return { ok: false, error: 'legal_day_too_far' };
+  return day <= today ? { ok: true, legalDay: day, mode: 'now', stopDay: today } : { ok: true, legalDay: day, mode: 'date', stopDay: addDays(day, 1) };
+}
+
+// ─── Distance sale (sections 14ג, 14ה) ─────────────────────────────────────
+
+export const DISTANCE_SALE_WARNING = 'בקשה סמוכה להרשמה – לבדוק ביטול עסקת מכר מרחוק (סעיפים 14ג, 14ה)';
+export const DISTANCE_SALE_DAYS = 14;
+export type DistanceSaleReason = 'no_payment' | 'within_14_days' | 'before_service_start';
+export type DistanceSale = { warn: boolean; reasons: DistanceSaleReason[]; firstPaymentDay: string | null; serviceStartDay: string | null; message: string | null };
+
+/**
+ * Warns Or when a request came in within 14 days of the child's first FORCA
+ * payment (Israel days, the payment day + 14 still counts), or before the
+ * service started: the first activity-period day on or after that payment
+ * (a sign-up before the season). No payment found also warns.
+ */
+export function distanceSaleCheck(receivedAt: string, firstPaymentAt: string | null, periods: ActivityPeriod[]): DistanceSale {
+  const receivedDay = israelDateStrOf(new Date(receivedAt));
+  if (!firstPaymentAt) {
+    return { warn: true, reasons: ['no_payment'], firstPaymentDay: null, serviceStartDay: null, message: `${DISTANCE_SALE_WARNING} · לא נמצא תשלום FORCA` };
+  }
+  const firstPaymentDay = israelDateStrOf(new Date(firstPaymentAt));
+  const serviceStartDay = periodOn(periods, firstPaymentDay) ? firstPaymentDay : nextPeriodAfter(periods, firstPaymentDay)?.start ?? firstPaymentDay;
+  const reasons: DistanceSaleReason[] = [];
+  if (receivedDay <= addDays(firstPaymentDay, DISTANCE_SALE_DAYS)) reasons.push('within_14_days');
+  if (receivedDay < serviceStartDay) reasons.push('before_service_start');
+  return { warn: reasons.length > 0, reasons, firstPaymentDay, serviceStartDay, message: reasons.length ? DISTANCE_SALE_WARNING : null };
+}
+
+/** The earliest completed charge, or null. */
+export function firstPaymentOf(charges: ChargeLike[]): string | null {
+  const done = charges.filter((c) => (c.status ?? 'completed') === 'completed').map((c) => c.createdAt).sort();
+  return done[0] ?? null;
+}
